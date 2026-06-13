@@ -154,6 +154,16 @@ pub struct WithdrawEvent {
     pub nullifier: U256,
 }
 
+/// Emitted when the admin re-points the pool at a new verifier (audit trail for
+/// a governance action that hot-swaps verification logic on the money path).
+#[contractevent]
+#[derive(Clone)]
+pub struct VerifierRotatedEvent {
+    /// The new verifier contract address
+    #[topic]
+    pub new_verifier: Address,
+}
+
 #[contract]
 pub struct BenzoPool;
 
@@ -541,6 +551,10 @@ impl BenzoPool {
     pub fn set_verifier(env: Env, new_verifier: Address) -> Result<(), Error> {
         Self::require_admin(&env)?;
         env.storage().persistent().set(&DataKey::Verifier, &new_verifier);
+        VerifierRotatedEvent {
+            new_verifier,
+        }
+        .publish(&env);
         Ok(())
     }
 

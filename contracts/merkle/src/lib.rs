@@ -36,6 +36,8 @@ pub enum Error {
     NotInitialized = 4,
     /// Arithmetic overflow occurred
     Overflow = 5,
+    /// The leaf (commitment) is already present in the tree
+    DuplicateLeaf = 6,
 }
 
 /// Storage keys for the tree state (all persistent).
@@ -62,6 +64,12 @@ enum DataKey {
     /// `is_known_root` is a single O(1) storage probe instead of a scan
     /// that would blow the per-tx ledger-entry footprint limit.
     KnownRoot(U256),
+    /// Presence index for inserted leaves (commitment -> present), so a
+    /// replayed/duplicate commitment is rejected before it can occupy a
+    /// second leaf position (which would break the scanner's leaf->index
+    /// injectivity assumption). One probe + one entry per insert, matching
+    /// the per-entry persistent model used by the nullifier set.
+    Leaf(U256),
 }
 
 /// Emitted on every insert so indexers can mirror the tree.
@@ -144,6 +152,11 @@ impl BenzoMerkleTree {
             return Err(Error::MerkleTreeFull);
         }
 
+        // Reject a replayed/duplicate commitment before it takes a leaf slot.
+        if storage.has(&DataKey::Leaf(leaf.clone())) {
+            return Err(Error::DuplicateLeaf);
+        }
+
         // Classic incremental-tree update along the path to the root.
         let mut current_hash = leaf.clone();
         let mut current_index = next_index;
@@ -178,6 +191,7 @@ impl BenzoMerkleTree {
         }
         storage.set(&DataKey::Root(new_root_index), &current_hash);
         storage.set(&DataKey::KnownRoot(current_hash.clone()), &true);
+        storage.set(&DataKey::Leaf(leaf.clone()), &true);
         storage.set(&DataKey::CurrentRootIndex, &new_root_index);
         storage.set(
             &DataKey::NextIndex,

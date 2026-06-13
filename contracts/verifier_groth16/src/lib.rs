@@ -15,10 +15,30 @@ extern crate alloc;
 
 pub use contract_types::{Groth16Error, Groth16Proof, VerificationKeyBytes};
 use soroban_sdk::{
-    Address, Env, Symbol, Vec, contract, contracterror, contractimpl, contracttype,
+    Address, Env, Symbol, Vec, contract, contracterror, contractevent, contractimpl, contracttype,
     crypto::bn254::{Bn254Fr, Bn254G1Affine as G1Affine, Bn254G2Affine as G2Affine},
     vec,
 };
+
+/// Emitted when a VK is first registered (audit trail: changes which proofs
+/// the pool will accept).
+#[contractevent]
+#[derive(Clone)]
+pub struct VkSetEvent {
+    /// Circuit id the VK was registered under
+    #[topic]
+    pub vk_id: Symbol,
+}
+
+/// Emitted on governed VK rotation (audit trail: hot-swaps verification logic
+/// on the money path, so a compromised-admin swap is detectable off-chain).
+#[contractevent]
+#[derive(Clone)]
+pub struct VkRotatedEvent {
+    /// Circuit id whose VK was rotated
+    #[topic]
+    pub vk_id: Symbol,
+}
 
 /// Contract error types for the verifier registry.
 #[contracterror]
@@ -35,6 +55,19 @@ pub enum Error {
     InvalidProof = 4,
     /// The public inputs length does not match the verification key
     MalformedPublicInputs = 5,
+    /// The verification key is structurally malformed (e.g. empty IC)
+    MalformedVk = 6,
+}
+
+/// Reject a structurally invalid VK at registration rather than letting it
+/// fail silently when the first real proof arrives. Point byte-lengths are
+/// already type-enforced (BytesN<64>/<128>); the IC vector length is not, so
+/// an empty IC (no public-input commitments) is the case to catch here.
+fn validate_vk(vk: &VerificationKeyBytes) -> Result<(), Error> {
+    if vk.ic.is_empty() {
+        return Err(Error::MalformedVk);
+    }
+    Ok(())
 }
 
 /// Storage keys
@@ -65,11 +98,13 @@ impl BenzoVerifier {
             .get(&DataKey::Admin)
             .ok_or(Error::NotInitialized)?;
         admin.require_auth();
-        let key = DataKey::Vk(vk_id);
+        validate_vk(&vk)?;
+        let key = DataKey::Vk(vk_id.clone());
         if env.storage().persistent().has(&key) {
             return Err(Error::VkAlreadySet);
         }
         env.storage().persistent().set(&key, &vk);
+        VkSetEvent { vk_id }.publish(&env);
         Ok(())
     }
 
@@ -90,7 +125,9 @@ impl BenzoVerifier {
             .get(&DataKey::Admin)
             .ok_or(Error::NotInitialized)?;
         admin.require_auth();
-        env.storage().persistent().set(&DataKey::Vk(vk_id), &vk);
+        validate_vk(&vk)?;
+        env.storage().persistent().set(&DataKey::Vk(vk_id.clone()), &vk);
+        VkRotatedEvent { vk_id }.publish(&env);
         Ok(())
     }
 

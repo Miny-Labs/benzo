@@ -200,3 +200,15 @@ fn tree_full_rejects_insert() {
     let res = client.try_insert_leaf(&U256::from_u32(&env, 3));
     assert_eq!(res, Err(Ok(Error::MerkleTreeFull)));
 }
+
+#[test]
+fn duplicate_leaf_rejected() {
+    // A replayed/duplicate commitment must not take a second leaf slot
+    // (preserves the scanner's leaf->index injectivity assumption).
+    let (env, _op, _id, client) = setup(8);
+    client.insert_leaf(&U256::from_u32(&env, 777));
+    let dup = client.try_insert_leaf(&U256::from_u32(&env, 777));
+    assert_eq!(dup, Err(Ok(Error::DuplicateLeaf)));
+    // A distinct leaf still inserts at the next index.
+    assert_eq!(client.insert_leaf(&U256::from_u32(&env, 778)), 1u32);
+}

@@ -35,10 +35,15 @@ fn fr_from_ark(env: &Env, value: ArkFr) -> Bn254Fr {
     Bn254Fr::from_bytes(BytesN::from_array(env, &buf))
 }
 
-fn build_proof(env: &Env) -> (VerificationKeyBytes, Groth16Proof, Vec<Bn254Fr>) {
-    let mut rng = StdRng::seed_from_u64(7);
-    let a = ArkFr::from(6u64);
-    let b = ArkFr::from(7u64);
+fn build_proof_seeded(
+    env: &Env,
+    seed: u64,
+    a: u64,
+    b: u64,
+) -> (VerificationKeyBytes, Groth16Proof, Vec<Bn254Fr>) {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let a = ArkFr::from(a);
+    let b = ArkFr::from(b);
     let circuit = MulCircuit { a, b };
     let (pk, vk) =
         Groth16::<Bn254>::circuit_specific_setup(circuit.clone(), &mut rng).expect("setup");
@@ -53,6 +58,10 @@ fn build_proof(env: &Env) -> (VerificationKeyBytes, Groth16Proof, Vec<Bn254Fr>) 
     let mut public_inputs: Vec<Bn254Fr> = Vec::new(env);
     public_inputs.push_back(fr_from_ark(env, a * b));
     (vk_bytes, proof_soroban, public_inputs)
+}
+
+fn build_proof(env: &Env) -> (VerificationKeyBytes, Groth16Proof, Vec<Bn254Fr>) {
+    build_proof_seeded(env, 7, 6, 7)
 }
 
 #[test]
@@ -100,6 +109,67 @@ fn vk_registry_set_once_and_verify() {
     assert_eq!(second, Err(Ok(Error::VkAlreadySet)));
 
     assert!(client.verify_proof(&vk_id, &proof, &public_inputs));
+}
+
+#[test]
+fn reject_too_many_public_inputs() {
+    // VK expects exactly 1 public input (IC len 2); supplying 2 must be rejected.
+    let env = Env::default();
+    let (vk, proof, _) = build_proof(&env);
+    let mut too_many: Vec<Bn254Fr> = Vec::new(&env);
+    too_many.push_back(fr_from_ark(&env, ArkFr::from(42u64)));
+    too_many.push_back(fr_from_ark(&env, ArkFr::from(43u64)));
+    let result = BenzoVerifier::verify_with_vk(&env, &vk, proof, too_many);
+    assert_eq!(result, Err(Error::MalformedPublicInputs));
+}
+
+#[test]
+fn reject_tampered_proof() {
+    // A well-formed but wrong proof (A and C swapped) must fail the pairing,
+    // returning InvalidProof (fail-closed) rather than silently verifying.
+    let env = Env::default();
+    let (vk, proof, public_inputs) = build_proof(&env);
+    let tampered = Groth16Proof {
+        a: proof.c.clone(),
+        b: proof.b.clone(),
+        c: proof.a.clone(),
+    };
+    let result = BenzoVerifier::verify_with_vk(&env, &vk, tampered, public_inputs);
+    assert_eq!(result, Err(Error::InvalidProof));
+}
+
+#[test]
+fn reject_cross_circuit_proof() {
+    // A valid proof from one trusted setup must NOT verify against another
+    // setup's VK (no cross-circuit confusion).
+    let env = Env::default();
+    let (vk1, _proof1, _publics1) = build_proof_seeded(&env, 7, 6, 7);
+    let (_vk2, proof2, publics2) = build_proof_seeded(&env, 123, 8, 9);
+    let result = BenzoVerifier::verify_with_vk(&env, &vk1, proof2, publics2);
+    assert_eq!(result, Err(Error::InvalidProof));
+}
+
+#[test]
+fn reject_empty_ic_vk_at_registration() {
+    // A structurally malformed VK (empty IC) must be rejected at set_vk, not
+    // silently stored to fail later when a real proof arrives.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(BenzoVerifier, (admin.clone(),));
+    let client = BenzoVerifierClient::new(&env, &contract_id);
+
+    let (vk, _proof, _publics) = build_proof(&env);
+    let bad_vk = VerificationKeyBytes {
+        alpha: vk.alpha.clone(),
+        beta: vk.beta.clone(),
+        gamma: vk.gamma.clone(),
+        delta: vk.delta.clone(),
+        ic: Vec::new(&env), // empty IC
+    };
+    let result = client.try_set_vk(&Symbol::new(&env, "BAD"), &bad_vk);
+    assert_eq!(result, Err(Ok(Error::MalformedVk)));
+    assert!(!client.has_vk(&Symbol::new(&env, "BAD")));
 }
 
 #[test]

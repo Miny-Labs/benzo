@@ -67,6 +67,14 @@ pub const G2_SIZE: u32 = FIELD_ELEMENT_SIZE * 4;
 /// Total proof size: A (G1) || B (G2) || C (G1) = 64 + 128 + 64 = 256 bytes.
 pub const PROOF_SIZE: u32 = G1_SIZE + G2_SIZE + G1_SIZE;
 
+// Compile-time guards: if any size constant or the slice layout in
+// `TryFrom<Bytes> for Groth16Proof` drifts, this fails to compile rather than
+// silently mis-parsing proofs at runtime.
+const _: () = assert!(G1_SIZE == FIELD_ELEMENT_SIZE * 2);
+const _: () = assert!(G2_SIZE == FIELD_ELEMENT_SIZE * 4);
+const _: () = assert!(PROOF_SIZE == G1_SIZE + G2_SIZE + G1_SIZE);
+const _: () = assert!(PROOF_SIZE == 256);
+
 impl TryFrom<Bytes> for Groth16Proof {
     type Error = Groth16Error;
 
