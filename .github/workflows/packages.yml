@@ -32,6 +32,8 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
       - name: Build
         run: pnpm -r build
       # Heavy snarkjs proving tests (circuits.test.ts) self-skip when the

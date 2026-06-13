@@ -61,7 +61,7 @@ export function createAccount(opts: {
   const kp = deriveKeypair(spendSk);
   const mvk = opts.mvkSecret ? viewingKeypairFromSecret(opts.mvkSecret) : generateViewingKeypair();
   const view = opts.viewSecret ? viewingKeypairFromSecret(opts.viewSecret) : generateViewingKeypair();
-  let stellarSecret = opts.stellarSecret;
+  const stellarSecret = opts.stellarSecret;
   let stellarAddress: string | undefined;
   if (stellarSecret) stellarAddress = StellarKeypair.fromSecret(stellarSecret).publicKey();
   return {

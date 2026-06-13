@@ -18,7 +18,7 @@ import {
   randomFieldElement,
 } from "./notes.js";
 import { prove, toWitnessInput, type CircuitArtifacts, type ProveResult } from "./prover.js";
-import { StellarCli } from "./stellar.js";
+import type { StellarCli } from "./stellar.js";
 
 export interface BenzoDeployment {
   pool: string;

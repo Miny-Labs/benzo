@@ -12,7 +12,7 @@
  * BENZO.md §7.4, implemented self-hosted with the Stellar CLI.
  */
 
-import { StellarCli } from "@benzo/core";
+import type { StellarCli } from "@benzo/core";
 
 export interface TransferRelayRequest {
   /** the relayer's CLI identity / channel account (pays the XLM fee) */

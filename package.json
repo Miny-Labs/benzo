@@ -9,6 +9,11 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "lint": "biome lint",
+    "lint:fix": "biome lint --write"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.0"
   }
 }

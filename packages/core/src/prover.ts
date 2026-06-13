@@ -8,7 +8,7 @@
 
 // snarkjs has no bundled types; the surface we use is tiny.
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
+// @ts-expect-error
 import * as snarkjs from "snarkjs";
 import { proofToSoroban, publicsToSoroban, type SnarkjsProof } from "./crypto/groth16.js";
 

@@ -45,7 +45,7 @@ import {
   createAccount,
   createOrLoadAccountFile,
 } from "./account.js";
-import { StellarCli } from "./stellar.js";
+import type { StellarCli } from "./stellar.js";
 import { feHex } from "./crypto/groth16.js";
 import { randomBytes } from "node:crypto";
 
@@ -393,6 +393,25 @@ export class BenzoClient {
       const changeNote = newNote(change, this.account.spendPub, assetId);
       const changePlain = encodeNotePlain({ ...changeNote });
 
+      // Each output is a unit: its in-circuit slot (commitment + MVK tag) and the
+      // two ciphertexts must stay aligned.
+      const recipBundle = {
+        output: { note: recipNote, mvkPubScalar: this.account.mvkScalar },
+        noteCt: seal(recipPlain, opts.to.viewPub).bytes,
+        mvkCt: seal(recipPlain, senderTvk.publicKey).bytes,
+      };
+      const changeBundle = {
+        output: { note: changeNote, mvkPubScalar: this.account.mvkScalar },
+        noteCt: seal(changePlain, this.account.viewPub).bytes,
+        mvkCt: seal(changePlain, senderTvk.publicKey).bytes,
+      };
+      // Privacy: randomize output order so the change note isn't always in slot 1
+      // — otherwise an observer learns which output is the payment vs the change.
+      // Tornado-nova shuffles outputs for exactly this reason; discovery is
+      // order-independent (the recipient finds its note by view tag, any slot).
+      const [b0, b1] =
+        (randomBytes(1)[0] & 1) === 1 ? [changeBundle, recipBundle] : [recipBundle, changeBundle];
+
       handle._emit({ op: "send", status: "proving", detail: "generating Groth16 proof" });
 
       const relay = opts.useRelayer && this.opts.relayer ? this.makeRelay() : undefined;
@@ -400,14 +419,11 @@ export class BenzoClient {
         source: this.opts.relayer && opts.useRelayer ? this.opts.relayer.source : this.opts.txSource,
         relay,
         inputs,
-        outputs: [
-          { note: recipNote, mvkPubScalar: this.account.mvkScalar },
-          { note: changeNote, mvkPubScalar: this.account.mvkScalar },
-        ],
+        outputs: [b0.output, b1.output],
         fee: 0n,
         relayer: this.opts.relayer?.address ?? (await this.opts.cli.keyAddress(this.opts.txSource)),
-        noteCts: [seal(recipPlain, opts.to.viewPub).bytes, seal(changePlain, this.account.viewPub).bytes],
-        mvkCts: [seal(recipPlain, senderTvk.publicKey).bytes, seal(changePlain, senderTvk.publicKey).bytes],
+        noteCts: [b0.noteCt, b1.noteCt],
+        mvkCts: [b0.mvkCt, b1.mvkCt],
       });
 
       this.record({
