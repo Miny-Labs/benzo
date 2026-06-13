@@ -51,7 +51,7 @@ const PASSPHRASE = process.env.NETWORK_PASSPHRASE ?? Networks.TESTNET;
 const USDC = new Asset(process.env.USDC_CODE, process.env.USDC_ISSUER);
 
 async function startAnchor() {
-  const child = spawn("node", [`${repo}/anchor/dist/server.js`], {
+  const child = spawn("node", [`${repo}/packages/anchor/dist/server.js`], {
     env: { ...process.env, ANCHOR_PORT: "8888" },
     stdio: ["ignore", "pipe", "pipe"],
   });
