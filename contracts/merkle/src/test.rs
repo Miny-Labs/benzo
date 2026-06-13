@@ -142,6 +142,57 @@ fn onchain_root_matches_offchain_zkhash_mirror() {
     );
 }
 
+/// Fuzz: for many pseudo-random leaf sets, the on-chain incremental root must
+/// equal a full off-chain recomputation with the zkhash reference Poseidon2 —
+/// the byte-identity invariant under arbitrary inputs.
+#[test]
+fn fuzz_onchain_root_matches_offchain() {
+    let levels = 5u32;
+    let mut x: u64 = 0xDEAD_BEEF_CAFE_F00D;
+    for trial in 0..6u32 {
+        let (env, _op, contract_id, client) = setup(levels);
+        let zeroes: StdVec<U256> = (0..=levels)
+            .map(|i| {
+                env.as_contract(&contract_id, || {
+                    env.storage()
+                        .persistent()
+                        .get(&DataKey::Zeroes(i))
+                        .expect("zeroes")
+                })
+            })
+            .collect();
+
+        let n = 1 + (trial % (1 << levels));
+        let mut leaves: StdVec<Scalar> = StdVec::new();
+        for _ in 0..n {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            client.insert_leaf(&U256::from_u32(&env, (x % 1_000_000) as u32));
+            leaves.push(Scalar::from(x % 1_000_000));
+        }
+        let onchain = client.current_root();
+
+        let mut nodes = leaves.clone();
+        for lvl in 0..levels {
+            let zero = u256_to_scalar(&env, &zeroes[lvl as usize]);
+            let mut next: StdVec<Scalar> = StdVec::new();
+            let mut i = 0;
+            while i < nodes.len() {
+                let l = nodes[i];
+                let r = if i + 1 < nodes.len() { nodes[i + 1] } else { zero };
+                next.push(poseidon2_compression(l, r));
+                i += 2;
+            }
+            if next.is_empty() {
+                next.push(poseidon2_compression(zero, zero));
+            }
+            nodes = next;
+        }
+        assert_eq!(onchain, scalar_to_u256(&env, &nodes[0]), "trial {trial}");
+    }
+}
+
 #[test]
 fn tree_full_rejects_insert() {
     let (env, _op, _id, client) = setup(1);

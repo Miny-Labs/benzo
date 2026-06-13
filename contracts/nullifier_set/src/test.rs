@@ -59,3 +59,32 @@ fn nullifier_stored_persistently() {
     });
     assert!(in_persistent, "nullifier must be in persistent storage");
 }
+
+/// Fuzz: a stream of pseudo-random nullifiers (with deliberate repeats) must
+/// preserve the invariant — first spend returns true, every later spend of the
+/// same value returns false, and is_spent is consistent — for all of them.
+#[test]
+fn fuzz_idempotency_over_random_stream() {
+    let (env, client) = setup();
+    let mut seen: [u32; 80] = [0; 80];
+    let mut count = 0usize;
+    // xorshift PRNG (deterministic, no Math.random needed).
+    let mut x: u32 = 0x9E3779B9;
+    for _ in 0..400 {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        let v = x % 80; // collide into a small space to force repeats
+        let n = U256::from_u32(&env, v);
+        let already = seen[..count].iter().any(|&s| s == v);
+        let newly = client.spend(&n);
+        if already {
+            assert_eq!(newly, false, "repeat spend must be idempotent (not newly spent)");
+        } else {
+            assert_eq!(newly, true, "first spend must be newly spent");
+            seen[count] = v;
+            count += 1;
+        }
+        assert!(client.is_spent(&n), "after spend, must read as spent");
+    }
+}

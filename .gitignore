@@ -34,3 +34,4 @@ proofs/
 
 # vendored reference material (skills + starter code; present locally, not committed)
 reference/
+test_snapshots/

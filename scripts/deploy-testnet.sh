@@ -79,6 +79,12 @@ for c in shield:SHIELD joinsplit:TRANSFER unshield:UNSHIELD; do
   say "set_vk $id ok"
 done
 
+# One-time: the relayer needs a USDC trustline to receive its USDC fee.
+# (Idempotent — skips if the trustline already exists.)
+say "ensuring relayer USDC trustline"
+stellar tx new change-trust --source benzo-relayer "${NET[@]}" \
+  --line "$USDC_CODE:$USDC_ISSUER" 2>/dev/null || say "  (relayer trustline already present)"
+
 mkdir -p deployments
 cat > deployments/testnet.json <<EOF
 {
