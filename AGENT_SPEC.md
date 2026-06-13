@@ -210,3 +210,10 @@ on-ramp = public deposit, shield is the privacy boundary (no private on-ramp exi
 join-split; discovery = Railgun event-scan→Merkle→trial-decrypt + view tags; gasless = Railgun
 broadcaster, fee inside the proof; compliance = 0xbow state-tree + ASP + always-ragequit;
 UX = Railgun visible user-gated proving with a time-boxed fee quote.
+
+### Research-exec status
+- [DONE] Note keys from one signed message — `accountFromSignedMessage` (@benzo/core), the Railgun pattern (the piece no WaaS provides).
+- [DONE] KYC adapter — `@benzo/kyc` (Didit, env-keyed; MockKyc key-free default) ready behind the anchor SEP-12 flow.
+- [ALREADY] On-chain events (pool publishes per commitment/ciphertext/nullifier); ASP non-membership MANDATORY at unshield (matches live deny-root); relayer is OZ/channel model (not Launchtube). View-tag fast path shipped (G4).
+- [VIABILITY] Track B UltraHonk verifier compiles on soroban-sdk 26; full on-chain deploy needs the Noir toolchain (nargo/bb) for fresh proofs.
+- [NEEDS CREDS] Dynamic login (deferred frontend + env id), Stripe Onramp, Circle CCTP, MoneyGram, Range, Human ID — external accounts; wire when keys provided.
