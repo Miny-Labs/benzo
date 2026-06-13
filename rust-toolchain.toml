@@ -1,0 +1,5 @@
+[toolchain]
+# Pinned for reproducible contract builds (edition 2024 + soroban-sdk 26).
+channel = "1.93.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32v1-none"]

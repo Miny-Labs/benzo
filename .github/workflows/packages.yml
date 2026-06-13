@@ -1,0 +1,41 @@
+name: packages
+
+on:
+  push:
+    paths:
+      - "packages/**"
+      - "apps/**"
+      - "circuits/build/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "turbo.json"
+      - ".github/workflows/packages.yml"
+  pull_request:
+    paths:
+      - "packages/**"
+      - "apps/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm -r build
+      # Heavy snarkjs proving tests (circuits.test.ts) self-skip when the
+      # gitignored .zkey/.wasm artifacts are absent; everything else — incl.
+      # the committed VK/proof parity fixtures — runs and enforces invariants.
+      - name: Test
+        run: pnpm -r test

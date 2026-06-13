@@ -1,0 +1,43 @@
+name: contracts
+
+on:
+  push:
+    paths:
+      - "contracts/**"
+      - "circuits/poseidon_params/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/contracts.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "circuits/poseidon_params/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rustup reads rust-toolchain.toml (channel + clippy/rustfmt + wasm target).
+      - name: Show toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Build contract wasm
+        run: |
+          for d in verifier_groth16 merkle nullifier_set asp_membership \
+                   asp_non_membership viewkey_anchor handle_registry pool; do
+            echo "::group::$d"
+            cargo build --manifest-path "contracts/$d/Cargo.toml" \
+              --target wasm32v1-none --release
+            echo "::endgroup::"
+          done

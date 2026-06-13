@@ -9,7 +9,7 @@
  * Negative tests assert that malformed witnesses CANNOT be proven.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { MerkleTreeMirror } from "../src/merkle.js";
@@ -29,9 +29,15 @@ const art = (c: string) => ({
 });
 const vk = (c: string) => JSON.parse(readFileSync(`${root}/${c}/${c}_vk.json`, "utf8"));
 
+// The compiled proving artifacts (.wasm witness generators + .zkey, ~80 MB)
+// are gitignored. When they're absent (e.g. a fresh CI checkout) these heavy
+// proving tests skip; the small VK/proof fixtures used by parity.test.ts are
+// committed, so the byte-identity encoding invariant is still enforced in CI.
+const HAVE_ARTIFACTS = existsSync(art("shield").zkeyPath);
+
 const ASSET_ID = 123456789n;
 
-describe("shield circuit", () => {
+describe.skipIf(!HAVE_ARTIFACTS)("shield circuit", () => {
   const depositor = 987654321n;
   const aspBlinding = 55n;
 
@@ -143,7 +149,7 @@ function buildTransferFixture() {
   return { witness, tree };
 }
 
-describe("joinsplit circuit", () => {
+describe.skipIf(!HAVE_ARTIFACTS)("joinsplit circuit", () => {
   it("proves a 1-real + 1-dummy join-split with fee (value conservation)", async () => {
     const { witness } = buildTransferFixture();
     const res = await prove(art("joinsplit"), toWitnessInput(witness));
@@ -219,7 +225,7 @@ describe("joinsplit circuit", () => {
   }, 120_000);
 });
 
-describe("unshield circuit", () => {
+describe.skipIf(!HAVE_ARTIFACTS)("unshield circuit", () => {
   function buildUnshieldWitness() {
     const tree = new MerkleTreeMirror(32);
     const kp = deriveKeypair(5151n);

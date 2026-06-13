@@ -1,0 +1,32 @@
+# cargo-deny configuration for the Benzo workspace.
+# Run locally with `cargo deny check` (cargo install cargo-deny).
+
+[advisories]
+# Fail on yanked crates; the advisory DB is checked for RUSTSEC entries.
+yanked = "deny"
+
+[licenses]
+# Permissive licenses present in the dependency tree. Add deliberately.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Surface duplicate versions (lockfile bloat / drift) without failing.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+# The vendored zkhash Poseidon2 params and ark-* may resolve from git mirrors.
+unknown-git = "allow"
