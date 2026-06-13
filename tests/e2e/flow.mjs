@@ -191,9 +191,24 @@ export async function runPrivatePaymentFlow({
   const outRecipientPlain = encodeNotePlain(outRecipientNote);
   const outChangePlain = encodeNotePlain(outChangeNote);
 
+  // Optional gasless relay: submit the proven transfer via the relayer (it
+  // pays the XLM fee and is compensated in USDC out of the shielded pool).
+  let relay;
+  if (relayerSource) {
+    const { BenzoRelayer } = await import("@benzo/relayer");
+    const relayer = new BenzoRelayer(cli);
+    relay = (a) =>
+      relayer.relayTransfer({
+        relayerSource,
+        relayerAddress: process.env.RELAYER_PUBLIC,
+        ...a,
+      });
+  }
+
   t = Date.now();
   const tr = await client.transfer({
     source: relayerSource ?? "benzo-deployer",
+    relay,
     inputs: [senderInput, dummy],
     // Both transfer outputs are bound to the SENDER's MVK: the sender is the
     // KYC'd disclosing entity for this corridor, so a scoped TVK over the

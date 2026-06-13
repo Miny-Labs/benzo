@@ -87,7 +87,7 @@ async function makeRecipientAccount() {
   return kp;
 }
 
-async function main() {
+export async function runCorridor() {
   const anchor = await startAnchor();
   const out = { real: {}, simulated: {}, txs: {} };
   try {
@@ -239,9 +239,12 @@ async function main() {
   }
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
+// Run as a CLI when invoked directly.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runCorridor()
+    .then(() => process.exit(0))
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+}

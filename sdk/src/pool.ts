@@ -205,6 +205,29 @@ export class BenzoClient {
     relayer: string; // G-address receiving the fee
     noteCts: [Uint8Array, Uint8Array];
     mvkCts: [Uint8Array, Uint8Array];
+    /**
+     * Optional gasless-relay hook. When provided, the proven transfer is
+     * handed to the relayer for submission instead of being submitted by this
+     * client — the relayer pays the XLM fee. The proof is self-authorizing, so
+     * the relayer cannot alter the transfer.
+     */
+    relay?: (args: {
+      pool: string;
+      root: string;
+      nullifier0: string;
+      nullifier1: string;
+      outCommitment0: string;
+      outCommitment1: string;
+      fee: string;
+      relayerAddress: string;
+      mvkTag0: string;
+      mvkTag1: string;
+      noteCt0: string;
+      noteCt1: string;
+      mvkCt0: string;
+      mvkCt1: string;
+      proof: string;
+    }) => Promise<{ txHash?: string }>;
   }): Promise<{
     txHash?: string;
     outNotes: [Note, Note];
@@ -265,34 +288,57 @@ export class BenzoClient {
     });
     const proof = await prove(this.circuits.joinsplit, witness);
 
-    const res = await this.cli.invoke({
-      contractId: this.dep.pool,
-      source: opts.source,
-      send: true,
-      fnArgs: [
-        "transfer",
-        "--submitter", await this.cli.keyAddress(opts.source),
-        "--root", root.toString(),
-        "--nullifier0", nullifiers[0].toString(),
-        "--nullifier1", nullifiers[1].toString(),
-        "--out_commitment0", outCommitments[0].toString(),
-        "--out_commitment1", outCommitments[1].toString(),
-        "--fee", opts.fee.toString(),
-        "--relayer", opts.relayer,
-        "--mvk_tag0", outTags[0].toString(),
-        "--mvk_tag1", outTags[1].toString(),
-        "--note_ct0", hexBytes(opts.noteCts[0]),
-        "--note_ct1", hexBytes(opts.noteCts[1]),
-        "--mvk_ct0", hexBytes(opts.mvkCts[0]),
-        "--mvk_ct1", hexBytes(opts.mvkCts[1]),
-        "--proof", JSON.stringify(proof.sorobanProof),
-      ],
-    });
+    let txHash: string | undefined;
+    if (opts.relay) {
+      const r = await opts.relay({
+        pool: this.dep.pool,
+        root: root.toString(),
+        nullifier0: nullifiers[0].toString(),
+        nullifier1: nullifiers[1].toString(),
+        outCommitment0: outCommitments[0].toString(),
+        outCommitment1: outCommitments[1].toString(),
+        fee: opts.fee.toString(),
+        relayerAddress: opts.relayer,
+        mvkTag0: outTags[0].toString(),
+        mvkTag1: outTags[1].toString(),
+        noteCt0: hexBytes(opts.noteCts[0]),
+        noteCt1: hexBytes(opts.noteCts[1]),
+        mvkCt0: hexBytes(opts.mvkCts[0]),
+        mvkCt1: hexBytes(opts.mvkCts[1]),
+        proof: JSON.stringify(proof.sorobanProof),
+      });
+      txHash = r.txHash;
+    } else {
+      const res = await this.cli.invoke({
+        contractId: this.dep.pool,
+        source: opts.source,
+        send: true,
+        fnArgs: [
+          "transfer",
+          "--submitter", await this.cli.keyAddress(opts.source),
+          "--root", root.toString(),
+          "--nullifier0", nullifiers[0].toString(),
+          "--nullifier1", nullifiers[1].toString(),
+          "--out_commitment0", outCommitments[0].toString(),
+          "--out_commitment1", outCommitments[1].toString(),
+          "--fee", opts.fee.toString(),
+          "--relayer", opts.relayer,
+          "--mvk_tag0", outTags[0].toString(),
+          "--mvk_tag1", outTags[1].toString(),
+          "--note_ct0", hexBytes(opts.noteCts[0]),
+          "--note_ct1", hexBytes(opts.noteCts[1]),
+          "--mvk_ct0", hexBytes(opts.mvkCts[0]),
+          "--mvk_ct1", hexBytes(opts.mvkCts[1]),
+          "--proof", JSON.stringify(proof.sorobanProof),
+        ],
+      });
+      txHash = res.txHash;
+    }
     const i0 = this.poolTree.insert(outCommitments[0]);
     const i1 = this.poolTree.insert(outCommitments[1]);
     await this.assertSynced();
     return {
-      txHash: res.txHash,
+      txHash,
       outNotes,
       nullifiers,
       outCommitments,

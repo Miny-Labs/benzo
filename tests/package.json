@@ -5,13 +5,16 @@
   "type": "module",
   "scripts": {
     "test": "vitest run --reporter=verbose",
-    "m1": "node e2e/m1-flow.mjs"
+    "m1": "node e2e/m1-flow.mjs",
+    "m2": "node e2e/m2-compliance.mjs",
+    "m3": "node e2e/m3-corridor.mjs"
   },
   "dependencies": {
     "@benzo/sdk": "workspace:*",
     "@benzo/indexer": "workspace:*",
     "@benzo/anchor": "workspace:*",
-    "@stellar/stellar-sdk": "^13.0.0"
+    "@stellar/stellar-sdk": "^13.0.0",
+    "@benzo/relayer": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.0.0"

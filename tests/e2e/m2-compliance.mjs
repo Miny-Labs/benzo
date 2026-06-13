@@ -39,9 +39,10 @@ const log = (...a) => console.log(...a);
 const PASS = "✅ PASS";
 const FAIL = "❌ FAIL";
 
+export async function runCompliance(existingFlow = null) {
 log("=== M2 COMPLIANCE (testnet) ===\n");
 log("Running a fresh private payment flow to produce a real transfer to audit...\n");
-const flow = await runPrivatePaymentFlow({ quiet: true });
+const flow = existingFlow ?? (await runPrivatePaymentFlow({ quiet: true }));
 log(`  shield   tx ${flow.txs.shield}`);
 log(`  transfer tx ${flow.txs.transfer}`);
 log(`  unshield tx ${flow.txs.withdraw}\n`);
@@ -196,4 +197,11 @@ log("=== M2 RESULT ===");
 log(JSON.stringify(results, (_, v) => (typeof v === "bigint" ? v.toString() : v), 2));
 const allPass = results.disclosure && results.aspMembership && results.aspNonMembership;
 log(allPass ? "\n✅ M2 COMPLIANCE: ALL PASS" : "\n❌ M2 had failures");
-process.exit(allPass ? 0 : 1);
+return { ...results, allPass };
+}
+
+// Run as a CLI when invoked directly.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const r = await runCompliance();
+  process.exit(r.allPass ? 0 : 1);
+}

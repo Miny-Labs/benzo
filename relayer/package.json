@@ -1,0 +1,20 @@
+{
+  "name": "@benzo/relayer",
+  "version": "0.1.0",
+  "description": "Self-hosted Benzo relayer: gasless submission of shielded transfers (liveness-only; never custody). Pays XLM fees, compensated in USDC out of the shielded pool.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "serve": "node dist/server.js"
+  },
+  "dependencies": {
+    "@benzo/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -37,6 +37,19 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  relayer:
+    dependencies:
+      '@benzo/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.43
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
   sdk:
     dependencies:
       '@noble/curves':
@@ -67,6 +80,9 @@ importers:
       '@benzo/indexer':
         specifier: workspace:*
         version: link:../indexer
+      '@benzo/relayer':
+        specifier: workspace:*
+        version: link:../relayer
       '@benzo/sdk':
         specifier: workspace:*
         version: link:../sdk
