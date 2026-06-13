@@ -34,6 +34,11 @@ in `BENZO.md`.
 | **Note-discovery linkage** | Discovery ciphertext is X25519+AES-GCM; non-holders see opaque blobs. Out-of-scope ciphertext fails AEAD auth and is skipped. | `viewkeys`, `indexer` |
 | **Admin-key compromise** | Pool is non-custodial: no admin path seizes or freezes individual notes. Admin controls are limited to pause, deposit cap, and ASP/VK rotation. Production: multisig + governance. | `pool` admin surface |
 | **Re-entrancy / SAC** | Custody touches only the SAC `transfer`; state mutations (nullifier, tree) precede external transfers within one atomic invocation. | `pool` |
+| **Field-overflow input amounts** | Hardening: every TRANSFER input amount is 64-bit range-checked in-circuit (not just outputs), closing the field-wrap value-conservation vector. A self-consistent witness with a 2^64+ input now fails to prove. | `joinsplit.circom` |
+| **Verifier-key / verifier swap** | `set_vk` is one-time-immutable; governed rotation goes through `rotate_vk` (verifier) and `set_verifier` (pool), both admin-gated (multisig in production), so a hardened circuit's key rolls without touching custody/tree/nullifier state. | verifier, pool |
+| **Handle hijack** | `handle_registry` is owner-authorized and first-come: a handle's record can be updated only by the address that registered it; a different caller claiming the same handle is rejected. A handle resolves to PUBLIC payment material only — no spend authority. | `handle_registry` |
+| **Claim-link theft** | A claim link's funds are spendable by anyone holding the secret (bearer semantics, by design). The link secret is carried in the URL fragment (never sent to a server); first claim spends the note, so a second claim of the same link fails (nullifier already spent). | `account.accountFromClaimSecret`, pool nullifier |
+| **Anchor SEP-10 spoof** | The anchor verifies the challenge's source is its SIGNING_KEY and cryptographically checks both the server (against SIGNING_KEY) and client (against the client account) Ed25519 signatures over the tx hash before issuing a JWT; a forged or missing signature is rejected. | `anchor/sep10.ts` |
 
 ## Known limitations (testnet)
 - **Trusted setup**: Groth16 keys use a public Phase-1 (Hermez) plus a single

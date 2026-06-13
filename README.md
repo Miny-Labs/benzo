@@ -31,7 +31,11 @@ exercised against **Stellar testnet** with real Circle testnet USDC.
 | ASP membership / proof-of-innocence | **Real** — enforced in-circuit + on-chain registries |
 | Gasless relayer | **Real** — submits proven transfers, paid in USDC out of the pool |
 | Note-discovery indexer | **Real** — scans Soroban events, viewing-key scan API (self-hosted, no Mercury key) |
-| SEP-1 / SEP-10 / SEP-24 anchor | **Real wire protocol** — self-hosted; real on-chain USDC settlement at both edges |
+| `@benzo/sdk` facade (`BenzoClient`) | **Real** — the UI-facing API; drives create/shield/send/unshield/disclose end-to-end on testnet |
+| send-by-`@handle` | **Real** — on-chain `handle_registry` contract resolves a handle to a shielded address |
+| Claim-links | **Real** — note encrypted to a claim secret; a fresh account claims it on-chain |
+| Async proving + optimistic UI handle | **Real** — `send()` returns a `SendHandle` (pending→proving→settled); proving is headless Node |
+| SEP-1 / SEP-10 / SEP-24 anchor | **Real wire protocol** — self-hosted; **real Ed25519 SEP-10 verification**; real on-chain USDC settlement at both edges |
 | **The fiat (bank/cash) ledger leg** | **SIMULATED** — our self-hosted anchor credits "fiat received" / "fiat paid out" with no real bank. This is the only simulated piece, and it is driven explicitly via `POST /sep24/sim/:id`. |
 
 No mainnet keys are used anywhere. `.env` and `reference/` are gitignored.
@@ -88,12 +92,14 @@ contracts/                 Soroban (Rust) workspace
   asp_membership/          allow-set Merkle tree (deposit edge)        [forked: Nethermind PoC]
   asp_non_membership/      deny sparse-Merkle tree (proof-of-innocence)[forked: Nethermind PoC]
   viewkey_anchor/          MVK→TVK disclosure registry
+  handle_registry/         @handle -> shielded payment address (send-by-handle)
   common/                  shared types + Poseidon2 host wrappers       [forked: Nethermind PoC]
 circuits/
   groth16/                 shield.circom, joinsplit.circom, unshield.circom (+ note/lib)
   poseidon_params/         pinned Poseidon2 params (source of truth) + zkhash reference
   ptau/                    Hermez Powers-of-Tau (Phase-1)
-sdk/                       @benzo/sdk — Poseidon2, notes, merkle mirror, prover, viewkeys, clients
+sdk/                       @benzo/sdk — facade (BenzoClient), account, scanner, prover, viewkeys, pool client
+                           the UI-facing surface; @benzo/indexer re-exports its scanning core
 indexer/                   @benzo/indexer — event scan + viewing-key scan API
 relayer/                   @benzo/relayer — gasless transfer submission
 anchor/                    @benzo/anchor — self-hosted SEP-1/10/24 (real edges, simulated fiat)
@@ -153,6 +159,64 @@ node e2e/m2-compliance.mjs       # MVK/TVK disclosure + ASP both gates
 node e2e/m3-corridor.mjs         # SEP-24 corridor: fiat-sim → … → fiat-sim
 pnpm exec vitest run e2e/e2e.test.mjs   # green suite driving items 1–5
 ```
+
+---
+
+## UI-facing SDK API — the exact contract a frontend calls
+
+A frontend uses ONLY `BenzoClient` from `@benzo/sdk`. It wraps the pool client,
+the note scanner/indexer, the headless prover, and the viewing-key crypto
+behind stable typed methods. `send()` is non-blocking so a UI can render
+optimistic state over the proving pipeline.
+
+```ts
+import { BenzoClient, StellarCli, configFromEnv, stroopsToUsdc } from "@benzo/sdk";
+
+const client = new BenzoClient({
+  cli: new StellarCli(configFromEnv()),
+  deployment,        // contract ids (deployments/testnet.json)
+  circuits,          // {shield, joinsplit, unshield} wasm + zkey paths
+  rpcUrl, txSource,  // Soroban RPC + the gas-paying CLI identity
+  relayer, anchor, handleRegistry,   // all optional
+});
+
+// — account —
+client.createOrLoadAccount(path, { label?, stellarSecret? }) // -> { account, created }
+client.createAccount(label?, stellarSecret?)                 // -> BenzoAccount
+client.address()                                             // -> BenzoRecipient (shareable, no spend authority)
+
+// — balance & history —
+await client.sync()                 // rebuild scanner + Merkle/ASP mirrors from chain
+await client.getBalance()           // -> bigint   (aggregated spendable, stroops)
+client.getHistory()                 // -> HistoryItem[]  {type, amount, counterparty?, timestamp, status, txHash?}
+
+// — value movement —
+await client.shield({ amount, fromAddress, fromSource })     // public USDC -> shielded note
+const h = client.send({ amount, to, memo?, useRelayer? })    // -> SendHandle (async)
+h.onProgress(e => …)                // 'pending' -> 'proving' -> 'settled'
+await h.settled()                   // resolves { txHash, amount, recipient?, provingMs }
+await client.unshield({ amount, toAddress })                 // shielded -> public USDC
+
+// — UX primitives —
+await client.registerHandle({ handle, ownerAddress, ownerSource })   // @handle -> address (on-chain)
+await client.resolveHandle("@bob")                                   // -> BenzoRecipient
+await client.sendToHandle({ handle, amount, memo? })                 // resolve + send
+const { link } = await client.createClaimLink({ amount })           // send-to-link
+const secret = BenzoClient.parseClaimLink(link)
+await client.claim({ claimSecret: secret, toAddress })              // fresh account claims
+
+// — compliance —
+const { tvk, reconstruct } = client.shareReceipt(scope?)    // scoped disclosure (auditor)
+
+// — fiat edges (anchor; fiat leg SIMULATED) —
+await client.cashIn({ amount, fromSource })   // SEP-24 deposit -> shield
+await client.cashOut({ amount })              // unshield -> SEP-24 withdraw
+```
+
+Runnable demos drive each item against testnet:
+`tests/facade/a-lifecycle.mjs` (create→shield→send→unshield + balance/history +
+proving timings), `tests/facade/d-handle.mjs` (send-by-`@handle`),
+`tests/facade/e-claim.mjs` (claim-links), `tests/facade/f-seed.mjs` (anonymity-set seed).
 
 ---
 
