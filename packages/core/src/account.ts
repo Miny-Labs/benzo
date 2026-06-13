@@ -114,6 +114,25 @@ export function accountFromClaimSecret(secret: Uint8Array): BenzoAccount {
   return createAccount({ label: "claim", spendSk, mvkSecret, viewSecret });
 }
 
+/** The exact message a wallet signs once to derive Benzo's shielded note keys. */
+export const NOTE_KEY_MESSAGE = "BENZO-NOTE-KEY-v1";
+
+/**
+ * Derive a full Benzo account (spend + viewing keys) from a SINGLE wallet
+ * signature over NOTE_KEY_MESSAGE — the Railgun pattern. This is the piece no
+ * embedded-wallet SDK (Dynamic/Privy/Para) provides: those manage only the
+ * ed25519 SIGNING key, while Benzo's note keys are a separate layer. The user
+ * signs `NOTE_KEY_MESSAGE` once; the same signature deterministically recovers
+ * the same shielded account on any device — no second seed phrase.
+ */
+export function accountFromSignedMessage(signature: Uint8Array, label = "wallet"): BenzoAccount {
+  const spendOkm = hkdf(sha256, signature, undefined, "benzo/notekey/spend", 32);
+  const spendSk = BigInt("0x" + Buffer.from(spendOkm).toString("hex")) % FIELD_MODULUS;
+  const mvkSecret = new Uint8Array(hkdf(sha256, signature, undefined, "benzo/notekey/mvk", 32));
+  const viewSecret = new Uint8Array(hkdf(sha256, signature, undefined, "benzo/notekey/view", 32));
+  return createAccount({ label, spendSk, mvkSecret, viewSecret });
+}
+
 /** Load the account at `path`, or create+save a fresh one if absent. */
 export function createOrLoadAccountFile(
   path: string,
