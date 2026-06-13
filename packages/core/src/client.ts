@@ -46,6 +46,7 @@ import {
   createOrLoadAccountFile,
 } from "./account.js";
 import { StellarCli } from "./stellar.js";
+import { feHex } from "./crypto/groth16.js";
 import { randomBytes } from "node:crypto";
 
 /** A recipient's public, shareable address (no spend authority). */
@@ -159,10 +160,8 @@ export interface BenzoClientOptions {
   handleRegistry?: string;
 }
 
-/** 32-byte big-endian hex of a field element (for the registry record). */
-function feHex32(v: bigint): string {
-  return v.toString(16).padStart(64, "0");
-}
+/** 32-byte big-endian hex of a field element (guarded; for the registry record). */
+const feHex32 = feHex;
 function bytesHex(b: Uint8Array): string {
   return Buffer.from(b).toString("hex");
 }

@@ -10,7 +10,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { vkToSoroban, proofToSoroban, publicsToSoroban, g1Hex, g2Hex } from "../src/crypto/groth16.js";
+import { vkToSoroban, proofToSoroban, publicsToSoroban, g1Hex, g2Hex, feHex } from "../src/crypto/groth16.js";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const read = (p: string) => JSON.parse(readFileSync(`${repo}/${p}`, "utf8"));
@@ -48,5 +48,17 @@ describe("verifier-parity oracle: snarkjs → Soroban encoding", () => {
   it("rejects non-affine points (catches silent encoding bugs)", () => {
     expect(() => g1Hex(["1", "2", "2"])).toThrow(); // z != 1
     expect(() => g2Hex([["1", "2"], ["3", "4"], ["1", "1"]])).toThrow(); // z != [1,0]
+  });
+
+  it("feHex fails loud on >32-byte and negative field elements (no silent byte shift)", () => {
+    expect(feHex(0n)).toBe("0".repeat(64));
+    expect(feHex(2n ** 256n - 1n)).toBe("f".repeat(64)); // exactly 32 bytes is fine
+    expect(() => feHex(2n ** 256n)).toThrow(/exceeds 32 bytes/); // 65 hex chars
+    expect(() => feHex(-1n)).toThrow(/non-negative/);
+  });
+
+  it("encoders give a named error on malformed VK / proof JSON", () => {
+    expect(() => vkToSoroban({ vk_alpha_1: ["1", "2", "1"] } as never)).toThrow(/missing vk_beta_2/);
+    expect(() => proofToSoroban({ pi_a: ["1", "2", "1"] } as never)).toThrow(/missing pi_b/);
   });
 });
