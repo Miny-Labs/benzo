@@ -21,4 +21,7 @@ export * from "./merkle.js";
 export * from "./prover.js";
 export * from "./viewkeys.js";
 export * from "./stellar.js";
+export * from "./scanner.js";
 export * from "./pool.js";
+export * from "./account.js";
+export * from "./client.js";

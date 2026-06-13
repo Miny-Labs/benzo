@@ -50,7 +50,7 @@ function hexBytes(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex");
 }
 
-export class BenzoClient {
+export class BenzoPoolClient {
   readonly poolTree: MerkleTreeMirror;
   readonly aspTree: MerkleTreeMirror;
 
@@ -140,6 +140,7 @@ export class BenzoClient {
     proof: ProveResult;
     commitment: bigint;
     tag: bigint;
+    provingMs: number;
   }> {
     const assetId = await this.assetId();
     const note = opts.note;
@@ -168,7 +169,9 @@ export class BenzoClient {
       aspPathElements: aspPath.pathElements,
       aspPathIndices: aspPath.pathIndices,
     });
+    const _ps = Date.now();
     const proof = await prove(this.circuits.shield, witness);
+    const provingMs = Date.now() - _ps;
 
     const res = await this.cli.invoke({
       contractId: this.dep.pool,
@@ -189,7 +192,7 @@ export class BenzoClient {
     const leafIndex = Number(res.result);
     this.poolTree.insert(commitment);
     await this.assertSynced();
-    return { txHash: res.txHash, leafIndex, note, proof, commitment, tag };
+    return { txHash: res.txHash, leafIndex, note, proof, commitment, tag, provingMs };
   }
 
   // ---------------------------------------------------------- transfer ----
@@ -235,6 +238,7 @@ export class BenzoClient {
     outCommitments: [bigint, bigint];
     outLeafIndices: [number, number];
     proof: ProveResult;
+    provingMs: number;
   }> {
     const assetId = await this.assetId();
     const root = this.poolTree.root();
@@ -286,7 +290,9 @@ export class BenzoClient {
       outBlinding: outNotes.map((n) => n.blinding),
       outMvkPub: opts.outputs.map((o) => o.mvkPubScalar),
     });
+    const _pt = Date.now();
     const proof = await prove(this.circuits.joinsplit, witness);
+    const provingMs = Date.now() - _pt;
 
     let txHash: string | undefined;
     if (opts.relay) {
@@ -344,6 +350,7 @@ export class BenzoClient {
       outCommitments,
       outLeafIndices: [i0, i1],
       proof,
+      provingMs,
     };
   }
 
@@ -380,6 +387,7 @@ export class BenzoClient {
     changeNote: Note;
     changeCommitment: bigint;
     proof: ProveResult;
+    provingMs: number;
   }> {
     const assetId = await this.assetId();
     const root = this.poolTree.root();
@@ -445,7 +453,9 @@ export class BenzoClient {
       smtOldValue: BigInt(fr.not_found_value),
       smtIsOld0: fr.is_old0 ? 1n : 0n,
     });
+    const _pw = Date.now();
     const proof = await prove(this.circuits.unshield, witness);
+    const provingMs = Date.now() - _pw;
 
     const res = await this.cli.invoke({
       contractId: this.dep.pool,
@@ -468,6 +478,6 @@ export class BenzoClient {
     });
     this.poolTree.insert(changeCommitment);
     await this.assertSynced();
-    return { txHash: res.txHash, nullifier, changeNote, changeCommitment, proof };
+    return { txHash: res.txHash, nullifier, changeNote, changeCommitment, proof, provingMs };
   }
 }

@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  BenzoClient,
+  BenzoPoolClient,
   StellarCli,
   configFromEnv,
   aspLeaf,
@@ -51,7 +51,7 @@ export function makeClient() {
       },
     ]),
   );
-  const client = new BenzoClient(
+  const client = new BenzoPoolClient(
     cli,
     {
       pool: dep.pool,
