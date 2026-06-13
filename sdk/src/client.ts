@@ -41,10 +41,12 @@ import {
 } from "./viewkeys.js";
 import {
   type BenzoAccount,
+  accountFromClaimSecret,
   createAccount,
   createOrLoadAccountFile,
 } from "./account.js";
 import { StellarCli } from "./stellar.js";
+import { randomBytes } from "node:crypto";
 
 /** A recipient's public, shareable address (no spend authority). */
 export interface BenzoRecipient {
@@ -553,6 +555,50 @@ export class BenzoClient {
   }): Promise<SendHandle> {
     const to = await this.resolveHandle(opts.handle);
     return this.send({ amount: opts.amount, to, memo: opts.memo, useRelayer: opts.useRelayer });
+  }
+
+  // ----------------------------------------------------- claim-links -----
+
+  /**
+   * Create a claim link: privately send `amount` to a fresh account derived
+   * from a random claim secret, and return a link carrying that secret. Anyone
+   * with the link can claim the funds — no prior account or on-chain state.
+   */
+  async createClaimLink(opts: {
+    amount: bigint;
+    useRelayer?: boolean;
+  }): Promise<{ link: string; claimSecretHex: string; sendTx?: string; recipient: BenzoRecipient }> {
+    const secret = new Uint8Array(randomBytes(32));
+    const claimAccount = accountFromClaimSecret(secret);
+    const to = paymentAddress(claimAccount);
+    const handle = this.send({ amount: opts.amount, to, memo: "claim-link", useRelayer: opts.useRelayer });
+    const r = await handle.settled();
+    const link = `benzo://claim#${Buffer.from(secret).toString("base64url")}`;
+    return { link, claimSecretHex: Buffer.from(secret).toString("hex"), sendTx: r?.txHash, recipient: to };
+  }
+
+  /** Parse a claim link into its claim secret. */
+  static parseClaimLink(link: string): Uint8Array {
+    const frag = link.split("#")[1];
+    if (!frag) throw new Error("invalid claim link");
+    return new Uint8Array(Buffer.from(frag, "base64url"));
+  }
+
+  /**
+   * Claim a link's funds into a public Stellar address. This client ADOPTS the
+   * claim account (derived from the secret), scans, and unshields the full
+   * balance to `toAddress` — settling the claim on-chain.
+   */
+  async claim(opts: {
+    claimSecret: Uint8Array;
+    toAddress: string;
+  }): Promise<{ txHash?: string; amount: bigint }> {
+    this.useAccount(accountFromClaimSecret(opts.claimSecret));
+    await this.sync();
+    const amount = await this.getBalance();
+    if (amount === 0n) throw new Error("nothing to claim (already claimed or unfunded)");
+    const wd = await this.unshield({ amount, toAddress: opts.toAddress });
+    return { txHash: wd.txHash, amount };
   }
 
   // ----------------------------------------------------- cashIn/cashOut --

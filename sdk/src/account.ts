@@ -11,7 +11,10 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { hkdf } from "@noble/hashes/hkdf";
+import { sha256 } from "@noble/hashes/sha2";
 import { Keypair as StellarKeypair } from "@stellar/stellar-sdk";
+import { FIELD_MODULUS } from "./crypto/poseidon2.js";
 import {
   deriveKeypair,
   randomFieldElement,
@@ -95,6 +98,20 @@ export function loadAccount(path: string): BenzoAccount {
     viewSecret: unhex(file.viewSecret),
     stellarSecret: file.stellarSecret,
   });
+}
+
+/**
+ * Deterministically derive a full Benzo account from a claim secret (the
+ * payload of a claim link). Anyone holding the secret reconstructs the exact
+ * same spend/MVK/view keys and can therefore discover and spend the note that
+ * was sent to this account — the basis of send-to-link.
+ */
+export function accountFromClaimSecret(secret: Uint8Array): BenzoAccount {
+  const spendOkm = hkdf(sha256, secret, undefined, "benzo/claim/spend", 32);
+  const spendSk = BigInt("0x" + Buffer.from(spendOkm).toString("hex")) % FIELD_MODULUS;
+  const mvkSecret = new Uint8Array(hkdf(sha256, secret, undefined, "benzo/claim/mvk", 32));
+  const viewSecret = new Uint8Array(hkdf(sha256, secret, undefined, "benzo/claim/view", 32));
+  return createAccount({ label: "claim", spendSk, mvkSecret, viewSecret });
 }
 
 /** Load the account at `path`, or create+save a fresh one if absent. */
