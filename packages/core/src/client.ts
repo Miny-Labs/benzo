@@ -169,6 +169,26 @@ function bytesHex(b: Uint8Array): string {
 const FEE_SCOPE = "default";
 let opCounter = 0;
 
+/**
+ * Plan which notes a 2-in joinsplit should spend for `amount`:
+ *  - prefer the smallest single note that covers it (1 real input + a dummy),
+ *  - else fall back to the two largest notes if together they cover it,
+ *  - else return [] (uncoverable in one 2-in transfer).
+ * The joinsplit circuit takes exactly two inputs, so we never need k>2 here;
+ * change absorbs any overshoot. Pure + exported for unit testing.
+ */
+export function selectSpendNotes(notes: SpendableNote[], amount: bigint): SpendableNote[] {
+  const desc = [...notes].sort((a, b) =>
+    a.note.amount > b.note.amount ? -1 : a.note.amount < b.note.amount ? 1 : 0,
+  );
+  const single = [...desc].reverse().find((n) => n.note.amount >= amount);
+  if (single) return [single];
+  if (desc.length >= 2 && desc[0].note.amount + desc[1].note.amount >= amount) {
+    return [desc[0], desc[1]];
+  }
+  return [];
+}
+
 export class BenzoClient {
   readonly pool: BenzoPoolClient;
   scanner: NoteScanner;
@@ -356,10 +376,16 @@ export class BenzoClient {
       await this.sync();
       const assetId = await this.assetId();
 
-      const input = this.selectNote(opts.amount);
-      if (!input) throw new Error("insufficient spendable balance");
-      const change = input.note.amount - opts.amount;
-      if (change < 0n) throw new Error("note too small");
+      // Spend one covering note (+ a dummy), or two notes when no single note
+      // covers the amount — the joinsplit circuit takes two inputs either way.
+      const selected = selectSpendNotes(this.spendableNotes(), opts.amount);
+      if (selected.length === 0) throw new Error("insufficient spendable balance");
+      const totalIn = selected.reduce((s, n) => s + n.note.amount, 0n);
+      const change = totalIn - opts.amount;
+      const inputs: [SpendableNote, SpendableNote] =
+        selected.length === 2
+          ? [selected[0], selected[1]]
+          : [selected[0], this.pool.makeDummyInput(assetId)];
 
       const senderTvk = deriveTvk(this.account.mvkSecret, FEE_SCOPE);
       const recipNote = newNote(opts.amount, opts.to.spendPub, assetId);
@@ -373,7 +399,7 @@ export class BenzoClient {
       const tr = await this.pool.transfer({
         source: this.opts.relayer && opts.useRelayer ? this.opts.relayer.source : this.opts.txSource,
         relay,
-        inputs: [input, this.pool.makeDummyInput(assetId)],
+        inputs,
         outputs: [
           { note: recipNote, mvkPubScalar: this.account.mvkScalar },
           { note: changeNote, mvkPubScalar: this.account.mvkScalar },
