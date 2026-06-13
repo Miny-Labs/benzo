@@ -19,7 +19,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   Asset,
   Horizon,
@@ -239,8 +239,8 @@ export async function runCorridor() {
   }
 }
 
-// Run as a CLI when invoked directly.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as a CLI when invoked directly (pathToFileURL handles spaces in the path).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runCorridor()
     .then(() => process.exit(0))
     .catch((e) => {

@@ -20,7 +20,7 @@
  *     This is the exact boundary BENZO.md §8.2 says to disclose.
  */
 
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   Asset,
@@ -31,6 +31,7 @@ import {
   Operation,
   TransactionBuilder,
 } from "@stellar/stellar-sdk";
+import { buildChallenge, verifyChallenge } from "./sep10.js";
 
 const PORT = Number(process.env.ANCHOR_PORT ?? 8888);
 const HOME_DOMAIN = process.env.ANCHOR_HOME_DOMAIN ?? `localhost:${PORT}`;
@@ -151,50 +152,25 @@ function stellarToml(): string {
   ].join("\n");
 }
 
-// ---- SEP-10: challenge + JWT ----------------------------------------------
-async function sep10Challenge(account: string): Promise<string> {
-  const server = await horizon.loadAccount(signingKp.publicKey()).catch(() => null);
-  // Use a zero-sequence source for the SEP-10 challenge (standard).
-  const { Account } = await import("@stellar/stellar-sdk");
-  const src = new Account(signingKp.publicKey(), "-1");
-  const now = Math.floor(Date.now() / 1000);
-  const nonce = b64url(randomUUID());
-  const tx = new TransactionBuilder(src, {
-    fee: "100",
+// ---- SEP-10: challenge + JWT (real Ed25519 verification, see sep10.ts) -----
+function sep10Challenge(account: string): string {
+  // SEP-10: 48 bytes of entropy, base64 (64 chars) — fits the manageData limit.
+  const nonce = randomBytes(48).toString("base64");
+  void randomUUID;
+  return buildChallenge({
+    signingKeypair: signingKp,
+    clientAccount: account,
+    homeDomain: HOME_DOMAIN,
+    webAuthDomain: HOME_DOMAIN,
     networkPassphrase: PASSPHRASE,
-    timebounds: { minTime: now, maxTime: now + 900 },
-  })
-    .addOperation(
-      Operation.manageData({
-        name: `${HOME_DOMAIN} auth`,
-        value: nonce,
-        source: account,
-      }),
-    )
-    .addOperation(
-      Operation.manageData({
-        name: "web_auth_domain",
-        value: HOME_DOMAIN,
-        source: signingKp.publicKey(),
-      }),
-    )
-    .build();
-  void server;
-  tx.sign(signingKp);
-  return tx.toXDR();
+    nonce,
+    now: Math.floor(Date.now() / 1000),
+  });
 }
 
-async function sep10Verify(xdrStr: string): Promise<string | null> {
-  const tx = TransactionBuilder.fromXDR(xdrStr, PASSPHRASE);
-  // The challenge's first manageData op source is the client account.
-  const op = (tx as unknown as { operations: Array<{ source?: string; type: string }> })
-    .operations[0];
-  const clientAccount = op?.source;
-  if (!clientAccount) return null;
-  // Verify the server signature is present and valid.
-  const serverOk = (tx as unknown as { signatures: unknown[] }).signatures.length >= 2;
-  if (!serverOk) return null;
-  return clientAccount;
+function sep10Verify(xdrStr: string): string | null {
+  const r = verifyChallenge(xdrStr, signingKp.publicKey(), PASSPHRASE);
+  return r.ok ? r.clientAccount! : null;
 }
 
 // ---- request router -------------------------------------------------------
@@ -213,13 +189,13 @@ const server = createServer(async (req, res) => {
       const account = url.searchParams.get("account");
       if (!account) return json(res, 400, { error: "account required" });
       return json(res, 200, {
-        transaction: await sep10Challenge(account),
+        transaction: sep10Challenge(account),
         network_passphrase: PASSPHRASE,
       });
     }
     if (path === "/auth" && req.method === "POST") {
       const body = await readBody(req);
-      const client = await sep10Verify(String(body.transaction));
+      const client = sep10Verify(String(body.transaction));
       if (!client) return json(res, 400, { error: "invalid challenge" });
       const token = jwtSign({
         iss: `http://${HOME_DOMAIN}/auth`,

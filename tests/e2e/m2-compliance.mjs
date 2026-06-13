@@ -33,6 +33,7 @@ import {
   mvkTag,
 } from "@benzo/sdk";
 import { BenzoIndexer, syncFromRpc } from "@benzo/indexer";
+import { pathToFileURL } from "node:url";
 import { runPrivatePaymentFlow, makeClient, explorer } from "./flow.mjs";
 
 const log = (...a) => console.log(...a);
@@ -200,8 +201,8 @@ log(allPass ? "\n✅ M2 COMPLIANCE: ALL PASS" : "\n❌ M2 had failures");
 return { ...results, allPass };
 }
 
-// Run as a CLI when invoked directly.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as a CLI when invoked directly (pathToFileURL handles spaces in the path).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const r = await runCompliance();
   process.exit(r.allPass ? 0 : 1);
 }
