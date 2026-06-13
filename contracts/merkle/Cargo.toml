@@ -1,0 +1,25 @@
+[package]
+name = "benzo-merkle"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+soroban-utils = { workspace = true }
+
+[dev-dependencies]
+num-bigint = { workspace = true }
+soroban-sdk = { workspace = true, features = ["testutils"] }
+zkhash = { workspace = true }
+ark-bn254 = { workspace = true }
+ark-ff = { version = "0.6.0", default-features = false }
+
+[lints]
+workspace = true
