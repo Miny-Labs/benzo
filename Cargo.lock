@@ -492,6 +492,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "benzo-request-registry"
+version = "0.1.0"
+dependencies = [
+ "benzo-nullifier-set",
+ "soroban-sdk",
+ "soroban-utils",
+]
+
+[[package]]
 name = "benzo-verifier-groth16"
 version = "0.1.0"
 dependencies = [

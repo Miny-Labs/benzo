@@ -71,6 +71,10 @@ for c in $MERKLE $NULLS $VKA; do
   stellar contract invoke --id "$c" --source $SOURCE "${NET[@]}" -- set_operator --operator "$POOL" >/dev/null
 done
 
+say "deploying request_registry (pull primitive; reads nullifier_set for paid-proof)"
+REQREG=$(deploy benzo_request_registry.wasm --admin "$ADMIN" --nullifier_set "$NULLS")
+say "request_registry: $REQREG"
+
 say "registering verification keys"
 for c in shield:SHIELD joinsplit:TRANSFER unshield:UNSHIELD; do
   name=${c%%:*}; id=${c##*:}
@@ -106,6 +110,7 @@ cat > deployments/testnet.json <<EOF
   "aspNonMembership": "$ASPN",
   "viewkeyAnchor": "$VKA",
   "pool": "$POOL",
+  "requestRegistry": "$REQREG",
   "treeLevels": $TREE_LEVELS,
   "aspLevels": $ASP_LEVELS,
   "smtLevels": 16,
@@ -119,7 +124,8 @@ cat > deployments/testnet.json <<EOF
       "aspMembership": "$(wasmhash asp_membership.wasm)",
       "aspNonMembership": "$(wasmhash asp_non_membership.wasm)",
       "viewkeyAnchor": "$(wasmhash benzo_viewkey_anchor.wasm)",
-      "pool": "$(wasmhash benzo_pool.wasm)"
+      "pool": "$(wasmhash benzo_pool.wasm)",
+      "requestRegistry": "$(wasmhash benzo_request_registry.wasm)"
     }
   }
 }

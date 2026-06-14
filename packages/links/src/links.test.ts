@@ -6,6 +6,17 @@ const cases: BenzoLink[] = [
   { type: "claim", secret: "deadbeef" },
   { type: "request", to: "@asha", amount: "20", asset: "USDC", memo: "lunch" },
   { type: "request", to: "GBRMUZEL...XYZ" },
+  {
+    type: "request",
+    to: "@asha",
+    amount: "25",
+    asset: "USDC",
+    memo: "invoice",
+    id: "12345678901234567890",
+    expiry: "1800000000",
+    reference: "INV-001",
+    payer: "@bob",
+  },
   { type: "handle", handle: "asha" },
 ];
 

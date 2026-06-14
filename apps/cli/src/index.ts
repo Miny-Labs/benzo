@@ -52,6 +52,7 @@ function makeClient(opts: { relayer?: boolean } = {}): BenzoClient {
     txSource: "benzo-deployer",
     relayer: opts.relayer ? { source: "benzo-relayer", address: process.env.RELAYER_PUBLIC! } : undefined,
     handleRegistry: dep.handleRegistry,
+    requestRegistry: dep.requestRegistry,
   });
 }
 
@@ -84,6 +85,11 @@ const HELP = `benzo — private USDC on Stellar (testnet)
   benzo payroll  --payouts "@a:10,@b:25" [--scope L]  confidential batch payouts
   benzo disclose-total [--scope L]      prove payroll/invoice TOTAL to an auditor
   benzo prove-balance --min N           prove you hold >= N USDC (hides exact balance)
+  benzo request create --to @h [--amount N] [--min N] [--expiry S] [--memo M] [--ref R] [--payer @p] [--register]
+  benzo request pay    --link <url> [--amount N]   pay a request privately (prints nullifier)
+  benzo request mark-paid --id ID --nullifier N --amount N   close request vs a real payment
+  benzo request status  --id ID                    on-chain request status
+  benzo request cancel  --id ID  |  expire --id ID
   benzo cashin   --amount N             anchor deposit -> shield   (needs running anchor)
   benzo cashout  --amount N             unshield -> anchor withdraw (needs running anchor)
   benzo onramp   [--to G..] [--amount N]  fiat->USDC onramp session (Stripe sandbox / Mock)
@@ -133,8 +139,12 @@ async function main() {
       console.log(`unshield tx=${r.txHash} nullifier=${r.nullifier}`); break;
     }
     case "handle-register": {
-      const r = await c.registerHandle({ handle: String(f.handle) } as any);
-      console.log(`registered @${f.handle} tx=${(r as any).txHash ?? JSON.stringify(r)}`); break;
+      const r = await c.registerHandle({
+        handle: String(f.handle),
+        ownerSource: f.source ? String(f.source) : undefined,
+        ownerAddress: f.owner ? String(f.owner) : undefined,
+      });
+      console.log(`registered @${f.handle} tx=${r.txHash ?? ""}`); break;
     }
     case "handle-resolve": {
       console.log(jstr(await c.resolveHandle(String(f.handle)))); break;
@@ -183,6 +193,53 @@ async function main() {
       console.log(`proof-of-balance: holds >= ${stroopsToUsdc(r.threshold)} USDC  (root=${r.root})`);
       console.log(`  publicSignals: ${jstr(r.publicSignals)}`);
       console.log(`  sorobanProof:  ${jstr(r.sorobanProof)}`);
+      break;
+    }
+    case "request": {
+      // The pull primitive: create/share a request link, pay it privately, and
+      // track status on-chain (paid is bound to a real payment nullifier).
+      const sub = rest[0];
+      if (sub === "create") {
+        const r = await c.createRequest({
+          to: String(f.to),
+          amount: f.amount ? toStroops(String(f.amount)) : undefined,
+          minAmount: f.min ? toStroops(String(f.min)) : undefined,
+          expiry: f.expiry ? Number(f.expiry) : Math.floor(Date.now() / 1000) + 7 * 86400,
+          memo: f.memo ? String(f.memo) : undefined,
+          reference: f.ref ? String(f.ref) : undefined,
+          payer: f.payer ? String(f.payer) : undefined,
+          register: !!f.register,
+        });
+        console.log(`request id=${r.id}`);
+        console.log(`link:    ${r.link}`);
+        if (f.register) console.log(`(anchored on-chain in request_registry)`);
+      } else if (sub === "pay") {
+        const r = await c.payRequest(
+          String(f.link),
+          f.amount ? { amount: toStroops(String(f.amount)) } : undefined,
+        );
+        console.log(`paid ${stroopsToUsdc(r.amount)} USDC  tx=${r.txHash ?? ""}`);
+        console.log(`  nullifier=${r.nullifier}  id=${r.id ?? ""}`);
+        console.log(`  → give the payee:  benzo request mark-paid --id ${r.id ?? "<id>"} --nullifier ${r.nullifier} --amount ${stroopsToUsdc(r.amount)}`);
+      } else if (sub === "mark-paid") {
+        await c.markRequestPaid({
+          id: String(f.id),
+          nullifier: BigInt(String(f.nullifier)),
+          amount: toStroops(String(f.amount)),
+        });
+        console.log(`marked paid: ${f.id}`);
+      } else if (sub === "status") {
+        const s = await c.getRequest(String(f.id));
+        if (!s) { console.log("not registered on-chain"); break; }
+        const amt = s.amount > 0n ? `${stroopsToUsdc(s.amount)}` : "variable";
+        console.log(`status=${s.status} paid=${stroopsToUsdc(s.paidTotal)}/${amt} USDC  expiry=${s.expiry}`);
+      } else if (sub === "cancel") {
+        await c.cancelRequest(String(f.id)); console.log(`cancelled ${f.id}`);
+      } else if (sub === "expire") {
+        await c.expireRequest(String(f.id)); console.log(`expired ${f.id}`);
+      } else {
+        console.log("usage: benzo request create|pay|mark-paid|status|cancel|expire");
+      }
       break;
     }
     case "cashin": {

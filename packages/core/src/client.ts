@@ -49,6 +49,7 @@ import type { StellarCli } from "./stellar.js";
 import { feHex } from "./crypto/groth16.js";
 import { proveBalance as generateBalanceProof, selectNotesForBalance } from "./balance.js";
 import type { ProveResult } from "./prover.js";
+import { encodeBenzoLink, parseBenzoLink } from "@benzo/links";
 import { randomBytes } from "node:crypto";
 
 /** A recipient's public, shareable address (no spend authority). */
@@ -94,7 +95,7 @@ export interface ProgressEvent {
 /** Async handle for a send: reports progress and resolves on settlement. */
 export class SendHandle {
   status: TxStatus = "pending";
-  result?: { txHash?: string; amount: bigint; recipient?: string; provingMs?: number };
+  result?: { txHash?: string; amount: bigint; recipient?: string; provingMs?: number; nullifier?: bigint };
   error?: Error;
   private listeners: Array<(e: ProgressEvent) => void> = [];
   private resolveFn!: (r: SendHandle["result"]) => void;
@@ -160,6 +161,8 @@ export interface BenzoClientOptions {
   anchor?: AnchorPort;
   /** optional on-chain @handle registry */
   handleRegistry?: string;
+  /** optional on-chain request/invoice registry (the pull primitive) */
+  requestRegistry?: string;
 }
 
 /** 32-byte big-endian hex of a field element (guarded; for the registry record). */
@@ -444,7 +447,7 @@ export class BenzoClient {
         memo: opts.memo,
       });
       handle._emit({ op: "send", status: "settled", txHash: tr.txHash, provingMs: tr.provingMs });
-      handle._resolve({ txHash: tr.txHash, amount: opts.amount, recipient: opts.to.label, provingMs: tr.provingMs });
+      handle._resolve({ txHash: tr.txHash, amount: opts.amount, recipient: opts.to.label, provingMs: tr.provingMs, nullifier: tr.nullifiers[0] });
     } catch (e) {
       handle._emit({ op: "send", status: "failed", detail: (e as Error).message });
       handle._reject(e as Error);
@@ -647,18 +650,20 @@ export class BenzoClient {
    */
   async registerHandle(opts: {
     handle: string;
-    ownerAddress: string;
-    ownerSource: string;
+    ownerAddress?: string;
+    ownerSource?: string;
   }): Promise<{ txHash?: string }> {
     if (!this.opts.handleRegistry) throw new Error("no handle registry configured");
+    const ownerSource = opts.ownerSource ?? this.opts.txSource;
+    const ownerAddress = opts.ownerAddress ?? (await this.opts.cli.keyAddress(ownerSource));
     const res = await this.opts.cli.invoke({
       contractId: this.opts.handleRegistry,
-      source: opts.ownerSource,
+      source: ownerSource,
       send: true,
       fnArgs: [
         "register",
         "--handle", opts.handle,
-        "--owner", opts.ownerAddress,
+        "--owner", ownerAddress,
         "--spend_pub", feHex32(this.account.spendPub),
         "--view_pub", bytesHex(this.account.viewPub),
         "--mvk_scalar", feHex32(this.account.mvkScalar),
@@ -736,6 +741,147 @@ export class BenzoClient {
     if (amount === 0n) throw new Error("nothing to claim (already claimed or unfunded)");
     const wd = await this.unshield({ amount, toAddress: opts.toAddress });
     return { txHash: wd.txHash, amount };
+  }
+
+  // ------------------------------------------------ requests / invoices --
+
+  /**
+   * Create a payment request / invoice (the pull primitive). Returns a shareable
+   * benzo://request link; `register: true` also opens it on-chain in the
+   * request_registry so its status is trackable. No funds are escrowed. Amounts
+   * are base units (stroops); omit `amount` for a variable/donation request.
+   */
+  async createRequest(opts: {
+    to: string; // requester @handle (or address) to be paid
+    amount?: bigint;
+    minAmount?: bigint;
+    expiry: number; // unix seconds
+    memo?: string;
+    reference?: string;
+    payer?: string; // bound request (omit = open invoice)
+    register?: boolean; // also anchor on-chain
+    payeeSource?: string; // CLI identity authorizing register (defaults txSource)
+  }): Promise<{ link: string; id: string }> {
+    const id = randomFieldElement().toString();
+    const link = encodeBenzoLink({
+      type: "request",
+      to: opts.to,
+      id,
+      amount: opts.amount !== undefined ? opts.amount.toString() : undefined,
+      asset: "USDC",
+      memo: opts.memo,
+      expiry: String(opts.expiry),
+      reference: opts.reference,
+      payer: opts.payer,
+    });
+    if (opts.register) {
+      if (!this.opts.requestRegistry) throw new Error("no request registry configured");
+      const source = opts.payeeSource ?? this.opts.txSource;
+      const payeeAddr = await this.opts.cli.keyAddress(source);
+      await this.opts.cli.invoke({
+        contractId: this.opts.requestRegistry,
+        source,
+        send: true,
+        fnArgs: [
+          "register",
+          "--payee", payeeAddr,
+          "--commitment", id,
+          "--amount", (opts.amount ?? 0n).toString(),
+          "--min_amount", (opts.minAmount ?? 0n).toString(),
+          "--expiry", String(opts.expiry),
+        ],
+      });
+    }
+    return { link, id };
+  }
+
+  /**
+   * Fulfill a request: a private send to the requester carrying the request id
+   * in the (encrypted) memo so they can correlate. Returns the burned input
+   * nullifier so the requester can `markRequestPaid` against a real payment.
+   */
+  async payRequest(
+    link: string,
+    opts?: { amount?: bigint },
+  ): Promise<{ txHash?: string; nullifier: bigint; id?: string; amount: bigint }> {
+    const parsed = parseBenzoLink(link);
+    if (!parsed || parsed.type !== "request") throw new Error("not a benzo request link");
+    const amount = opts?.amount ?? (parsed.amount ? BigInt(parsed.amount) : undefined);
+    if (amount === undefined) throw new Error("amount required for a variable request");
+    const handle = parsed.to.replace(/^@/, "");
+    const memo = parsed.id ? `req:${parsed.id}` : parsed.memo;
+    const h = await this.sendToHandle({ handle, amount, memo });
+    const r = await h.settled();
+    return { txHash: r?.txHash, nullifier: r?.nullifier ?? 0n, id: parsed.id, amount };
+  }
+
+  /** Mark a request (partly) paid on-chain, bound to a real payment nullifier. */
+  async markRequestPaid(opts: {
+    id: string;
+    nullifier: bigint;
+    amount: bigint;
+    payeeSource?: string;
+  }): Promise<void> {
+    if (!this.opts.requestRegistry) throw new Error("no request registry configured");
+    await this.opts.cli.invoke({
+      contractId: this.opts.requestRegistry,
+      source: opts.payeeSource ?? this.opts.txSource,
+      send: true,
+      fnArgs: [
+        "mark_paid",
+        "--commitment", opts.id,
+        "--nullifier", opts.nullifier.toString(),
+        "--paid_amount", opts.amount.toString(),
+      ],
+    });
+  }
+
+  /** Read a request's on-chain status. Returns null if not registered. */
+  async getRequest(id: string): Promise<{
+    status: string;
+    amount: bigint;
+    minAmount: bigint;
+    paidTotal: bigint;
+    expiry: number;
+  } | null> {
+    if (!this.opts.requestRegistry) throw new Error("no request registry configured");
+    const v = await this.opts.cli.view(this.opts.requestRegistry, this.opts.txSource, [
+      "get",
+      "--commitment",
+      id,
+    ]);
+    if (v == null) return null;
+    const r = v as Record<string, unknown>;
+    const status = r.status as { tag?: string } | string | undefined;
+    return {
+      status: typeof status === "object" ? String(status?.tag) : String(status),
+      amount: BigInt(String(r.amount ?? 0)),
+      minAmount: BigInt(String(r.min_amount ?? 0)),
+      paidTotal: BigInt(String(r.paid_total ?? 0)),
+      expiry: Number(r.expiry ?? 0),
+    };
+  }
+
+  /** Requester-only cancel of an open request. */
+  async cancelRequest(id: string, payeeSource?: string): Promise<void> {
+    if (!this.opts.requestRegistry) throw new Error("no request registry configured");
+    await this.opts.cli.invoke({
+      contractId: this.opts.requestRegistry,
+      source: payeeSource ?? this.opts.txSource,
+      send: true,
+      fnArgs: ["cancel", "--commitment", id],
+    });
+  }
+
+  /** Permissionless close of an expired request. */
+  async expireRequest(id: string): Promise<void> {
+    if (!this.opts.requestRegistry) throw new Error("no request registry configured");
+    await this.opts.cli.invoke({
+      contractId: this.opts.requestRegistry,
+      source: this.opts.txSource,
+      send: true,
+      fnArgs: ["expire", "--commitment", id],
+    });
   }
 
   // ----------------------------------------------------- cashIn/cashOut --

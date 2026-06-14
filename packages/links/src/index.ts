@@ -21,11 +21,19 @@ export interface ClaimLink {
 /** A request to be paid (renders as a button / QR on any surface). */
 export interface RequestLink {
   type: "request";
-  /** @handle or G-address */
+  /** @handle or G-address to pay */
   to: string;
   amount?: string;
   asset?: string;
   memo?: string;
+  /** request id == on-chain commitment key (decimal U256), when registered */
+  id?: string;
+  /** deadline (unix seconds) */
+  expiry?: string;
+  /** external / merchant reference */
+  reference?: string;
+  /** bound request: the @handle/address expected to pay (omit = open invoice) */
+  payer?: string;
 }
 
 /** A shareable pointer to a @handle. */
@@ -58,6 +66,10 @@ export function encodeBenzoLink(link: BenzoLink, base: "scheme" | "web" = "schem
       if (link.amount) q.set("amount", link.amount);
       if (link.asset) q.set("asset", link.asset);
       if (link.memo) q.set("memo", link.memo);
+      if (link.id) q.set("id", link.id);
+      if (link.expiry) q.set("expiry", link.expiry);
+      if (link.reference) q.set("ref", link.reference);
+      if (link.payer) q.set("payer", link.payer);
       return `${p}request?${q.toString()}`;
     }
     case "handle":
@@ -99,9 +111,17 @@ export function parseBenzoLink(input: string): BenzoLink | null {
     const amount = q.get("amount");
     const asset = q.get("asset");
     const memo = q.get("memo");
+    const id = q.get("id");
+    const expiry = q.get("expiry");
+    const reference = q.get("ref");
+    const payer = q.get("payer");
     if (amount) out.amount = amount;
     if (asset) out.asset = asset;
     if (memo) out.memo = memo;
+    if (id) out.id = id;
+    if (expiry) out.expiry = expiry;
+    if (reference) out.reference = reference;
+    if (payer) out.payer = payer;
     return out;
   }
   if (kind === "u") {
