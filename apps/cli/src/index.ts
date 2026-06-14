@@ -10,7 +10,7 @@
 import { readFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BenzoClient, StellarCli, configFromEnv, stroopsToUsdc } from "@benzo/core";
+import { BenzoClient, StellarCli, NodeProver, configFromEnv, stroopsToUsdc } from "@benzo/core";
 import { encodeBenzoLink, parseBenzoLink } from "@benzo/links";
 import { AnchorClient, anchorConfigFromEnv } from "@benzo/anchor";
 import { onrampFromEnv } from "@benzo/integrations";
@@ -48,6 +48,7 @@ function makeClient(opts: { relayer?: boolean } = {}): BenzoClient {
       token: dep.token, treeLevels: dep.treeLevels, aspLevels: dep.aspLevels, smtLevels: dep.smtLevels,
     },
     circuits: circuitSet(),
+    prover: new NodeProver(),
     rpcUrl: process.env.SOROBAN_RPC_URL!,
     txSource: "benzo-deployer",
     relayer: opts.relayer ? { source: "benzo-relayer", address: process.env.RELAYER_PUBLIC! } : undefined,
@@ -80,7 +81,7 @@ const HELP = `benzo — private USDC on Stellar (testnet)
   benzo handle-register --handle NAME
   benzo handle-resolve  --handle NAME
   benzo claim-create   --amount N       mint a claim link (pay someone with no account)
-  benzo claim-redeem   --link <url>     claim a benzo:// link into a fresh account
+  benzo claim-redeem   --link <url> [--to G..]  redeem a claim link's USDC to a Stellar address
   benzo disclose                        print an auditor view-key + reconstructed flows
   benzo payroll  --payouts "@a:10,@b:25" [--scope L]  confidential batch payouts
   benzo disclose-total [--scope L]      prove payroll/invoice TOTAL to an auditor
@@ -131,8 +132,10 @@ async function main() {
     }
     case "send": {
       const handle = String(f.to).replace(/^@/, "");
-      const r = await c.sendToHandle({ handle, amount: toStroops(String(f.amount)), useRelayer: !!f.relayer } as any);
-      console.log(`sent to @${handle} tx=${(r as any).txHash ?? JSON.stringify(r)}`); break;
+      const h = await c.sendToHandle({ handle, amount: toStroops(String(f.amount)), useRelayer: !!f.relayer });
+      const r = await h.settled();
+      console.log(`sent ${stroopsToUsdc(r?.amount ?? 0n)} USDC -> @${handle}  tx=${r?.txHash ?? ""}`);
+      if (r?.nullifier) console.log(`  nullifier=${r.nullifier}  proving=${r.provingMs ?? "?"}ms`); break;
     }
     case "unshield": {
       const r = await c.unshield({ amount: toStroops(String(f.amount)), toAddress: String(f.to) } as any);
@@ -158,8 +161,11 @@ async function main() {
     case "claim-redeem": {
       const parsed = parseBenzoLink(String(f.link));
       if (!parsed || parsed.type !== "claim") throw new Error("not a valid benzo claim link");
-      const r = await c.claim({ secret: parsed.secret } as any);
-      console.log(`claimed tx=${(r as any).txHash ?? JSON.stringify(r)}`); break;
+      const claimSecret = BenzoClient.parseClaimLink(String(f.link));
+      const toAddress = f.to ? String(f.to) : process.env.DEPLOYER_PUBLIC;
+      if (!toAddress) throw new Error("claim-redeem needs --to G... (or DEPLOYER_PUBLIC in env)");
+      const r = await c.claim({ claimSecret, toAddress });
+      console.log(`claimed ${stroopsToUsdc(r.amount)} USDC -> ${toAddress} tx=${r.txHash ?? ""}`); break;
     }
     case "disclose": {
       await c.sync();

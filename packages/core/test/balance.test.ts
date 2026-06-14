@@ -9,6 +9,9 @@ import { describe, it, expect } from "vitest";
 import { MerkleTreeMirror } from "../src/merkle.js";
 import { deriveKeypair, noteCommitment } from "../src/notes.js";
 import { proveBalance, verifyBalanceLocal, selectNotesForBalance } from "../src/balance.js";
+import { NodeProver } from "../src/prover.js";
+
+const prover = new NodeProver();
 
 const root = fileURLToPath(new URL("../../../circuits/build", import.meta.url));
 const artifacts = {
@@ -40,7 +43,7 @@ describe.skipIf(!HAVE)("proof-of-balance circuit", () => {
   it("proves notes summing >= threshold and verifies", async () => {
     const { spendSk, tree, notes } = fixture();
     const res = await proveBalance({
-      artifacts, spendSk, assetId: ASSET, threshold: 5_000_000n, root: tree.root(), tree, notes,
+      prover, artifacts, spendSk, assetId: ASSET, threshold: 5_000_000n, root: tree.root(), tree, notes,
     });
     expect(res.publicSignals.length).toBe(4); // root, threshold, assetId, context
     expect(await verifyBalanceLocal(vk(), res.publicSignals, res.proof)).toBe(true);
@@ -49,7 +52,7 @@ describe.skipIf(!HAVE)("proof-of-balance circuit", () => {
   it("proves a lower threshold with one note (the rest padded)", async () => {
     const { spendSk, tree, notes } = fixture();
     const res = await proveBalance({
-      artifacts, spendSk, assetId: ASSET, threshold: 2_500_000n, root: tree.root(), tree, notes: [notes[0]],
+      prover, artifacts, spendSk, assetId: ASSET, threshold: 2_500_000n, root: tree.root(), tree, notes: [notes[0]],
     });
     expect(await verifyBalanceLocal(vk(), res.publicSignals, res.proof)).toBe(true);
   }, 120_000);
@@ -57,7 +60,8 @@ describe.skipIf(!HAVE)("proof-of-balance circuit", () => {
   it("cannot prove a threshold above the owned balance", async () => {
     const { spendSk, tree, notes } = fixture(); // total 5,000,000
     await expect(
-      proveBalance({ artifacts, spendSk, assetId: ASSET, threshold: 6_000_000n, root: tree.root(), tree, notes }),
+      proveBalance({
+      prover, artifacts, spendSk, assetId: ASSET, threshold: 6_000_000n, root: tree.root(), tree, notes }),
     ).rejects.toThrow();
   }, 120_000);
 });

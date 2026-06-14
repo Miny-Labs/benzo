@@ -11,7 +11,7 @@
  */
 
 import { MerkleTreeMirror } from "./merkle.js";
-import { prove, verifyLocal, toWitnessInput, type CircuitArtifacts, type ProveResult } from "./prover.js";
+import { verifyLocal, toWitnessInput, type CircuitArtifacts, type ProveResult, type ProverPort } from "./prover.js";
 
 /** Maximum notes a single proof-of-balance can aggregate (circuit-fixed). */
 export const MAX_BALANCE_NOTES = 4;
@@ -23,6 +23,7 @@ export interface BalanceNote {
 }
 
 export interface ProveBalanceParams {
+  prover: ProverPort; // proving backend (Node / browser WASM / native)
   artifacts: CircuitArtifacts; // proof_of_balance wasm + zkey
   spendSk: bigint; // owner of all the notes
   assetId: bigint;
@@ -90,7 +91,7 @@ export async function proveBalance(params: ProveBalanceParams): Promise<ProveRes
     pathIndices,
     pathElements,
   });
-  return prove(params.artifacts, witness);
+  return params.prover.prove(params.artifacts, witness);
 }
 
 /** Verify a proof-of-balance locally against its snarkjs verification key. */

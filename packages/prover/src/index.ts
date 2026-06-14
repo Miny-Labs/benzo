@@ -7,26 +7,18 @@
  * surfaces fill in later — so swapping runtimes never touches core logic.
  */
 import {
-  prove as nodeProve,
+  NodeProver,
   type CircuitArtifacts,
   type WitnessInput,
   type ProveResult,
+  type ProverPort,
 } from "@benzo/core";
 
-export type { CircuitArtifacts, WitnessInput, ProveResult };
-
-export interface ProverPort {
-  readonly name: string;
-  prove(artifacts: CircuitArtifacts, input: WitnessInput): Promise<ProveResult>;
-}
-
-/** Headless Groth16 proving via snarkjs (Node). The working default. */
-export class NodeProver implements ProverPort {
-  readonly name = "node";
-  prove(artifacts: CircuitArtifacts, input: WitnessInput): Promise<ProveResult> {
-    return nodeProve(artifacts, input);
-  }
-}
+// The canonical ProverPort + NodeProver live in @benzo/core (so core can type an
+// injected prover without depending on this package). Re-exported here so the
+// runtime surfaces import every backend from one place.
+export type { CircuitArtifacts, WitnessInput, ProveResult, ProverPort };
+export { NodeProver };
 
 /** Browser Web Worker (WASM) prover. Stub — provided by apps/web. */
 export class WasmProver implements ProverPort {

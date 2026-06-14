@@ -67,3 +67,23 @@ export async function verifyLocal(
 ): Promise<boolean> {
   return snarkjs.groth16.verify(vk, publicSignals, proof);
 }
+
+/**
+ * A pluggable proving backend: turns a witness into a Groth16 proof. Core builds
+ * witnesses and calls a `ProverPort`; the runtime (Node / browser WASM / native)
+ * decides *where* the proof is generated — so swapping runtimes never touches
+ * protocol logic. This is the seam that lets the same `BenzoClient` run headless
+ * on the CLI and client-side in the browser.
+ */
+export interface ProverPort {
+  readonly name: string;
+  prove(artifacts: CircuitArtifacts, input: WitnessInput): Promise<ProveResult>;
+}
+
+/** Headless Groth16 proving via snarkjs (Node/server). The default backend. */
+export class NodeProver implements ProverPort {
+  readonly name = "node";
+  prove(artifacts: CircuitArtifacts, input: WitnessInput): Promise<ProveResult> {
+    return prove(artifacts, input);
+  }
+}

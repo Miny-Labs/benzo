@@ -48,7 +48,7 @@ import {
 import type { StellarCli } from "./stellar.js";
 import { feHex } from "./crypto/groth16.js";
 import { proveBalance as generateBalanceProof, selectNotesForBalance } from "./balance.js";
-import type { ProveResult } from "./prover.js";
+import type { ProveResult, ProverPort } from "./prover.js";
 import { encodeBenzoLink, parseBenzoLink } from "@benzo/links";
 import { randomBytes } from "node:crypto";
 
@@ -152,6 +152,8 @@ export interface BenzoClientOptions {
   cli: StellarCli;
   deployment: BenzoDeployment;
   circuits: CircuitSet;
+  /** proving backend: NodeProver (CLI/server) or WasmProver (browser, client-side) */
+  prover: ProverPort;
   rpcUrl: string;
   /** CLI identity that pays gas + ASP curation + read simulations */
   txSource: string;
@@ -206,7 +208,7 @@ export class BenzoClient {
   private assetIdCache?: bigint;
 
   constructor(readonly opts: BenzoClientOptions) {
-    this.pool = new BenzoPoolClient(opts.cli, opts.deployment, opts.circuits, opts.txSource);
+    this.pool = new BenzoPoolClient(opts.cli, opts.deployment, opts.circuits, opts.txSource, opts.prover);
     this.scanner = new NoteScanner(opts.deployment.treeLevels, 1);
   }
 
@@ -623,6 +625,7 @@ export class BenzoClient {
     if (!chosen) throw new Error("insufficient shielded balance to prove this threshold");
     const root = this.pool.poolTree.root();
     const res = await generateBalanceProof({
+      prover: this.opts.prover,
       artifacts: this.opts.circuits.proofOfBalance,
       spendSk: this.account.spendSk,
       assetId,

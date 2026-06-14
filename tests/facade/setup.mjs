@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { BenzoClient, StellarCli, configFromEnv } from "@benzo/core";
+import { BenzoClient, StellarCli, NodeProver, configFromEnv } from "@benzo/core";
 import { AnchorClient, anchorConfigFromEnv } from "@benzo/anchor";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -51,6 +51,7 @@ export function makeFacade({ withAnchor = false, withRelayer = false } = {}) {
       smtLevels: dep.smtLevels,
     },
     circuits: circuitSet(),
+    prover: new NodeProver(),
     rpcUrl: process.env.SOROBAN_RPC_URL,
     txSource: "benzo-deployer",
     relayer: withRelayer

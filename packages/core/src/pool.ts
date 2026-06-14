@@ -17,7 +17,7 @@ import {
   noteNullifier,
   randomFieldElement,
 } from "./notes.js";
-import { prove, toWitnessInput, type CircuitArtifacts, type ProveResult } from "./prover.js";
+import { toWitnessInput, type CircuitArtifacts, type ProveResult, type ProverPort } from "./prover.js";
 import type { StellarCli } from "./stellar.js";
 
 export interface BenzoDeployment {
@@ -62,6 +62,8 @@ export class BenzoPoolClient {
     readonly circuits: CircuitSet,
     /** identity used for read-only simulations */
     readonly viewSource: string,
+    /** proving backend (Node / browser WASM / native) */
+    readonly prover: ProverPort,
   ) {
     this.poolTree = new MerkleTreeMirror(dep.treeLevels);
     this.aspTree = new MerkleTreeMirror(dep.aspLevels);
@@ -172,7 +174,7 @@ export class BenzoPoolClient {
       aspPathIndices: aspPath.pathIndices,
     });
     const _ps = Date.now();
-    const proof = await prove(this.circuits.shield, witness);
+    const proof = await this.prover.prove(this.circuits.shield, witness);
     const provingMs = Date.now() - _ps;
 
     const res = await this.cli.invoke({
@@ -293,7 +295,7 @@ export class BenzoPoolClient {
       outMvkPub: opts.outputs.map((o) => o.mvkPubScalar),
     });
     const _pt = Date.now();
-    const proof = await prove(this.circuits.joinsplit, witness);
+    const proof = await this.prover.prove(this.circuits.joinsplit, witness);
     const provingMs = Date.now() - _pt;
 
     let txHash: string | undefined;
@@ -456,7 +458,7 @@ export class BenzoPoolClient {
       smtIsOld0: fr.is_old0 ? 1n : 0n,
     });
     const _pw = Date.now();
-    const proof = await prove(this.circuits.unshield, witness);
+    const proof = await this.prover.prove(this.circuits.unshield, witness);
     const provingMs = Date.now() - _pw;
 
     const res = await this.cli.invoke({

@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import {
   BenzoPoolClient,
   StellarCli,
+  NodeProver,
   configFromEnv,
   aspLeaf,
   deriveKeypair,
@@ -68,6 +69,7 @@ export function makeClient() {
     },
     circuits,
     "benzo-deployer",
+    new NodeProver(),
   );
   return { dep, cli, client };
 }
