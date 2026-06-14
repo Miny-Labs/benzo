@@ -1,3 +1,10 @@
+// expect() here is on PROVABLY-INFALLIBLE operations: a BN254 field element's
+// `to_bytes_be()` is always exactly 32 bytes, so the fixed-size `try_into` cannot
+// fail; and `update_admin`'s admin-getter relies on the contract's init invariant
+// (admin always set before an admin op, which is also auth-gated). These document
+// invariants, not runtime conditions. expect_used stays denied everywhere else.
+#![allow(clippy::expect_used)]
+
 use ark_bn254::{G1Affine as ArkG1Affine, G2Affine as ArkG2Affine};
 use ark_ff::{BigInteger, fields::PrimeField};
 use contract_types::VerificationKeyBytes;

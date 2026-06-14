@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // tests may .expect() on known-good fixtures
 #![cfg(test)]
 
 use super::*;

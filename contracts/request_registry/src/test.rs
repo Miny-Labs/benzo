@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // tests may .expect() on known-good fixtures
 use super::*;
 use benzo_nullifier_set::{BenzoNullifierSet, BenzoNullifierSetClient};
 use soroban_sdk::{

@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // tests may .expect() on known-good fixtures
 use super::*;
 use ark_bn254::{Bn254, Fr as ArkFr};
 use ark_ff::{BigInteger, Field, PrimeField};
