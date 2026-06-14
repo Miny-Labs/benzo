@@ -56,6 +56,7 @@ import {
 import type { ChainClient } from "./stellar.js";
 import { feHex } from "./crypto/groth16.js";
 import { proveBalance as generateBalanceProof, selectNotesForBalance } from "./balance.js";
+import { transferRelayFnArgs } from "./relay.js";
 import type { ProveResult, ProverPort } from "./prover.js";
 import { encodeBenzoLink, parseBenzoLink } from "@benzo/links";
 import { randomBytes } from "./crypto/random.js";
@@ -571,15 +572,7 @@ export class BenzoClient {
         contractId: deployment.pool,
         source: relayer.source,
         send: true,
-        fnArgs: [
-          "transfer", "--submitter", submitter, "--root", a.root,
-          "--nullifier0", a.nullifier0, "--nullifier1", a.nullifier1,
-          "--out_commitment0", a.outCommitment0, "--out_commitment1", a.outCommitment1,
-          "--fee", a.fee, "--relayer", a.relayerAddress,
-          "--mvk_tag0", a.mvkTag0, "--mvk_tag1", a.mvkTag1,
-          "--note_ct0", a.noteCt0, "--note_ct1", a.noteCt1,
-          "--mvk_ct0", a.mvkCt0, "--mvk_ct1", a.mvkCt1, "--proof", a.proof,
-        ],
+        fnArgs: transferRelayFnArgs({ ...a, submitter }),
       });
       return { txHash: res.txHash };
     };

@@ -28,6 +28,7 @@ export * from "./onboard.js";
 export * from "./balance.js";
 export * from "./scanner.js";
 export * from "./store.js";
+export * from "./relay.js";
 export * from "./pool.js";
 export * from "./account.js";
 export * from "./account-file.js";

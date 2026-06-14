@@ -12,7 +12,12 @@
  * BENZO.md §7.4, implemented self-hosted with the Stellar CLI.
  */
 
-import { completeSponsoredOnboard, type InvokeResult, type StellarCli } from "@benzo/core";
+import {
+  completeSponsoredOnboard,
+  transferRelayFnArgs,
+  type InvokeResult,
+  type StellarCli,
+} from "@benzo/core";
 import { Keypair } from "@stellar/stellar-sdk";
 
 export interface TransferRelayRequest {
@@ -52,24 +57,7 @@ export class BenzoRelayer {
       contractId: req.pool,
       source: req.relayerSource,
       send: true,
-      fnArgs: [
-        "transfer",
-        "--submitter", submitter,
-        "--root", req.root,
-        "--nullifier0", req.nullifier0,
-        "--nullifier1", req.nullifier1,
-        "--out_commitment0", req.outCommitment0,
-        "--out_commitment1", req.outCommitment1,
-        "--fee", req.fee,
-        "--relayer", req.relayerAddress,
-        "--mvk_tag0", req.mvkTag0,
-        "--mvk_tag1", req.mvkTag1,
-        "--note_ct0", req.noteCt0,
-        "--note_ct1", req.noteCt1,
-        "--mvk_ct0", req.mvkCt0,
-        "--mvk_ct1", req.mvkCt1,
-        "--proof", req.proof,
-      ],
+      fnArgs: transferRelayFnArgs({ ...req, submitter }),
     });
     return { txHash: res.txHash, raw: res.raw };
   }
