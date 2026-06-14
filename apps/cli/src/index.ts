@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BenzoClient, StellarCli, NodeProver, configFromEnv, stroopsToUsdc } from "@benzo/core";
-import { encodeBenzoLink, parseBenzoLink } from "@benzo/links";
+import { parseBenzoLink } from "@benzo/links";
 import { AnchorClient, anchorConfigFromEnv } from "@benzo/anchor";
 import { onrampFromEnv } from "@benzo/integrations";
 
@@ -178,10 +178,9 @@ async function main() {
       console.log(jstr(await c.resolveHandle(String(f.handle)))); break;
     }
     case "claim-create": {
-      const r = await c.createClaimLink({ amount: toStroops(String(f.amount)) } as any);
-      const link = (r as any).link ?? encodeBenzoLink({ type: "claim", secret: (r as any).secret, amount: String(f.amount), asset: "USDC" });
-      console.log(`claim link: ${link}`);
-      console.log(`tx=${(r as any).txHash ?? ""}`); break;
+      const r = await c.createClaimLink({ amount: toStroops(String(f.amount)), useRelayer: !!f.relayer });
+      console.log(`claim link: ${r.link}`);
+      console.log(`funded tx=${r.sendTx ?? ""}  (share the link; recipient redeems with: benzo claim-redeem --link <url>)`); break;
     }
     case "claim-redeem": {
       const parsed = parseBenzoLink(String(f.link));
