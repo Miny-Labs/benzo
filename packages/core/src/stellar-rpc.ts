@@ -133,25 +133,41 @@ export class StellarRpcClient implements ChainClient {
     for (let i = 1; i < fnArgs.length; i++) {
       const tok = fnArgs[i];
       if (!tok.startsWith("--")) continue;
-      const value = fnArgs[++i];
-      scArgs.push(coerceArg(value));
+      scArgs.push(scvalForArg(tok.slice(2), fnArgs[++i]));
     }
     return { method, scArgs };
   }
 }
 
 /**
- * Coerce a CLI-style string arg into an ScVal. Read args across the protocol are
- * an address, a field-element / U256 (decimal), or a short string (a @handle) —
- * inferred from the value. (Writes go through the relayer, which types args via
- * the on-chain spec, so this only needs to cover the read surface.)
+ * Type a CLI-style read arg into an ScVal by its NAME (the protocol uses a
+ * consistent naming convention, and the SDK's on-chain spec fetch is broken for
+ * our specs). Covers the full read surface; writes go through the relayer (which
+ * types via the deployed spec), so this need not handle the proof struct.
  */
-function coerceArg(value: string): xdr.ScVal {
-  if (StrKey.isValidEd25519PublicKey(value) || StrKey.isValidContract(value)) {
+function scvalForArg(name: string, value: string): xdr.ScVal {
+  // ciphertexts + public keys: Bytes (hex-encoded)
+  if (/(^|_)ct\d?$/.test(name) || name === "spend_pub" || name === "view_pub") {
+    return nativeToScVal(Buffer.from(value, "hex"), { type: "bytes" });
+  }
+  // addresses (G…/C…)
+  if (["address", "from", "to", "owner", "payee", "relayer", "submitter"].includes(name)) {
     return nativeToScVal(value, { type: "address" });
   }
-  if (/^\d+$/.test(value)) {
-    return nativeToScVal(BigInt(value), { type: "u256" });
+  // signed token amounts: i128
+  if (["amount", "fee", "min_amount", "paid_amount"].includes(name)) {
+    return nativeToScVal(BigInt(value), { type: "i128" });
+  }
+  // unix timestamps: u64
+  if (name === "expiry") return nativeToScVal(BigInt(value), { type: "u64" });
+  // human strings
+  if (["handle", "reference", "memo"].includes(name)) {
+    return nativeToScVal(value, { type: "string" });
+  }
+  // default: field element (commitment / root / nullifier / tag / key / scalar) → U256
+  if (/^\d+$/.test(value)) return nativeToScVal(BigInt(value), { type: "u256" });
+  if (StrKey.isValidEd25519PublicKey(value) || StrKey.isValidContract(value)) {
+    return nativeToScVal(value, { type: "address" });
   }
   return nativeToScVal(value, { type: "string" });
 }
