@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BenzoClient, StellarCli, NodeProver, configFromEnv, stroopsToUsdc } from "@benzo/core";
+import { BenzoClient, StellarCli, NodeProver, createOrLoadAccountFile, configFromEnv, stroopsToUsdc } from "@benzo/core";
 import { parseBenzoLink } from "@benzo/links";
 import { AnchorClient, anchorConfigFromEnv } from "@benzo/anchor";
 import { onrampFromEnv } from "@benzo/integrations";
@@ -130,7 +130,8 @@ async function main() {
 
   // claim-redeem derives its account from the link; everything else loads the wallet.
   if (cmd !== "claim-redeem") {
-    c.createOrLoadAccount(WALLET, { label: "cli", stellarSecret: process.env.DEPLOYER_SECRET });
+    const { account } = createOrLoadAccountFile(WALLET, { label: "cli", stellarSecret: process.env.DEPLOYER_SECRET });
+    c.useAccount(account);
   }
 
   switch (cmd) {

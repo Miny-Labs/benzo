@@ -10,7 +10,6 @@
  * (SEP-10 auth, receiving unshielded USDC). Contracts stay auth-agnostic.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { Keypair as StellarKeypair } from "@stellar/stellar-sdk";
@@ -39,17 +38,6 @@ export interface BenzoAccount {
   stellarAddress?: string;
 }
 
-const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
-const unhex = (s: string) => new Uint8Array(Buffer.from(s, "hex"));
-
-interface AccountFile {
-  label: string;
-  spendSk: string;
-  mvkSecret: string;
-  viewSecret: string;
-  stellarSecret?: string;
-}
-
 export function createAccount(opts: {
   label?: string;
   spendSk?: bigint;
@@ -76,28 +64,6 @@ export function createAccount(opts: {
     stellarSecret,
     stellarAddress,
   };
-}
-
-export function saveAccount(account: BenzoAccount, path: string): void {
-  const file: AccountFile = {
-    label: account.label,
-    spendSk: account.spendSk.toString(),
-    mvkSecret: hex(account.mvkSecret),
-    viewSecret: hex(account.viewSecret),
-    stellarSecret: account.stellarSecret,
-  };
-  writeFileSync(path, JSON.stringify(file, null, 2));
-}
-
-export function loadAccount(path: string): BenzoAccount {
-  const file = JSON.parse(readFileSync(path, "utf8")) as AccountFile;
-  return createAccount({
-    label: file.label,
-    spendSk: BigInt(file.spendSk),
-    mvkSecret: unhex(file.mvkSecret),
-    viewSecret: unhex(file.viewSecret),
-    stellarSecret: file.stellarSecret,
-  });
 }
 
 /**
@@ -151,15 +117,4 @@ export type SignMessage = (message: string) => Promise<Uint8Array> | Uint8Array;
 export async function loginWithSigner(signMessage: SignMessage, label = "wallet"): Promise<BenzoAccount> {
   const sig = await signMessage(NOTE_KEY_MESSAGE);
   return accountFromSignedMessage(sig instanceof Uint8Array ? sig : new Uint8Array(sig), label);
-}
-
-/** Load the account at `path`, or create+save a fresh one if absent. */
-export function createOrLoadAccountFile(
-  path: string,
-  opts: { label?: string; stellarSecret?: string } = {},
-): { account: BenzoAccount; created: boolean } {
-  if (existsSync(path)) return { account: loadAccount(path), created: false };
-  const account = createAccount(opts);
-  saveAccount(account, path);
-  return { account, created: true };
 }

@@ -9,7 +9,7 @@
 
 import { mkdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { stroopsToUsdc } from "@benzo/core";
+import { stroopsToUsdc, createOrLoadAccountFile } from "@benzo/core";
 import { makeFacade, explorer, usdcBalance } from "./setup.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -43,10 +43,11 @@ console.log("");
 const { dep, cli, client: alice } = makeFacade();
 const { client: bob } = makeFacade();
 
-const aliceAcct = alice.createOrLoadAccount(`${repo}/tests/wallets/alice.json`, {
+const aliceAcct = createOrLoadAccountFile(`${repo}/tests/wallets/alice.json`, {
   label: "alice",
   stellarSecret: process.env.DEPLOYER_SECRET, // Alice's public on/off-ramp edge
 }).account;
+alice.useAccount(aliceAcct);
 const bobAcct = bob.createAccount("bob");
 console.log(`[create] alice spendPub=${aliceAcct.spendPub.toString().slice(0, 14)}…  publicEdge=${aliceAcct.stellarAddress.slice(0, 8)}…`);
 console.log(`[create] bob   spendPub=${bobAcct.spendPub.toString().slice(0, 14)}…  (no prior state)\n`);

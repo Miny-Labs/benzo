@@ -51,7 +51,6 @@ import {
   type BenzoAccount,
   accountFromClaimSecret,
   createAccount,
-  createOrLoadAccountFile,
 } from "./account.js";
 import type { ChainClient } from "./stellar.js";
 import { feHex } from "./crypto/groth16.js";
@@ -244,17 +243,6 @@ export class BenzoClient {
     this.account = createAccount({ label, stellarSecret });
     this.resetAccountState();
     return this.account;
-  }
-
-  /** Load the account file at `path`, or create + persist a fresh one. */
-  createOrLoadAccount(
-    path: string,
-    opts: { label?: string; stellarSecret?: string } = {},
-  ): { account: BenzoAccount; created: boolean } {
-    const r = createOrLoadAccountFile(path, opts);
-    this.account = r.account;
-    this.resetAccountState();
-    return r;
   }
 
   /** Adopt an externally constructed account (e.g. derived from a claim secret). */
