@@ -23,6 +23,7 @@ export * from "./prover.js";
 export * from "./viewkeys.js";
 export * from "./stellar.js";
 export * from "./reserves.js";
+export * from "./balance.js";
 export * from "./scanner.js";
 export * from "./pool.js";
 export * from "./account.js";

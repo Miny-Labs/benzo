@@ -21,12 +21,16 @@ const toStroops = (n: string) => BigInt(Math.round(Number(n) * 1e7));
 const jstr = (x: unknown) => JSON.stringify(x, (_k, v) => (typeof v === "bigint" ? v.toString() : v), 2);
 
 function circuitSet() {
-  return Object.fromEntries(
-    ["shield", "joinsplit", "unshield"].map((c) => [
-      c,
-      { wasmPath: `${ROOT}/circuits/build/${c}/${c}_js/${c}.wasm`, zkeyPath: `${ROOT}/circuits/build/${c}/${c}.zkey` },
-    ]),
-  ) as Record<"shield" | "joinsplit" | "unshield", { wasmPath: string; zkeyPath: string }>;
+  const art = (c: string) => ({
+    wasmPath: `${ROOT}/circuits/build/${c}/${c}_js/${c}.wasm`,
+    zkeyPath: `${ROOT}/circuits/build/${c}/${c}.zkey`,
+  });
+  return {
+    shield: art("shield"),
+    joinsplit: art("joinsplit"),
+    unshield: art("unshield"),
+    proofOfBalance: art("proof_of_balance"),
+  };
 }
 
 function makeClient(opts: { relayer?: boolean } = {}): BenzoClient {
@@ -79,6 +83,7 @@ const HELP = `benzo — private USDC on Stellar (testnet)
   benzo disclose                        print an auditor view-key + reconstructed flows
   benzo payroll  --payouts "@a:10,@b:25" [--scope L]  confidential batch payouts
   benzo disclose-total [--scope L]      prove payroll/invoice TOTAL to an auditor
+  benzo prove-balance --min N           prove you hold >= N USDC (hides exact balance)
   benzo cashin   --amount N             anchor deposit -> shield   (needs running anchor)
   benzo cashout  --amount N             unshield -> anchor withdraw (needs running anchor)
   benzo onramp   [--to G..] [--amount N]  fiat->USDC onramp session (Stripe sandbox / Mock)
@@ -168,6 +173,17 @@ async function main() {
       await c.sync();
       const d = c.disclosedTotal(f.scope ? String(f.scope) : undefined);
       console.log(`disclosed total: ${stroopsToUsdc(d.total)} USDC across ${d.count} notes`); break;
+    }
+    case "prove-balance": {
+      // Prove you hold >= --min USDC without revealing your exact balance.
+      const r = await c.proveBalance({
+        minAmount: toStroops(String(f.min)),
+        context: f.context ? BigInt(String(f.context)) : undefined,
+      });
+      console.log(`proof-of-balance: holds >= ${stroopsToUsdc(r.threshold)} USDC  (root=${r.root})`);
+      console.log(`  publicSignals: ${jstr(r.publicSignals)}`);
+      console.log(`  sorobanProof:  ${jstr(r.sorobanProof)}`);
+      break;
     }
     case "cashin": {
       const r = await c.cashIn({ amount: toStroops(String(f.amount)), fromSource: "benzo-deployer" });

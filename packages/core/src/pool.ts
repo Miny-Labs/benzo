@@ -44,6 +44,8 @@ export interface CircuitSet {
   shield: CircuitArtifacts;
   joinsplit: CircuitArtifacts;
   unshield: CircuitArtifacts;
+  /** optional proof-of-balance circuit (prove funds ≥ threshold) */
+  proofOfBalance?: CircuitArtifacts;
 }
 
 function hexBytes(bytes: Uint8Array): string {

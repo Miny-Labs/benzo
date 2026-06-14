@@ -47,6 +47,8 @@ import {
 } from "./account.js";
 import type { StellarCli } from "./stellar.js";
 import { feHex } from "./crypto/groth16.js";
+import { proveBalance as generateBalanceProof, selectNotesForBalance } from "./balance.js";
+import type { ProveResult } from "./prover.js";
 import { randomBytes } from "node:crypto";
 
 /** A recipient's public, shareable address (no spend authority). */
@@ -586,6 +588,55 @@ export class BenzoClient {
   disclosedTotal(scope = DISCLOSURE_SCOPE): { total: bigint; count: number } {
     const notes = this.shareReceipt(scope).reconstruct();
     return { total: notes.reduce((s, n) => s + n.amount, 0n), count: notes.length };
+  }
+
+  // ----------------------------------------------------- proof-of-balance ----
+
+  /**
+   * Prove this account owns at least `minAmount` USDC in the shielded pool —
+   * without revealing the exact balance, the note count, or which notes. Returns
+   * the proof in both snarkjs and Soroban-encoded forms (ready for the on-chain
+   * verifier) plus the public inputs. Requires `circuits.proofOfBalance`.
+   */
+  async proveBalance(opts: { minAmount: bigint; context?: bigint }): Promise<{
+    proof: ProveResult["proof"];
+    publicSignals: string[];
+    sorobanProof: ProveResult["sorobanProof"];
+    sorobanPublics: string[];
+    root: bigint;
+    threshold: bigint;
+  }> {
+    if (!this.opts.circuits.proofOfBalance) {
+      throw new Error("proof-of-balance circuit not configured");
+    }
+    await this.sync();
+    const assetId = await this.assetId();
+    const candidates = this.spendableNotes().map((s) => ({
+      amount: s.note.amount,
+      blinding: s.note.blinding,
+      leafIndex: s.leafIndex,
+    }));
+    const chosen = selectNotesForBalance(candidates, opts.minAmount);
+    if (!chosen) throw new Error("insufficient shielded balance to prove this threshold");
+    const root = this.pool.poolTree.root();
+    const res = await generateBalanceProof({
+      artifacts: this.opts.circuits.proofOfBalance,
+      spendSk: this.account.spendSk,
+      assetId,
+      threshold: opts.minAmount,
+      root,
+      tree: this.pool.poolTree,
+      notes: chosen,
+      context: opts.context,
+    });
+    return {
+      proof: res.proof,
+      publicSignals: res.publicSignals,
+      sorobanProof: res.sorobanProof,
+      sorobanPublics: res.sorobanPublics,
+      root,
+      threshold: opts.minAmount,
+    };
   }
 
   // --------------------------------------------------------- @handle -----
