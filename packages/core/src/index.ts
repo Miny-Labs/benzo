@@ -22,6 +22,7 @@ export * from "./merkle.js";
 export * from "./prover.js";
 export * from "./viewkeys.js";
 export * from "./stellar.js";
+export * from "./stellar-rpc.js";
 export * from "./reserves.js";
 export * from "./onboard.js";
 export * from "./balance.js";
