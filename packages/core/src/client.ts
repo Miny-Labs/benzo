@@ -550,6 +550,44 @@ export class BenzoClient {
     return this.shareReceipt(scope);
   }
 
+  // ------------------------------------------------ confidential payroll -----
+
+  /**
+   * Confidential payroll / invoicing: pay many recipients in one batch where
+   * each payout is an independent shielded transfer, so individual amounts and
+   * recipients stay hidden on-chain. The employer can later prove the TOTAL to
+   * an auditor with `disclosedTotal()` under the same scope — salaries private,
+   * totals provable. Payouts settle sequentially (each consumes notes).
+   */
+  async payroll(opts: {
+    payouts: Array<{ to: BenzoRecipient; amount: bigint; memo?: string }>;
+    scope?: string;
+    useRelayer?: boolean;
+  }): Promise<Array<{ to: BenzoRecipient; amount: bigint; txHash?: string }>> {
+    const results: Array<{ to: BenzoRecipient; amount: bigint; txHash?: string }> = [];
+    for (const p of opts.payouts) {
+      const r = await this.send({
+        amount: p.amount,
+        to: p.to,
+        memo: p.memo,
+        useRelayer: opts.useRelayer,
+        scope: opts.scope,
+      }).settled();
+      results.push({ to: p.to, amount: p.amount, txHash: r?.txHash });
+    }
+    return results;
+  }
+
+  /**
+   * Auditor-facing total: the count + summed amount of the in-scope notes a
+   * scoped TVK reconstructs — lets an employer prove payroll/invoice totals
+   * without revealing any individual amount. Pairs with `payroll(scope)`.
+   */
+  disclosedTotal(scope = DISCLOSURE_SCOPE): { total: bigint; count: number } {
+    const notes = this.shareReceipt(scope).reconstruct();
+    return { total: notes.reduce((s, n) => s + n.amount, 0n), count: notes.length };
+  }
+
   // --------------------------------------------------------- @handle -----
 
   /**

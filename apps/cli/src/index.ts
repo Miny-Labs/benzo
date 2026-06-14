@@ -77,6 +77,8 @@ const HELP = `benzo — private USDC on Stellar (testnet)
   benzo claim-create   --amount N       mint a claim link (pay someone with no account)
   benzo claim-redeem   --link <url>     claim a benzo:// link into a fresh account
   benzo disclose                        print an auditor view-key + reconstructed flows
+  benzo payroll  --payouts "@a:10,@b:25" [--scope L]  confidential batch payouts
+  benzo disclose-total [--scope L]      prove payroll/invoice TOTAL to an auditor
   benzo cashin   --amount N             anchor deposit -> shield   (needs running anchor)
   benzo cashout  --amount N             unshield -> anchor withdraw (needs running anchor)
   benzo onramp   [--to G..] [--amount N]  fiat->USDC onramp session (Stripe sandbox / Mock)
@@ -149,6 +151,23 @@ async function main() {
       const d = c.disclose();
       console.log(`view-key (TVK) scope=${d.scope}`);
       console.log(JSON.stringify(d.reconstruct(), null, 2)); break;
+    }
+    case "payroll": {
+      // --payouts "@alice:10,@bob:25" [--scope LABEL]: pay a team privately.
+      const scope = f.scope ? String(f.scope) : undefined;
+      const payouts = [] as Array<{ to: Awaited<ReturnType<typeof c.resolveHandle>>; amount: bigint }>;
+      for (const part of String(f.payouts).split(",")) {
+        const [h, amt] = part.split(":");
+        payouts.push({ to: await c.resolveHandle(h.replace(/^@/, "")), amount: toStroops(amt) });
+      }
+      const res = await c.payroll({ payouts, scope });
+      for (const r of res) console.log(`paid ${stroopsToUsdc(r.amount)} -> @${r.to.label} tx=${r.txHash ?? ""}`);
+      break;
+    }
+    case "disclose-total": {
+      await c.sync();
+      const d = c.disclosedTotal(f.scope ? String(f.scope) : undefined);
+      console.log(`disclosed total: ${stroopsToUsdc(d.total)} USDC across ${d.count} notes`); break;
     }
     case "cashin": {
       const r = await c.cashIn({ amount: toStroops(String(f.amount)), fromSource: "benzo-deployer" });
