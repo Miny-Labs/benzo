@@ -13,19 +13,13 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { StellarCli, configFromEnv, prepareSponsoredOnboard } from "@benzo/core";
+import { StellarCli, configFromEnv, prepareSponsoredOnboard, requireEnv } from "@benzo/core";
 
 const PORT = Number(process.env.RELAYER_PORT ?? 8788);
 const RELAYER_SOURCE = process.env.RELAYER_SOURCE ?? "benzo-relayer";
 const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 
 const cli = new StellarCli(configFromEnv());
-
-function requireEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`missing env ${name}`);
-  return v;
-}
 
 function cors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");

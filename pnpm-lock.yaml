@@ -177,6 +177,9 @@ importers:
 
   packages/anchor:
     dependencies:
+      '@benzo/core':
+        specifier: workspace:*
+        version: link:../core
       '@benzo/kyc':
         specifier: workspace:*
         version: link:../kyc

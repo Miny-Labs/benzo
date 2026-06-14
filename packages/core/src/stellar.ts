@@ -252,3 +252,12 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): StellarConf
       env.NETWORK_PASSPHRASE ?? "Test SDF Network ; September 2015",
   };
 }
+
+/** Read a required env var or throw a clear error (used by the self-hosted
+ * servers that guard signing keys, where a missing var otherwise surfaces as a
+ * cryptic SDK "invalid encoded string"). */
+export function requireEnv(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  const v = env[name];
+  if (!v) throw new Error(`missing required env var: ${name}`);
+  return v;
+}

@@ -34,7 +34,7 @@ describe("Benzo testnet e2e (items 1–5)", () => {
   it("item 2: deployed BN254 verifier verifies a real Groth16 proof on-chain (returns true)", async () => {
     const proof = readFileSync(`${repo}/circuits/build/trivial/proof_soroban.json`, "utf8").trim();
     const result = await cli.view(
-      "CDKCGOW6MH75ZZOPI3XDIGJCJA3UBJY6357YB7UGVW5CTFHAWNJC4NGY",
+      dep.verifier,
       "benzo-deployer",
       ["verify_proof", "--vk_id", "TRIVIAL", "--proof", proof, "--public_inputs", '["42"]'],
     );

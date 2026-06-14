@@ -35,9 +35,11 @@ export interface IBenzoPlatform {
 }
 
 /**
- * In-memory reference platform used by the CLI and tests. Surface-specific
- * platforms (WebPlatform, ExtensionPlatform, TelegramPlatform, …) implement the
- * same interface against their runtime's storage/keychain/clipboard.
+ * In-memory reference platform (Node/tests). The CLI manages its own
+ * file-backed store directly rather than through this adapter; the real surface
+ * adapters (WebPlatform in apps/web, etc.) implement IBenzoPlatform against
+ * their runtime's storage/keychain/clipboard. The clipboard/openLink here are
+ * intentional no-op stubs — Node has no clipboard or browser navigation.
  */
 export class NodePlatform implements IBenzoPlatform {
   readonly name = "node";

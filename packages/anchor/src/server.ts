@@ -22,6 +22,7 @@
 
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { requireEnv } from "@benzo/core";
 import {
   Asset,
   Horizon,
@@ -39,9 +40,9 @@ const HOME_DOMAIN = process.env.ANCHOR_HOME_DOMAIN ?? `localhost:${PORT}`;
 const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 const PASSPHRASE = process.env.NETWORK_PASSPHRASE ?? Networks.TESTNET;
 const USDC_CODE = process.env.USDC_CODE ?? "USDC";
-const USDC_ISSUER = process.env.USDC_ISSUER!;
-const SIGNING_SECRET = process.env.ANCHOR_SIGNING_SECRET!;
-const DIST_SECRET = process.env.ANCHOR_DISTRIBUTION_SECRET!;
+const USDC_ISSUER = requireEnv("USDC_ISSUER");
+const SIGNING_SECRET = requireEnv("ANCHOR_SIGNING_SECRET");
+const DIST_SECRET = requireEnv("ANCHOR_DISTRIBUTION_SECRET");
 const JWT_SECRET = process.env.ANCHOR_JWT_SECRET ?? "benzo-anchor-dev-jwt-secret";
 
 const signingKp = Keypair.fromSecret(SIGNING_SECRET);
