@@ -37,12 +37,51 @@ export class StellarCli {
     };
   }
 
-  private async run(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  private async run(
+    args: string[],
+    opts: { timeoutMs?: number } = {},
+  ): Promise<{ stdout: string; stderr: string }> {
     const bin = this.cfg.bin ?? "stellar";
     return execFileP(bin, args, {
       env: this.env(),
       maxBuffer: 64 * 1024 * 1024,
+      timeout: opts.timeoutMs ?? 120_000, // never hang forever on a wedged CLI/RPC
     });
+  }
+
+  /** Heuristic: is this error a transient network/RPC hiccup worth retrying? */
+  private isTransient(e: unknown): boolean {
+    const msg = String(
+      (e as { stderr?: string; message?: string })?.stderr ??
+        (e as { message?: string })?.message ??
+        e,
+    ).toLowerCase();
+    return /timeout|timed out|etimedout|econnreset|econnrefused|enotfound|eai_again|connection|temporarily|gateway|deadline|error sending request|\b(429|502|503|504)\b/.test(
+      msg,
+    );
+  }
+
+  /**
+   * Run a READ-ONLY command with bounded exponential-backoff retry on transient
+   * failures. Only safe for idempotent reads (view/keys) — never for submits,
+   * which could double-execute.
+   */
+  private async runRead(
+    args: string[],
+    opts: { timeoutMs?: number; attempts?: number } = {},
+  ): Promise<{ stdout: string; stderr: string }> {
+    const attempts = opts.attempts ?? 4;
+    let lastErr: unknown;
+    for (let i = 0; i < attempts; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 300 * 2 ** (i - 1)));
+      try {
+        return await this.run(args, opts);
+      } catch (e) {
+        lastErr = e;
+        if (!this.isTransient(e)) throw e; // a real (non-transient) error: surface it
+      }
+    }
+    throw lastErr;
   }
 
   async deploy(opts: {
@@ -89,7 +128,9 @@ export class StellarCli {
     ];
     if (opts.send) args.push("--send=yes");
     args.push("--", ...opts.fnArgs);
-    const { stdout, stderr } = await this.run(args);
+    // Reads (simulations) retry on transient errors; submits run once (a blind
+    // retry could double-execute the transaction).
+    const { stdout, stderr } = opts.send ? await this.run(args) : await this.runRead(args);
     const raw = stdout.trim();
     let result: unknown = raw;
     try {
@@ -108,20 +149,40 @@ export class StellarCli {
   }
 
   async keyAddress(name: string): Promise<string> {
-    const { stdout } = await this.run(["keys", "address", name]);
+    const { stdout } = await this.runRead(["keys", "address", name]);
     return stdout.trim();
   }
 
-  /** Raw JSON-RPC call against Soroban RPC. */
+  /** Raw JSON-RPC call against Soroban RPC (idempotent reads; retried + timed out). */
   async rpc<T = unknown>(method: string, params: unknown): Promise<T> {
-    const res = await fetch(this.cfg.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    });
-    const body = (await res.json()) as { result?: T; error?: { message: string } };
-    if (body.error) throw new Error(`rpc ${method}: ${body.error.message}`);
-    return body.result as T;
+    let lastErr: unknown;
+    for (let i = 0; i < 4; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 300 * 2 ** (i - 1)));
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 20_000);
+      try {
+        const res = await fetch(this.cfg.rpcUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+          signal: ctl.signal,
+        });
+        if (res.status >= 500 || res.status === 429) {
+          lastErr = new Error(`rpc ${method}: HTTP ${res.status}`);
+          continue;
+        }
+        const body = (await res.json()) as { result?: T; error?: { message: string } };
+        if (body.error) throw new Error(`rpc ${method}: ${body.error.message}`);
+        return body.result as T;
+      } catch (e) {
+        lastErr = e;
+        // RPC-level errors (body.error) are non-transient — rethrow immediately.
+        if (e instanceof Error && e.message.startsWith(`rpc ${method}:`) && !/HTTP 5|HTTP 429/.test(e.message)) throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw lastErr;
   }
 
   async latestLedger(): Promise<number> {
