@@ -36,6 +36,48 @@ proofs/
 reference/
 test_snapshots/
 
+# test runner output (regenerated)
+test-results/
+playwright-report/
+deployments/*.bak
+
 # local facade wallets (contain secrets)
 tests/wallets/
 apps/web/dist/
+
+# staged prover-enclave artifacts (re-stage from circuits/build)
+services/prover-enclave/artifacts/
+services/prover-enclave/node_modules/
+
+# --- the build manifest IS needed (fetch-artifacts.sh verifies against it) ---
+!circuits/build/artifacts-manifest.json
+
+# --- agent / tooling internal (kept locally, not part of the codebase) ---
+.claude/
+CLAUDE.md
+AGENTS.md
+.impeccable.md
+
+# --- internal planning / marketing / demo docs (kept locally for context) ---
+docs/demo-flow/
+docs/console-ui-report/
+docs/design-sweep/
+docs/mockups/
+docs/ui-plan/
+docs/DEMO-BRIEF-DEPTH.md
+docs/DEMO-BRIEF-ZK-HACKATHON.md
+docs/DEMO-SCRIPT.md
+docs/DEMO-TREATMENT.md
+docs/MARKET-AND-PITCH.md
+docs/MOTION-DESIGN.md
+docs/UI-MASTER-PLAN.md
+docs/B2B-PRODUCT-PLAYBOOK.md
+docs/B2B-SANDBOX-MVP-SCOPE.md
+docs/COMPETITIVE-TEARDOWN.md
+docs/FRONTEND-AND-TESTS.md
+docs/PRODUCT-SPEC.md
+docs/FIAT-RAMP-MONEYGRAM.md
+
+# --- heavy binary doc artifacts (regenerable, not needed to run/review) ---
+*.pptx
+*.pdf
