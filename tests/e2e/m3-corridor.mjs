@@ -39,6 +39,8 @@ import {
   viewingPubToScalar,
   seal,
   encodeNotePlain,
+  MvkRegistryMirror,
+  fetchMvkRegistryLeaves,
 } from "@benzo/core";
 import { BenzoIndexer, syncFromRpc, fetchAspLeaves } from "@benzo/indexer";
 import { makeClient, usdcBalance, explorer } from "./flow.mjs";
@@ -138,6 +140,32 @@ export async function runCorridor() {
     const scope = "2026-Q2/corridor=US-MX";
     const senderTvk = deriveTvk(senderMvk.secret, scope);
     const senderMvkScalar = viewingPubToScalar(senderMvk.publicKey);
+
+    // Authorized-MVK registry (P0 enforcement): resume the registry, register
+    // this corridor's MVK on-chain + in a synced mirror, and drive the client
+    // from it so registeredMvkRoot is a root the pool's check_mvk_root knows.
+    if (deployment.mvkRegistry) {
+      const mvkReg = new MvkRegistryMirror();
+      mvkReg.syncLeaves(
+        await fetchMvkRegistryLeaves(process.env.SOROBAN_RPC_URL, deployment.mvkRegistry, 1),
+      );
+      await cli.invoke({
+        contractId: deployment.mvkRegistry,
+        source: "benzo-deployer",
+        send: true,
+        fnArgs: ["register_mvk", "--mvk_pub", senderMvkScalar.toString(), "--key_meta", "0"],
+      });
+      mvkReg.register(senderMvkScalar, 0n);
+      const onchainMvkRoot = BigInt(
+        await cli.view(deployment.mvkRegistry, "benzo-deployer", ["current_root"]),
+      );
+      if (mvkReg.root() !== onchainMvkRoot) {
+        throw new Error(
+          `mvk_registry mirror drift (corridor): mirror=${mvkReg.root()} onchain=${onchainMvkRoot}`,
+        );
+      }
+      client.useMvkRegistry(mvkReg);
+    }
 
     // ASP allowlist the sender at the regulated edge
     const aspBlinding = randomFieldElement();

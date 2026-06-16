@@ -20,6 +20,8 @@ import {
   BenzoPoolClient,
   StellarCli,
   NodeProver,
+  MvkRegistryMirror,
+  fetchMvkRegistryLeaves,
   configFromEnv,
   aspLeaf,
   deriveKeypair,
@@ -147,6 +149,41 @@ export async function runPrivatePaymentFlow({
   await sync(poolIdx, process.env.SOROBAN_RPC_URL, [dep.pool], 1);
   client.poolRebuild(poolIdx.orderedLeaves());
   await client.assertSynced();
+
+  // --- 0c. Authorized-MVK registry (P0 enforcement ON) ----------------------
+  // The deployed pool's check_mvk_root rejects any registeredMvkRoot it doesn't
+  // know. Register this run's MVKs on-chain AND in a synced mirror (fixed order:
+  // sender, then recipient), then drive the pool client from that mirror so every
+  // shield/transfer/unshield targets a root the registry has. A fresh deploy
+  // starts the registry empty; the root assertion fails loud on any drift.
+  if (dep.mvkRegistry) {
+    const mvkReg = new MvkRegistryMirror();
+    // Resume any leaves already in the registry (e.g. a prior flow this run),
+    // then append ours — keeps the mirror root in lockstep with the chain.
+    mvkReg.syncLeaves(
+      await fetchMvkRegistryLeaves(process.env.SOROBAN_RPC_URL, dep.mvkRegistry, 1),
+    );
+    for (const mvk of [senderMvkScalar, recipientMvkScalar]) {
+      await cli.invoke({
+        contractId: dep.mvkRegistry,
+        source: "benzo-deployer",
+        send: true,
+        fnArgs: ["register_mvk", "--mvk_pub", mvk.toString(), "--key_meta", "0"],
+      });
+      mvkReg.register(mvk, 0n);
+    }
+    const onchainMvkRoot = BigInt(
+      await cli.view(dep.mvkRegistry, "benzo-deployer", ["current_root"]),
+    );
+    if (mvkReg.root() !== onchainMvkRoot) {
+      throw new Error(
+        `mvk_registry mirror drift: mirror=${mvkReg.root()} onchain=${onchainMvkRoot} ` +
+          "(redeploy for a fresh registry, or add event-replay sync for re-runs)",
+      );
+    }
+    client.useMvkRegistry(mvkReg);
+    say(`\n[0c] authorized-MVK registry: 2 MVKs registered on-chain; root=${onchainMvkRoot} (enforced)`);
+  }
 
   // --- 1. ASP allowlist (curator op at the regulated edge) ------------------
 
