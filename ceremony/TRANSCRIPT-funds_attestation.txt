@@ -1,0 +1,85 @@
+Benzo Groth16 phase-2 ceremony — circuit=funds_attestation ptau=powersOfTau28_hez_final_16.ptau
+===== contribution #1 (benzo-contributor-1) =====
+[32;22m[INFO]  [39;1msnarkJS[0m: Circuit Hash: 
+		7da5c1e2 eaaa6e69 90a97eea b106b3f7
+		0010f7d5 47690008 d6179d68 3cfd2251
+		ded96584 c27fcdbc cccccb70 5d1186c4
+		f2410dcf d460be55 b871824d 0836a014
+[32;22m[INFO]  [39;1msnarkJS[0m: Contribution Hash: 
+		b296881c c189c72c ad7ef93e bd176811
+		227cd30c ac3e9dfb dcc977ae 2c8cd45e
+		fa4828aa 5b786718 a900f689 d8080b8d
+		0c2713f3 c9264090 7b740ec8 7799381b
+===== contribution #2 (benzo-contributor-2) =====
+[32;22m[INFO]  [39;1msnarkJS[0m: Circuit Hash: 
+		7da5c1e2 eaaa6e69 90a97eea b106b3f7
+		0010f7d5 47690008 d6179d68 3cfd2251
+		ded96584 c27fcdbc cccccb70 5d1186c4
+		f2410dcf d460be55 b871824d 0836a014
+[32;22m[INFO]  [39;1msnarkJS[0m: Contribution Hash: 
+		a8f3a3a4 266135fe 09973865 e7ca5c0c
+		4230e0a2 6604ef7a 32441abf 4d5cbec5
+		0d3e93eb a94a6c99 fe6b1df5 b3dbd391
+		84870874 ed9b160a a86bfdcf 5a3e8518
+===== contribution #3 (benzo-contributor-3) =====
+[32;22m[INFO]  [39;1msnarkJS[0m: Circuit Hash: 
+		7da5c1e2 eaaa6e69 90a97eea b106b3f7
+		0010f7d5 47690008 d6179d68 3cfd2251
+		ded96584 c27fcdbc cccccb70 5d1186c4
+		f2410dcf d460be55 b871824d 0836a014
+[32;22m[INFO]  [39;1msnarkJS[0m: Contribution Hash: 
+		f64256b1 8c3bd8eb 881fb0ac ae05f11b
+		70bf6086 b8030dba 053d543c 1b566a55
+		351b054f e5b31eb5 04701cd0 1014a9dc
+		441367bc 3973fa79 66449975 bcd778c6
+===== final beacon =====
+[32;22m[INFO]  [39;1msnarkJS[0m: Contribution Hash: 
+		d579dfc6 319e4b7a 0d60e9c8 0a73bfc0
+		89e47229 6122004f 16461c38 50c60163
+		8e303571 51065cf4 457c8ba2 302adee5
+		f9e5cc73 7677a289 335e8dd0 eaa5fa15
+===== verify chain =====
+[32;22m[INFO]  [39;1msnarkJS[0m: Reading r1cs
+[32;22m[INFO]  [39;1msnarkJS[0m: Reading tauG1
+[32;22m[INFO]  [39;1msnarkJS[0m: Reading tauG2
+[32;22m[INFO]  [39;1msnarkJS[0m: Reading alphatauG1
+[32;22m[INFO]  [39;1msnarkJS[0m: Reading betatauG1
+[32;22m[INFO]  [39;1msnarkJS[0m: Circuit hash: 
+		7da5c1e2 eaaa6e69 90a97eea b106b3f7
+		0010f7d5 47690008 d6179d68 3cfd2251
+		ded96584 c27fcdbc cccccb70 5d1186c4
+		f2410dcf d460be55 b871824d 0836a014
+[32;22m[INFO]  [39;1msnarkJS[0m: Circuit Hash: 
+		7da5c1e2 eaaa6e69 90a97eea b106b3f7
+		0010f7d5 47690008 d6179d68 3cfd2251
+		ded96584 c27fcdbc cccccb70 5d1186c4
+		f2410dcf d460be55 b871824d 0836a014
+[32;22m[INFO]  [39;1msnarkJS[0m: -------------------------
+[32;22m[INFO]  [39;1msnarkJS[0m: contribution #4 benzo-final-beacon:
+		d579dfc6 319e4b7a 0d60e9c8 0a73bfc0
+		89e47229 6122004f 16461c38 50c60163
+		8e303571 51065cf4 457c8ba2 302adee5
+		f9e5cc73 7677a289 335e8dd0 eaa5fa15
+[32;22m[INFO]  [39;1msnarkJS[0m: Beacon generator: 25accf468d49c10bec632c9a8326f7c7cc5afc2b3391209ac4a089c3c53e49fb
+[32;22m[INFO]  [39;1msnarkJS[0m: Beacon iterations Exp: 10
+[32;22m[INFO]  [39;1msnarkJS[0m: -------------------------
+[32;22m[INFO]  [39;1msnarkJS[0m: contribution #3 benzo-contributor-3:
+		f64256b1 8c3bd8eb 881fb0ac ae05f11b
+		70bf6086 b8030dba 053d543c 1b566a55
+		351b054f e5b31eb5 04701cd0 1014a9dc
+		441367bc 3973fa79 66449975 bcd778c6
+[32;22m[INFO]  [39;1msnarkJS[0m: -------------------------
+[32;22m[INFO]  [39;1msnarkJS[0m: contribution #2 benzo-contributor-2:
+		a8f3a3a4 266135fe 09973865 e7ca5c0c
+		4230e0a2 6604ef7a 32441abf 4d5cbec5
+		0d3e93eb a94a6c99 fe6b1df5 b3dbd391
+		84870874 ed9b160a a86bfdcf 5a3e8518
+[32;22m[INFO]  [39;1msnarkJS[0m: -------------------------
+[32;22m[INFO]  [39;1msnarkJS[0m: contribution #1 benzo-contributor-1:
+		b296881c c189c72c ad7ef93e bd176811
+		227cd30c ac3e9dfb dcc977ae 2c8cd45e
+		fa4828aa 5b786718 a900f689 d8080b8d
+		0c2713f3 c9264090 7b740ec8 7799381b
+[32;22m[INFO]  [39;1msnarkJS[0m: -------------------------
+[32;22m[INFO]  [39;1msnarkJS[0m: ZKey Ok!
+===== wired ceremony output into circuits/build/funds_attestation (zkey + vk) =====

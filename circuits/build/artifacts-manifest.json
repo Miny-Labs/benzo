@@ -1,0 +1,68 @@
+{
+  "generatedAt": "2026-06-17T17:26:13.607Z",
+  "circuits": {
+    "shield": {
+      "circuit": "shield",
+      "vkHash": "e5f32331e9b2c7e1bd3beebe3ed4d313c96bcd25976fa026ce763b1e95c65f16",
+      "zkeyUrl": "https://artifacts.benzo.local/shield/shield.zkey",
+      "wasmUrl": "https://artifacts.benzo.local/shield/shield.wasm",
+      "zkeyHash": "7be9818e4c3d4769eab84bc263bbae15bbf2151aa0ba49b31fbc8f4313f2d59c",
+      "wasmHash": "a86ee4a7a6474d87bed791b6b2f6c3a4f55636da561043ae906886e063cf07ad",
+      "sizeBytes": 6840111
+    },
+    "joinsplit": {
+      "circuit": "joinsplit",
+      "vkHash": "7a012c955689e3579962026c7a216d7252525e66af37ea26243cfdfbfe471601",
+      "zkeyUrl": "https://artifacts.benzo.local/joinsplit/joinsplit.zkey",
+      "wasmUrl": "https://artifacts.benzo.local/joinsplit/joinsplit.wasm",
+      "zkeyHash": "b566765e2303f47e7c19f56f12f4da4827bb35fe52cbf83853f28a586fe5627f",
+      "wasmHash": "282b520f57b22c8d20776f9695093420972796a5fd75be8ad6d13a11f79fe86c",
+      "sizeBytes": 22412431
+    },
+    "unshield": {
+      "circuit": "unshield",
+      "vkHash": "9161a930f39615b5ea58aa27c2b0043b845f4686d96e5cd42d62ebf67866759e",
+      "zkeyUrl": "https://artifacts.benzo.local/unshield/unshield.zkey",
+      "wasmUrl": "https://artifacts.benzo.local/unshield/unshield.wasm",
+      "zkeyHash": "08eefd898f21387e025e5581099aa3e5d3071e052859618d688160b01f4efd9b",
+      "wasmHash": "4c1448d42be1795c043c816b83a810836fe4bdcc468a64754ae0cbb1a8514f37",
+      "sizeBytes": 16712231
+    },
+    "proof_of_balance": {
+      "circuit": "proof_of_balance",
+      "vkHash": "ac54b4e5dd1d18d5c070debce6506cae0e5645b1e5c8c842d52f8768edc45eb4",
+      "zkeyUrl": "https://artifacts.benzo.local/proof_of_balance/proof_of_balance.zkey",
+      "wasmUrl": "https://artifacts.benzo.local/proof_of_balance/proof_of_balance.wasm",
+      "zkeyHash": "8a27529df20268194ded925f5d322e23c791b38f5fe64846bed2f0f28274279f",
+      "wasmHash": "1fae1f18a531f88b3eaf0309a93dff0dcda177d3aa3a263427c5f55993b835c3",
+      "sizeBytes": 25710743
+    },
+    "proof_of_sum": {
+      "circuit": "proof_of_sum",
+      "vkHash": "9c6ac219035ff0ba1be0e5481baeac889e8ecc4da46a8a2bacd012b7811e734c",
+      "zkeyUrl": "https://artifacts.benzo.local/proof_of_sum/proof_of_sum.zkey",
+      "wasmUrl": "https://artifacts.benzo.local/proof_of_sum/proof_of_sum.wasm",
+      "zkeyHash": "c87a3f7eb3feab7e6f675f9e961a55c3cd50150e3c59f7581565b7650d16e718",
+      "wasmHash": "e42c2ba8ecd3bd0206a52af43cd1229575957c3b213bca6834997c15153cfd9c",
+      "sizeBytes": 25677691
+    },
+    "kyc_credential": {
+      "circuit": "kyc_credential",
+      "vkHash": "c74adebec3fe0df42128605d397dab74acb58e42c6bda9847cc8f94484e9693b",
+      "zkeyUrl": "https://artifacts.benzo.local/kyc_credential/kyc_credential.zkey",
+      "wasmUrl": "https://artifacts.benzo.local/kyc_credential/kyc_credential.wasm",
+      "zkeyHash": "20a11974b7336323d5f16ed5cc78c3db8614d0b908208ac400d4758bbf5d5e7f",
+      "wasmHash": "3a186a816e19d8ae3412aed5e0f758c74fbfbf5653a9dfc6dc83e9d31f305891",
+      "sizeBytes": 11208675
+    },
+    "funds_attestation": {
+      "circuit": "funds_attestation",
+      "vkHash": "de164d65b5e9f87531e8ee360f8df694c34c9a60134b9d3ca7da85b1347a85da",
+      "zkeyUrl": "https://artifacts.benzo.local/funds_attestation/funds_attestation.zkey",
+      "wasmUrl": "https://artifacts.benzo.local/funds_attestation/funds_attestation.wasm",
+      "zkeyHash": "bf2c43df8fc7dfb4434b496e431caa2e2def478397262348caede0e3237ffa9f",
+      "wasmHash": "3b7d16a82103c954f0b356c19334ed600aaa5727b4bd2192a335d0ef578865e5",
+      "sizeBytes": 7369943
+    }
+  }
+}
