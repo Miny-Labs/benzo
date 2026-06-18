@@ -10,11 +10,13 @@
     "m3": "node e2e/m3-corridor.mjs"
   },
   "dependencies": {
+    "@benzo/anchor": "workspace:*",
     "@benzo/core": "workspace:*",
     "@benzo/indexer": "workspace:*",
-    "@benzo/anchor": "workspace:*",
+    "@benzo/kyc": "workspace:*",
+    "@benzo/relayer": "workspace:*",
     "@stellar/stellar-sdk": "^13.0.0",
-    "@benzo/relayer": "workspace:*"
+    "circomlibjs": "^0.1.7"
   },
   "devDependencies": {
     "vitest": "^2.0.0"
