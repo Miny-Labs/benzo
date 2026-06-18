@@ -699,3 +699,193 @@ fn test_merkle_consistency() {
         );
     }
 }
+
+// ---- proof-gated admission (admit_by_proof) ----
+//
+// Uses an arkworks free-inputs circuit (same pattern as the pool test) to mint a
+// real Groth16 proof, registers it against the verifier, and exercises the
+// proof-gated allow-set admission end-to-end.
+mod admit {
+    extern crate std;
+    use super::*;
+    use ark_bn254::{Bn254, Fr as ArkFr};
+    use ark_ff::{Field, PrimeField};
+    use ark_groth16::{Groth16, ProvingKey};
+    use ark_relations::gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
+    use ark_snark::SNARK;
+    use ark_std::rand::{SeedableRng, rngs::StdRng};
+    use contract_types::Groth16Proof;
+    use soroban_sdk::{
+        BytesN, Symbol,
+        crypto::bn254::{Bn254Fr, Bn254G1Affine, Bn254G2Affine},
+    };
+    use soroban_utils::{g1_bytes_from_ark, g2_bytes_from_ark, vk_bytes_from_ark};
+    use std::vec::Vec as StdVec;
+
+    struct FreeInputs<F: Field> {
+        inputs: StdVec<F>,
+    }
+    impl<F: Field> ConstraintSynthesizer<F> for FreeInputs<F> {
+        fn generate_constraints(self, cs: ConstraintSystemRef<F>) -> Result<(), SynthesisError> {
+            let mut vars = StdVec::new();
+            for v in &self.inputs {
+                let v = *v;
+                vars.push(cs.new_input_variable(|| Ok(v))?);
+            }
+            let w = cs.new_witness_variable(|| Ok(self.inputs[0]))?;
+            cs.enforce_r1cs_constraint(
+                || w.into(),
+                || ark_relations::gr1cs::Variable::One.into(),
+                || vars[0].into(),
+            )?;
+            Ok(())
+        }
+    }
+
+    fn fr_from_u256(value: &U256) -> ArkFr {
+        let mut buf = [0u8; 32];
+        value.to_be_bytes().copy_into_slice(&mut buf);
+        ArkFr::from_be_bytes_mod_order(&buf)
+    }
+
+    fn prove(env: &Env, pk: &ProvingKey<Bn254>, publics: &[U256]) -> Groth16Proof {
+        let mut rng = StdRng::seed_from_u64(99);
+        let inputs: StdVec<ArkFr> = publics.iter().map(fr_from_u256).collect();
+        let proof = Groth16::<Bn254>::prove(pk, FreeInputs { inputs }, &mut rng).expect("prove");
+        Groth16Proof {
+            a: Bn254G1Affine::from_bytes(BytesN::from_array(env, &g1_bytes_from_ark(proof.a))),
+            b: Bn254G2Affine::from_bytes(BytesN::from_array(env, &g2_bytes_from_ark(proof.b))),
+            c: Bn254G1Affine::from_bytes(BytesN::from_array(env, &g1_bytes_from_ark(proof.c))),
+        }
+    }
+
+    fn fr_pubs(env: &Env, publics: &[U256]) -> Vec<Bn254Fr> {
+        let mut v = Vec::new(env);
+        for p in publics {
+            let mut buf = [0u8; 32];
+            p.to_be_bytes().copy_into_slice(&mut buf);
+            v.push_back(Bn254Fr::from_bytes(BytesN::from_array(env, &buf)));
+        }
+        v
+    }
+
+    fn setup() -> (Env, ASPMembershipClient<'static>, ProvingKey<Bn254>) {
+        let env = test_env();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let asp_id = env.register(ASPMembership, (admin.clone(), 16u32));
+        let asp = ASPMembershipClient::new(&env, &asp_id);
+        // Verifier holding a 7-input KYC vk (kyc_credential has 7 public inputs).
+        let verifier_id = env.register(benzo_verifier_groth16::BenzoVerifier, (admin.clone(),));
+        let verifier = benzo_verifier_groth16::BenzoVerifierClient::new(&env, &verifier_id);
+        let mut rng = StdRng::seed_from_u64(7);
+        let circuit = FreeInputs {
+            inputs: std::vec![ArkFr::from(1u64); 7],
+        };
+        let (pk, vk) = Groth16::<Bn254>::circuit_specific_setup(circuit, &mut rng).expect("setup");
+        verifier.set_vk(&Symbol::new(&env, "KYC"), &vk_bytes_from_ark(&env, &vk));
+        asp.set_kyc_verifier(&verifier_id, &Symbol::new(&env, "KYC"));
+        (env, asp, pk)
+    }
+
+    // kyc_credential public order: [issuerRegistryRoot, credType, currentTime,
+    // scope, identityNullifier, addressBinding, admitLeaf]; admitLeaf is index 6.
+    fn kyc_publics(env: &Env, admit_leaf: &U256) -> [U256; 7] {
+        [
+            U256::from_u32(env, 1),
+            U256::from_u32(env, 0),
+            U256::from_u32(env, 100),
+            U256::from_u32(env, 42),
+            U256::from_u32(env, 555),
+            U256::from_u32(env, 666),
+            admit_leaf.clone(),
+        ]
+    }
+
+    #[test]
+    fn admit_by_valid_kyc_proof_inserts_leaf() {
+        let (env, asp, pk) = setup();
+        let admit_leaf = U256::from_u32(&env, 778_899);
+        let publics = kyc_publics(&env, &admit_leaf);
+        let root_before = asp.get_root();
+        let proof = prove(&env, &pk, &publics);
+        // The proof IS the authorization — no admin insert. credType (tier) = 0.
+        asp.admit_by_proof(&proof, &fr_pubs(&env, &publics), &admit_leaf, &0u32, &U256::from_u32(&env, 1));
+        assert_ne!(asp.get_root(), root_before, "a valid credential must admit the leaf");
+    }
+
+    #[test]
+    fn admit_rejects_leaf_not_matching_the_proof() {
+        let (env, asp, pk) = setup();
+        let admit_leaf = U256::from_u32(&env, 778_899);
+        let publics = kyc_publics(&env, &admit_leaf);
+        let proof = prove(&env, &pk, &publics);
+        // Submit a DIFFERENT leaf than public input #6 — must be rejected so an
+        // attacker can't admit an arbitrary leaf behind a valid proof.
+        let res = asp.try_admit_by_proof(
+            &proof,
+            &fr_pubs(&env, &publics),
+            &U256::from_u32(&env, 111_111),
+            &0u32,
+            &U256::from_u32(&env, 1),
+        );
+        assert!(res.is_err(), "leaf != public input #6 must be rejected");
+    }
+
+    #[test]
+    fn admit_rejects_a_tampered_proof() {
+        let (env, asp, pk) = setup();
+        let admit_leaf = U256::from_u32(&env, 778_899);
+        let publics = kyc_publics(&env, &admit_leaf);
+        let proof = prove(&env, &pk, &publics);
+        // Verify against DIFFERENT public inputs than the proof was made for.
+        let mut wrong = publics;
+        wrong[0] = U256::from_u32(&env, 999);
+        let res = asp.try_admit_by_proof(&proof, &fr_pubs(&env, &wrong), &admit_leaf, &0u32, &U256::from_u32(&env, 999));
+        assert!(res.is_err(), "a non-verifying proof must not admit");
+    }
+
+    // kyc_publics with a chosen assurance tier (credType, public input #1).
+    fn kyc_publics_tier(env: &Env, admit_leaf: &U256, tier: u32) -> [U256; 7] {
+        [
+            U256::from_u32(env, 1),
+            U256::from_u32(env, tier),
+            U256::from_u32(env, 100),
+            U256::from_u32(env, 42),
+            U256::from_u32(env, 555),
+            U256::from_u32(env, 666),
+            admit_leaf.clone(),
+        ]
+    }
+
+    #[test]
+    fn admit_enforces_minimum_tier() {
+        let (env, asp, pk) = setup();
+        asp.set_min_tier(&2); // corridor requires VERIFIED_ID (tier 2)
+        let admit_leaf = U256::from_u32(&env, 778_899);
+
+        // A tier-1 credential is rejected (below the required minimum).
+        let p1 = kyc_publics_tier(&env, &admit_leaf, 1);
+        let proof1 = prove(&env, &pk, &p1);
+        let res = asp.try_admit_by_proof(&proof1, &fr_pubs(&env, &p1), &admit_leaf, &1u32, &U256::from_u32(&env, 1));
+        assert!(res.is_err(), "tier 1 < required tier 2 must be rejected");
+
+        // A tier-2 credential admits.
+        let p2 = kyc_publics_tier(&env, &admit_leaf, 2);
+        let proof2 = prove(&env, &pk, &p2);
+        let root_before = asp.get_root();
+        asp.admit_by_proof(&proof2, &fr_pubs(&env, &p2), &admit_leaf, &2u32, &U256::from_u32(&env, 1));
+        assert_ne!(asp.get_root(), root_before, "tier 2 >= required tier 2 must admit");
+    }
+
+    #[test]
+    fn admit_rejects_claimed_tier_not_matching_proof() {
+        let (env, asp, _pk) = setup();
+        let admit_leaf = U256::from_u32(&env, 778_899);
+        let p = kyc_publics_tier(&env, &admit_leaf, 1); // credential proves tier 1
+        let proof = prove(&env, &_pk, &p);
+        // Caller claims tier 3 but the proof only attests tier 1 → bound, rejected.
+        let res = asp.try_admit_by_proof(&proof, &fr_pubs(&env, &p), &admit_leaf, &3u32, &U256::from_u32(&env, 1));
+        assert!(res.is_err(), "claimed tier must match the credential's credType");
+    }
+}

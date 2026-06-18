@@ -1,0 +1,13 @@
+Scout (CoinFabrik cargo-scout-audit v0.3.16) — Soroban static analysis
+Command: cargo scout-audit (workspace), 23 detectors
+
+RESULT: 0 Critical · 0 Medium · 0 Minor · 0 Enhancement — across ALL 16 crates.
+
+Analyzed clean: asp_membership, asp_non_membership, benzo_handle_registry,
+benzo_identity_nullifier_set, benzo_issuer_registry, benzo_merkle,
+benzo_mvk_registry, benzo_nullifier_set, benzo_org_account, benzo_pool,
+benzo_request_registry, benzo_verifier_groth16, benzo_viewkey_anchor,
+contract_types, soroban_utils, zkhash.
+
+Pairs with audits/circomspect-report.txt (Trail of Bits Circomspect — circuits clean):
+the ZK stack is statically clean on both sides (Soroban contracts + circom circuits).

@@ -29,6 +29,7 @@ benzo-viewkey-anchor = { workspace = true }
 asp-membership = { workspace = true }
 asp-non-membership = { workspace = true }
 num-bigint = { workspace = true }
+proptest = "1"
 soroban-sdk = { workspace = true, features = ["testutils"] }
 zkhash = { workspace = true }
 

@@ -6,9 +6,33 @@
 //! member, and the root serves as a commitment to the entire membership set.
 #![no_std]
 use soroban_sdk::{
-    Address, Env, U256, Vec, contract, contracterror, contractevent, contractimpl, contracttype,
+    Address, BytesN, Env, Symbol, U256, Vec, contract, contractclient, contracterror, contractevent,
+    contractimpl, contracttype, crypto::bn254::Bn254Fr,
 };
 use soroban_utils::{get_zeroes, poseidon2_compress};
+use contract_types::Groth16Proof;
+
+/// Cross-contract interface to the Groth16 verifier (for proof-gated admission).
+#[contractclient(name = "VerifierClient")]
+pub trait VerifierInterface {
+    fn verify_proof(
+        env: Env,
+        vk_id: Symbol,
+        proof: Groth16Proof,
+        public_inputs: Vec<Bn254Fr>,
+    ) -> Result<bool, soroban_sdk::Error>;
+}
+
+/// Cross-contract interface to the authorized-issuer registry — admit only
+/// accepts credentials whose `issuerRegistryRoot` is a root this registry knows
+/// (so a prover can't supply a self-made root with an unauthorized issuer).
+#[contractclient(name = "IssuerRegistryClient")]
+pub trait IssuerRegistryInterface {
+    fn is_known_root(env: Env, root: U256) -> Result<bool, soroban_sdk::Error>;
+}
+
+soroban_sdk::contractmeta!(key = "binver", val = "0.1.0");
+soroban_sdk::contractmeta!(key = "name", val = "benzo-asp-membership");
 
 /// Storage keys for contract persistent data
 #[contracttype]
@@ -28,6 +52,14 @@ enum DataKey {
     Root,
     /// Whether admin permission is required to insert a leaf
     AdminInsertOnly,
+    /// The Groth16 verifier contract (for proof-gated admission)
+    Verifier,
+    /// The vk_id of the kyc_credential circuit in the verifier
+    KycVkId,
+    /// Minimum assurance tier (credType) required for proof-gated admission
+    MinTier,
+    /// Optional authorized-issuer registry; when set, admit checks issuerRegistryRoot
+    IssuerRegistry,
 }
 
 /// Contract error types
@@ -45,6 +77,12 @@ pub enum Error {
     NotInitialized = 4,
     /// Arithmetic overflow occurred
     Overflow = 5,
+    /// The KYC credential proof did not verify
+    InvalidCredential = 6,
+    /// No KYC verifier/vk_id has been configured for proof-gated admission
+    KycNotConfigured = 7,
+    /// The credential's assurance tier is below the corridor's required minimum
+    InsufficientTier = 8,
 }
 
 /// Event emitted when a new leaf is added to the Merkle tree
@@ -155,10 +193,15 @@ impl ASPMembership {
     /// # Panics
     /// Panics if the contract has not been initialized
     pub fn get_root(env: Env) -> Result<U256, Error> {
-        env.storage()
+        let root: U256 = env
+            .storage()
             .persistent()
             .get(&DataKey::Root)
-            .ok_or(Error::NotInitialized)
+            .ok_or(Error::NotInitialized)?;
+        // CAP-0078: the pool reads this allow-root cross-contract on every
+        // shield, so keep it from being archived out from under the hot path.
+        soroban_utils::bump_persistent(&env, &DataKey::Root);
+        Ok(root)
     }
 
     /// Hash two U256 values using Poseidon2 compression
@@ -200,6 +243,14 @@ impl ASPMembership {
             admin.require_auth();
         }
 
+        Self::do_insert(&env, leaf)
+    }
+
+    /// Core incremental-tree insert (no auth). Shared by `insert_leaf`
+    /// (admin/permissionless) and `admit_by_proof` (where the proof is the
+    /// authorization).
+    fn do_insert(env: &Env, leaf: U256) -> Result<(), Error> {
+        let store = env.storage().persistent();
         let levels: u32 = store.get(&DataKey::Levels).ok_or(Error::NotInitialized)?;
         let actual_index: u64 = store
             .get(&DataKey::NextIndex)
@@ -216,39 +267,157 @@ impl ASPMembership {
         for lvl in 0..levels {
             let is_right = current_index & 1 == 1;
             if is_right {
-                // Leaf is right child, get the stored left sibling
                 let left: U256 = store
                     .get(&DataKey::FilledSubtrees(lvl))
                     .ok_or(Error::NotInitialized)?;
-                current_hash = poseidon2_compress(&env, left, current_hash);
+                current_hash = poseidon2_compress(env, left, current_hash);
             } else {
-                // Leaf is left child, store it and pair with zero hash
                 store.set(&DataKey::FilledSubtrees(lvl), &current_hash);
                 let zero_val: U256 = store
                     .get(&DataKey::Zeroes(lvl))
                     .ok_or(Error::NotInitialized)?;
-                current_hash = poseidon2_compress(&env, current_hash, zero_val);
+                current_hash = poseidon2_compress(env, current_hash, zero_val);
             }
             current_index >>= 1;
         }
 
-        // Update the root with the computed hash
         store.set(&DataKey::Root, &current_hash);
-
-        // Emit event with leaf details
         LeafAddedEvent {
             leaf: leaf.clone(),
             index: actual_index,
             root: current_hash,
         }
-        .publish(&env);
-
-        // Update NextIndex
+        .publish(env);
         store.set(
             &DataKey::NextIndex,
             &(actual_index.checked_add(1).ok_or(Error::Overflow)?),
         );
         Ok(())
+    }
+
+    /// Configure the Groth16 verifier + kyc_credential vk_id used for
+    /// proof-gated admission. Admin-only.
+    pub fn set_kyc_verifier(env: Env, verifier: Address, vk_id: Symbol) -> Result<(), Error> {
+        let store = env.storage().persistent();
+        let admin: Address = store.get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        store.set(&DataKey::Verifier, &verifier);
+        store.set(&DataKey::KycVkId, &vk_id);
+        Ok(())
+    }
+
+    /// Set the minimum assurance tier required to admit by proof (risk-based KYC:
+    /// 0 = anonymous, 1 = unique-human, 2 = verified-ID, 3 = full). Admin-only.
+    pub fn set_min_tier(env: Env, min_tier: u32) -> Result<(), Error> {
+        let store = env.storage().persistent();
+        let admin: Address = store.get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        store.set(&DataKey::MinTier, &min_tier);
+        Ok(())
+    }
+
+    /// Wire the authorized-issuer registry. When set, `admit_by_proof` requires
+    /// the credential's `issuerRegistryRoot` (public input #0) to be a root this
+    /// registry knows — so only registered issuers can admit. Admin-only.
+    pub fn set_issuer_registry(env: Env, registry: Address) -> Result<(), Error> {
+        let store = env.storage().persistent();
+        let admin: Address = store.get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        store.set(&DataKey::IssuerRegistry, &registry);
+        Ok(())
+    }
+
+    /// Admit a holder into the allow-set by a valid KYC-credential proof — the
+    /// proof-gated replacement for the operator-trusted insert. The proof IS the
+    /// authorization (no admin auth), and no PII touches the chain.
+    ///
+    /// `admit_leaf` is cross-checked to equal public input #6 of the
+    /// kyc_credential circuit (order: [issuerRegistryRoot, credType, currentTime,
+    /// scope, identityNullifier, addressBinding, admitLeaf]) so the leaf actually
+    /// inserted is the one the proof attests; the proof is then verified
+    /// fail-closed via the configured verifier.
+    ///
+    /// # Security Warning
+    /// This function intentionally SKIPS `require_auth()` — the KYC-credential
+    /// proof *is* the authorization. Soundness therefore rests on three checks,
+    /// all of which fail closed: (1) a verifier + KYC `vk_id` must be configured
+    /// (`KycNotConfigured` otherwise); (2) `admit_leaf` must equal public input
+    /// #6 (`InvalidCredential` otherwise), so a caller cannot insert a different
+    /// leaf than the proof attests; (3) `try_verify_proof` must return
+    /// `Ok(Ok(true))` — any other result, including an invoke error, maps to
+    /// `InvalidCredential` and NO insertion. Do not add an early `do_insert`
+    /// path here.
+    pub fn admit_by_proof(
+        env: Env,
+        proof: Groth16Proof,
+        public_inputs: Vec<Bn254Fr>,
+        admit_leaf: U256,
+        claimed_tier: u32,
+        issuer_registry_root: U256,
+    ) -> Result<(), Error> {
+        let store = env.storage().persistent();
+        let verifier: Address = store.get(&DataKey::Verifier).ok_or(Error::KycNotConfigured)?;
+        let vk_id: Symbol = store.get(&DataKey::KycVkId).ok_or(Error::KycNotConfigured)?;
+
+        // admit_leaf must equal public input #6 (so the inserted leaf is the one
+        // the proof attests). Reuse the canonical U256 -> Bn254Fr encoding.
+        let mut buf = [0u8; 32];
+        admit_leaf.to_be_bytes().copy_into_slice(&mut buf);
+        let expected = Bn254Fr::from_bytes(BytesN::from_array(&env, &buf));
+        let pi6 = public_inputs.get(6).ok_or(Error::InvalidCredential)?;
+        if pi6 != expected {
+            return Err(Error::InvalidCredential);
+        }
+
+        // Bind the declared assurance tier to public input #1 (credType) — the
+        // issuer signed the tier in-circuit, so the caller cannot claim a higher
+        // tier than the credential actually proves.
+        let mut tbuf = [0u8; 32];
+        tbuf[28..32].copy_from_slice(&claimed_tier.to_be_bytes());
+        let tier_fr = Bn254Fr::from_bytes(BytesN::from_array(&env, &tbuf));
+        let pi1 = public_inputs.get(1).ok_or(Error::InvalidCredential)?;
+        if pi1 != tier_fr {
+            return Err(Error::InvalidCredential);
+        }
+        // Enforce the corridor's minimum assurance tier (risk-based KYC: most
+        // actions need only a low tier; off-ramp/high-value require more).
+        let min_tier: u32 = store.get(&DataKey::MinTier).unwrap_or(0);
+        if claimed_tier < min_tier {
+            return Err(Error::InsufficientTier);
+        }
+
+        // Bind the declared issuer-registry root to public input #0
+        // (issuerRegistryRoot) and, when a registry is wired, require it to be a
+        // root that registry knows — so a prover can't supply a self-made root
+        // with an unauthorized issuer. Fail-closed.
+        let mut rbuf = [0u8; 32];
+        issuer_registry_root.to_be_bytes().copy_into_slice(&mut rbuf);
+        let root_fr = Bn254Fr::from_bytes(BytesN::from_array(&env, &rbuf));
+        let pi0 = public_inputs.get(0).ok_or(Error::InvalidCredential)?;
+        if pi0 != root_fr {
+            return Err(Error::InvalidCredential);
+        }
+        if let Some(registry) = store.get::<DataKey, Address>(&DataKey::IssuerRegistry) {
+            let known = matches!(
+                IssuerRegistryClient::new(&env, &registry).try_is_known_root(&issuer_registry_root),
+                Ok(Ok(true))
+            );
+            if !known {
+                return Err(Error::InvalidCredential);
+            }
+        }
+
+        // Fail-closed: a non-verifying proof (verifier returns InvalidProof) or
+        // any invoke error maps to InvalidCredential — never an admission.
+        let verified = matches!(
+            VerifierClient::new(&env, &verifier).try_verify_proof(&vk_id, &proof, &public_inputs),
+            Ok(Ok(true))
+        );
+        if !verified {
+            return Err(Error::InvalidCredential);
+        }
+
+        Self::do_insert(&env, admit_leaf)
     }
 }
 

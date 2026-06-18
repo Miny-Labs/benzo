@@ -1,0 +1,17 @@
+{
+  "name": "@benzo/prover-enclave",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Benzo confidential Groth16 prover that runs inside a Phala dstack (Intel TDX) CVM and serves TDX attestation quotes.",
+  "main": "src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.8.1",
+    "@noble/hashes": "^1.6.1",
+    "@phala/dstack-sdk": "^0.5.8",
+    "snarkjs": "0.7.6"
+  }
+}
