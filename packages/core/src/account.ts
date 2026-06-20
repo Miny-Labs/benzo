@@ -67,18 +67,28 @@ export function createAccount(opts: {
   };
 }
 
+/** Product scope a claim link belongs to — separates the two apps' key domains. */
+export type ClaimAppScope = "consumer" | "business";
+
 /**
  * Deterministically derive a full Benzo account from a claim secret (the
  * payload of a claim link). Anyone holding the secret reconstructs the exact
  * same spend/MVK/view keys and can therefore discover and spend the note that
  * was sent to this account — the basis of send-to-link.
+ *
+ * The `app` scope is folded into the HKDF domain separator so a consumer claim
+ * secret cannot reconstruct a business account, and vice-versa — the two-app
+ * boundary enforced cryptographically, not just in the UI. The "consumer"
+ * domain is intentionally the legacy domain (`benzo/claim/...`) so existing
+ * consumer claim links keep deriving the exact same account.
  */
-export function accountFromClaimSecret(secret: Uint8Array): BenzoAccount {
-  const spendOkm = hkdf(sha256, secret, undefined, "benzo/claim/spend", 32);
+export function accountFromClaimSecret(secret: Uint8Array, app: ClaimAppScope = "consumer"): BenzoAccount {
+  const sep = app === "consumer" ? "" : `${app}/`;
+  const spendOkm = hkdf(sha256, secret, undefined, `benzo/claim/${sep}spend`, 32);
   const spendSk = BigInt("0x" + toHex(spendOkm)) % FIELD_MODULUS;
-  const mvkSecret = new Uint8Array(hkdf(sha256, secret, undefined, "benzo/claim/mvk", 32));
-  const viewSecret = new Uint8Array(hkdf(sha256, secret, undefined, "benzo/claim/view", 32));
-  return createAccount({ label: "claim", spendSk, mvkSecret, viewSecret });
+  const mvkSecret = new Uint8Array(hkdf(sha256, secret, undefined, `benzo/claim/${sep}mvk`, 32));
+  const viewSecret = new Uint8Array(hkdf(sha256, secret, undefined, `benzo/claim/${sep}view`, 32));
+  return createAccount({ label: app === "consumer" ? "claim" : `claim-${app}`, spendSk, mvkSecret, viewSecret });
 }
 
 /** The exact message a wallet signs once to derive Benzo's shielded note keys. */
