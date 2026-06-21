@@ -1,0 +1,15 @@
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import * as snarkjs from "snarkjs";
+const sha = (b) => createHash("sha256").update(b).digest("hex");
+const IN = "/tmp/ceremony/joinsplit_org/joinsplit_org.zkey";
+const OUT = "/tmp/ceremony/joinsplit_org/joinsplit_org.contrib.zkey";
+const inHash = sha(readFileSync(IN));
+const t0 = Date.now();
+await snarkjs.zKey.contribute(IN, OUT, "benzo-tee-contributor", randomBytes(64).toString("hex"));
+const outHash = sha(readFileSync(OUT));
+console.log("CONTRIBUTED_IN", Math.round((Date.now()-t0)/1000)+"s");
+console.log("INHASH", inHash.slice(0,24), "OUTHASH", outHash.slice(0,24), "CHANGED", inHash!==outHash);
+const vk = await snarkjs.zKey.exportVerificationKey(OUT);
+console.log("VK_NPUBLIC", vk.nPublic, "PROTOCOL", vk.protocol, "CURVE", vk.curve);
+console.log(inHash!==outHash && vk.nPublic===11 ? "OK_CEREMONY_VALID" : "FAIL");

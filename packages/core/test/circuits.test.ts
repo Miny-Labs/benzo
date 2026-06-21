@@ -17,6 +17,7 @@ import {
   aspLeaf,
   deriveKeypair,
   mvkTag,
+  mvkRegistryLeaf,
   noteCommitment,
   noteNullifier,
 } from "../src/notes.js";
@@ -34,6 +35,17 @@ const vk = (c: string) => JSON.parse(readFileSync(`${root}/${c}/${c}_vk.json`, "
 // proving tests skip; the small VK/proof fixtures used by parity.test.ts are
 // committed, so the byte-identity encoding invariant is still enforced in CI.
 const HAVE_ARTIFACTS = existsSync(art("shield").zkeyPath);
+if (!HAVE_ARTIFACTS) {
+  // Make the skip LOUD: a green run with these tests skipped does NOT mean the ZK
+  // works. `pnpm test:zk` hard-fails on this via scripts/check-artifacts.mjs.
+  console.warn(
+    "\n⚠️  ZK PROVING ARTIFACTS ABSENT — shield/joinsplit/unshield/sum proving tests are SKIPPED.\n" +
+      "    A passing run here does NOT exercise any real proof. Build them first:\n" +
+      "      bash scripts/build-artifacts.sh   (compile from source)\n" +
+      "      bash scripts/fetch-artifacts.sh   (download the exact deployed-matching artifacts)\n" +
+      "    Or run `pnpm test:zk` to FAIL when artifacts are missing.\n",
+  );
+}
 
 const ASSET_ID = 123456789n;
 
@@ -45,6 +57,11 @@ describe.skipIf(!HAVE_ARTIFACTS)("shield circuit", () => {
     const aspTree = new MerkleTreeMirror(16);
     const leafIdx = aspTree.insert(aspLeaf(depositor, aspBlinding));
     const path = aspTree.path(leafIdx);
+    // Authorized-MVK registry: register mvkPub 777 so the note's tag is valid.
+    const mvkTree = new MerkleTreeMirror(16);
+    const mvkKeyMeta = 0n;
+    const mvkIdx = mvkTree.insert(mvkRegistryLeaf(777n, mvkKeyMeta));
+    const mvkPath = mvkTree.path(mvkIdx);
     const kp = deriveKeypair(1111n);
     const note = {
       amount: 5_000_000n,
@@ -59,20 +76,24 @@ describe.skipIf(!HAVE_ARTIFACTS)("shield circuit", () => {
       depositor,
       aspMembershipRoot: aspTree.root(),
       mvkTag: mvkTag(777n, note.blinding),
+      registeredMvkRoot: mvkTree.root(),
       recipientPk: note.recipientPk,
       blinding: note.blinding,
       mvkPub: 777n,
       aspBlinding,
       aspPathElements: path.pathElements,
       aspPathIndices: path.pathIndices,
+      mvkKeyMeta,
+      mvkPathElements: mvkPath.pathElements,
+      mvkPathIndices: mvkPath.pathIndices,
     };
   }
 
   it("proves and locally verifies a valid shield", async () => {
     const w = buildShieldWitness();
     const res = await prove(art("shield"), toWitnessInput(w));
-    expect(res.sorobanPublics.length).toBe(6);
-    // public order: [commitment, amount, assetId, depositor, aspRoot, mvkTag]
+    expect(res.sorobanPublics.length).toBe(7);
+    // public order: [commitment, amount, assetId, depositor, aspRoot, mvkTag, registeredMvkRoot]
     expect(BigInt(res.publicSignals[0])).toBe(w.commitment);
     expect(BigInt(res.publicSignals[1])).toBe(w.amount);
     expect(await verifyLocal(vk("shield"), res.publicSignals, res.proof)).toBe(true);
@@ -82,6 +103,21 @@ describe.skipIf(!HAVE_ARTIFACTS)("shield circuit", () => {
     const w = buildShieldWitness();
     // proof for a different depositor than the one in the allow-set leaf
     const bad = { ...w, depositor: w.depositor + 1n };
+    await expect(prove(art("shield"), toWitnessInput(bad))).rejects.toThrow();
+  }, 60_000);
+
+  it("rejects a note bound to an UNREGISTERED MVK (the audit P0)", async () => {
+    const w = buildShieldWitness();
+    // Bind the note to mvkPub 888 (with a matching tag) — but 888 is NOT in the
+    // authorized-MVK registry, so registry membership fails. Pre-fix this would
+    // have proven, yielding a permanently-unauditable note.
+    const bad = { ...w, mvkPub: 888n, mvkTag: mvkTag(888n, w.blinding) };
+    await expect(prove(art("shield"), toWitnessInput(bad))).rejects.toThrow();
+  }, 60_000);
+
+  it("rejects the all-zeros MVK key", async () => {
+    const w = buildShieldWitness();
+    const bad = { ...w, mvkPub: 0n, mvkTag: mvkTag(0n, w.blinding) };
     await expect(prove(art("shield"), toWitnessInput(bad))).rejects.toThrow();
   }, 60_000);
 
@@ -128,6 +164,10 @@ function buildTransferFixture() {
   }; // change
   const fee = 10n; // 5_000_000 = 3_000_000 + 1_999_990 + 10
 
+  // Authorized-MVK registry: both outputs use mvkPub 777, so one registered leaf.
+  const mvkTree = new MerkleTreeMirror(16);
+  const mvkP = mvkTree.path(mvkTree.insert(mvkRegistryLeaf(777n, 0n)));
+
   const witness = {
     root: tree.root(),
     assetId: ASSET_ID,
@@ -136,8 +176,12 @@ function buildTransferFixture() {
     fee,
     extDataHash: 0xabcdefn,
     mvkTag: [mvkTag(777n, out0.blinding), mvkTag(777n, out1.blinding)],
+    registeredMvkRoot: mvkTree.root(),
+    mvkKeyMeta: [0n, 0n],
+    mvkPathElements: [mvkP.pathElements, mvkP.pathElements],
+    mvkPathIndices: [mvkP.pathIndices, mvkP.pathIndices],
     inAmount: [inNote.amount, 0n],
-    inSpendSk: [31337n, 99999n],
+    inOrgSpendId: [31337n, 99999n],
     inBlinding: [inNote.blinding, dummy.blinding],
     inPathIndices: [path.pathIndices, 12345n],
     inPathElements: [path.pathElements, new Array<bigint>(32).fill(0n)],
@@ -153,7 +197,7 @@ describe.skipIf(!HAVE_ARTIFACTS)("joinsplit circuit", () => {
   it("proves a 1-real + 1-dummy join-split with fee (value conservation)", async () => {
     const { witness } = buildTransferFixture();
     const res = await prove(art("joinsplit"), toWitnessInput(witness));
-    expect(res.sorobanPublics.length).toBe(10);
+    expect(res.sorobanPublics.length).toBe(11);
     expect(await verifyLocal(vk("joinsplit"), res.publicSignals, res.proof)).toBe(true);
   }, 120_000);
 
@@ -202,6 +246,8 @@ describe.skipIf(!HAVE_ARTIFACTS)("joinsplit circuit", () => {
     const half = 2n ** 63n; // < 2^64, in range
     const out0 = { amount: half, recipientPk: kp.publicKey, blinding: 1n, assetId: ASSET_ID };
     const out1 = { amount: half + 10n, recipientPk: kp.publicKey, blinding: 2n, assetId: ASSET_ID };
+    const mvkT = new MerkleTreeMirror(16);
+    const mvkPp = mvkT.path(mvkT.insert(mvkRegistryLeaf(1n, 0n)));
 
     const witness = {
       root: tree.root(),
@@ -211,8 +257,12 @@ describe.skipIf(!HAVE_ARTIFACTS)("joinsplit circuit", () => {
       fee: 0n,
       extDataHash: 0x55n,
       mvkTag: [mvkTag(1n, out0.blinding), mvkTag(1n, out1.blinding)],
+      registeredMvkRoot: mvkT.root(),
+      mvkKeyMeta: [0n, 0n],
+      mvkPathElements: [mvkPp.pathElements, mvkPp.pathElements],
+      mvkPathIndices: [mvkPp.pathIndices, mvkPp.pathIndices],
       inAmount: [OOR, 0n],
-      inSpendSk: [2468n, 1357n],
+      inOrgSpendId: [2468n, 1357n],
       inBlinding: [inNote.blinding, 1n],
       inPathIndices: [path.pathIndices, 7n],
       inPathElements: [path.pathElements, new Array<bigint>(32).fill(0n)],
@@ -244,6 +294,9 @@ describe.skipIf(!HAVE_ARTIFACTS)("unshield circuit", () => {
       blinding: 33n,
       assetId: ASSET_ID,
     };
+    const mvkTree = new MerkleTreeMirror(16);
+    const mvkKeyMeta = 0n;
+    const mvkPath = mvkTree.path(mvkTree.insert(mvkRegistryLeaf(888n, mvkKeyMeta)));
     return {
       root: tree.root(),
       assetId: ASSET_ID,
@@ -253,8 +306,9 @@ describe.skipIf(!HAVE_ARTIFACTS)("unshield circuit", () => {
       extDataHash: 0x1234n,
       aspNonMembershipRoot: 0n, // empty deny-set
       changeMvkTag: mvkTag(888n, change.blinding),
+      registeredMvkRoot: mvkTree.root(),
       inAmount: inNote.amount,
-      inSpendSk: 5151n,
+      inOrgSpendId: 5151n,
       inBlinding: inNote.blinding,
       inPathIndices: path.pathIndices,
       inPathElements: path.pathElements,
@@ -262,6 +316,9 @@ describe.skipIf(!HAVE_ARTIFACTS)("unshield circuit", () => {
       changePubkey: change.recipientPk,
       changeBlinding: change.blinding,
       changeMvkPub: 888n,
+      mvkKeyMeta,
+      mvkPathElements: mvkPath.pathElements,
+      mvkPathIndices: mvkPath.pathIndices,
       smtSiblings: new Array<bigint>(16).fill(0n),
       smtOldKey: 0n,
       smtOldValue: 0n,
@@ -272,7 +329,7 @@ describe.skipIf(!HAVE_ARTIFACTS)("unshield circuit", () => {
   it("proves a withdraw with change + proof-of-innocence vs empty deny-set", async () => {
     const w = buildUnshieldWitness();
     const res = await prove(art("unshield"), toWitnessInput(w));
-    expect(res.sorobanPublics.length).toBe(8);
+    expect(res.sorobanPublics.length).toBe(9);
     expect(await verifyLocal(vk("unshield"), res.publicSignals, res.proof)).toBe(true);
   }, 120_000);
 
@@ -280,5 +337,71 @@ describe.skipIf(!HAVE_ARTIFACTS)("unshield circuit", () => {
     const w = buildUnshieldWitness();
     const bad = { ...w, publicAmount: w.publicAmount + 1n };
     await expect(prove(art("unshield"), toWitnessInput(bad))).rejects.toThrow();
+  }, 120_000);
+});
+
+describe.skipIf(!HAVE_ARTIFACTS)("proof_of_sum circuit (disclose-total)", () => {
+  // Three real notes summing to 6,000,000, owned by one spend identity, plus a
+  // padding slot — the ZK replacement for the old plaintext decrypt-and-sum.
+  function fixture() {
+    const tree = new MerkleTreeMirror(32);
+    const kp = deriveKeypair(13579n);
+    const amounts = [2_000_000n, 3_000_000n, 1_000_000n];
+    const blindings = [111n, 222n, 333n];
+    const notes = amounts.map((amount, i) => ({
+      amount,
+      recipientPk: kp.publicKey,
+      blinding: blindings[i],
+      assetId: ASSET_ID,
+    }));
+    // Insert ALL notes first, THEN read paths against the final tree (an early
+    // leaf's siblings change as later leaves are added).
+    const idxs = notes.map((n) => tree.insert(noteCommitment(n)));
+    const paths = idxs.map((idx) => tree.path(idx));
+    const ZERO_PATH = new Array<bigint>(32).fill(0n);
+    return {
+      tree,
+      orgSpendId: 13579n,
+      amount: [...amounts, 0n], // pad to nNotes=4
+      blinding: [...blindings, 0n],
+      pathIndices: [...paths.map((p) => p.pathIndices), 0n],
+      pathElements: [...paths.map((p) => p.pathElements), ZERO_PATH],
+    };
+  }
+
+  it("proves the exact total (6,000,000) and reveals only that figure", async () => {
+    const f = fixture();
+    const witness = {
+      root: f.tree.root(),
+      claimedTotal: 6_000_000n,
+      assetId: ASSET_ID,
+      context: 0xc0ffeen,
+      orgSpendId: f.orgSpendId,
+      amount: f.amount,
+      blinding: f.blinding,
+      pathIndices: f.pathIndices,
+      pathElements: f.pathElements,
+    };
+    const res = await prove(art("proof_of_sum"), toWitnessInput(witness));
+    expect(res.sorobanPublics.length).toBe(4);
+    // public order: [root, claimedTotal, assetId, context] — only the total is revealed.
+    expect(BigInt(res.publicSignals[1])).toBe(6_000_000n);
+    expect(await verifyLocal(vk("proof_of_sum"), res.publicSignals, res.proof)).toBe(true);
+  }, 120_000);
+
+  it("cannot lie about the sum (wrong claimedTotal does not prove)", async () => {
+    const f = fixture();
+    const bad = {
+      root: f.tree.root(),
+      claimedTotal: 5_000_000n, // real sum is 6,000,000
+      assetId: ASSET_ID,
+      context: 1n,
+      orgSpendId: f.orgSpendId,
+      amount: f.amount,
+      blinding: f.blinding,
+      pathIndices: f.pathIndices,
+      pathElements: f.pathElements,
+    };
+    await expect(prove(art("proof_of_sum"), toWitnessInput(bad))).rejects.toThrow();
   }, 120_000);
 });

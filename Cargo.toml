@@ -5,11 +5,17 @@ members = [
     "contracts/verifier_groth16",
     "contracts/merkle",
     "contracts/nullifier_set",
+    "contracts/identity_nullifier_set",
+    "contracts/mvk_registry",
+    "contracts/issuer_registry",
+    "contracts/org_account",
     "contracts/asp_membership",
     "contracts/asp_non_membership",
     "contracts/viewkey_anchor",
     "contracts/handle_registry",
     "contracts/request_registry",
+    "contracts/escrow",
+    "contracts/ramp",
     "contracts/pool",
     "circuits/poseidon_params/zkhash",
 ]
@@ -34,6 +40,9 @@ asp-membership = { path = "contracts/asp_membership" }
 asp-non-membership = { path = "contracts/asp_non_membership" }
 benzo-merkle = { path = "contracts/merkle" }
 benzo-nullifier-set = { path = "contracts/nullifier_set" }
+benzo-identity-nullifier-set = { path = "contracts/identity_nullifier_set" }
+benzo-mvk-registry = { path = "contracts/mvk_registry" }
+benzo-org-account = { path = "contracts/org_account" }
 benzo-pool = { path = "contracts/pool" }
 benzo-request-registry = { path = "contracts/request_registry" }
 benzo-verifier-groth16 = { path = "contracts/verifier_groth16" }

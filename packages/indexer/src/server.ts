@@ -5,10 +5,14 @@
  * for testnet/e2e the in-memory mirror is sufficient and fully real.
  *
  *   GET  /health
- *   GET  /commitments            -> [{leafIndex, commitment, mvkTag, txHash}]
- *   GET  /nullifier/:value       -> {spent: bool}
- *   POST /scan {viewingSecretHex} -> [{leafIndex, commitment, amount,...}]
- *   POST /audit {tvkSecretHex}   -> [{amount, recipientPk, ...}]
+ *   GET  /commitments            -> [{leafIndex, commitment, mvkTag, txHash}]  (PUBLIC; client scans on-device)
+ *   GET  /nullifier/:value       -> {spent: bool}                              (PUBLIC)
+ *   POST /scan {viewingSecretHex} -> [...]   DEV ONLY (BENZO_INSECURE_INDEXER=1) — server-side decrypt, breaks privacy
+ *   POST /audit {tvkSecretHex}   -> [...]    DEV ONLY (BENZO_INSECURE_INDEXER=1) — server-side decrypt, breaks privacy
+ *
+ * The PRIVATE path is GET /commitments + on-device scan (packages/core scanner.ts):
+ * the viewing key never leaves the device. /scan + /audit exist only as a local
+ * dev convenience and are disabled by default.
  */
 
 import { createServer } from "node:http";
@@ -29,7 +33,10 @@ async function resync() {
       indexer,
       RPC,
       [dep.pool, dep.viewkeyAnchor],
-      indexer.cursorLedger || (await latestLedger()) - 3000,
+      // Cold start scans from ledger 1 (full available history); if that has
+      // aged out of the RPC retention window, the scanner restarts from the
+      // oldest retained ledger. A durable cursor then resumes incrementally.
+      indexer.cursorLedger || 1,
     );
     if (n) console.log(`[indexer] ingested ${n} events; cursor=${indexer.cursorLedger}`);
   } catch (e) {
@@ -37,14 +44,6 @@ async function resync() {
   }
 }
 
-async function latestLedger(): Promise<number> {
-  const res = await fetch(RPC, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getLatestLedger" }),
-  });
-  return ((await res.json()) as { result: { sequence: number } }).result.sequence;
-}
 
 function json(res: import("node:http").ServerResponse, code: number, body: unknown) {
   res.writeHead(code, { "Content-Type": "application/json" });
@@ -75,6 +74,18 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && (url.pathname === "/scan" || url.pathname === "/audit")) {
+    // PRIVACY: these endpoints decrypt SERVER-SIDE with the caller's viewing/TVK
+    // SECRET — the opposite of Benzo's model (the scanner should see only opaque
+    // blobs; the client decrypts on-device). They exist only as a local dev/CLI
+    // convenience and are DISABLED unless BENZO_INSECURE_INDEXER=1. The private
+    // path is: pull public ciphertexts from GET /commitments and scan on-device
+    // (packages/core scanner.ts) so the secret never leaves the device.
+    if (process.env.BENZO_INSECURE_INDEXER !== "1") {
+      return json(res, 403, {
+        error:
+          "server-side scan disabled: this would require sending your viewing secret to the server, which breaks the privacy model. Scan on-device over GET /commitments instead. Set BENZO_INSECURE_INDEXER=1 ONLY for local dev.",
+      });
+    }
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
     const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
@@ -89,4 +100,9 @@ const server = createServer(async (req, res) => {
   json(res, 404, { error: "not found" });
 });
 
-server.listen(PORT, () => console.log(`[indexer] listening on :${PORT}, rpc=${RPC}`));
+server.listen(PORT, () => {
+  console.log(`[indexer] listening on :${PORT}, rpc=${RPC}`);
+  if (process.env.BENZO_INSECURE_INDEXER === "1") {
+    console.warn("[indexer] ⚠️  BENZO_INSECURE_INDEXER=1 — /scan and /audit accept SECRETS over HTTP (server-side decrypt). DEV ONLY; never expose this.");
+  }
+});

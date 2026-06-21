@@ -1,0 +1,43 @@
+# Benzo BFF (wallet-api or console-api) — the stateless server that holds the
+# funded operator/relayer key and submits proven writes on-chain. The browser
+# only ever sends (proof + public inputs), never the witness.
+#
+# Build:  docker build -f Dockerfile.bff --build-arg APP=wallet-api -t benzo-wallet-api .
+#         docker build -f Dockerfile.bff --build-arg APP=console-api -t benzo-console-api .
+# Run:    docker run -p 8791:8791 --env-file .env benzo-wallet-api
+#
+# It needs the `stellar` CLI (the SDK shells out to it for contract invoke/view),
+# plus the repo's deployments/ + circuits/ build artifacts (copied below).
+FROM node:20-bookworm-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tar \
+  && rm -rf /var/lib/apt/lists/*
+# Pin the Stellar CLI (the host functions / contract calls the BFF makes).
+ARG STELLAR_CLI_VERSION=22.0.0
+RUN curl -fsSL "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+    | tar -xz -C /usr/local/bin stellar || \
+  (echo "Pin a STELLAR_CLI_VERSION whose linux-gnu asset exists, or 'cargo install --locked stellar-cli'." && exit 1)
+RUN corepack enable
+
+FROM base AS build
+WORKDIR /repo
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY packages ./packages
+COPY apps ./apps
+RUN pnpm install --frozen-lockfile=false
+RUN pnpm --filter @benzo/core build
+ARG APP=wallet-api
+RUN pnpm --filter "@benzo/${APP}" build
+
+FROM base AS run
+ARG APP=wallet-api
+ENV NODE_ENV=production BENZO_ROOT=/repo
+WORKDIR /repo
+COPY --from=build /repo/node_modules ./node_modules
+COPY --from=build /repo/packages ./packages
+COPY --from=build /repo/apps ./apps
+# The on-chain deployment record + proving artifacts the BFF reads at runtime.
+COPY deployments ./deployments
+COPY circuits/build ./circuits/build
+# Secrets (DEPLOYER_SECRET, SOROBAN_RPC_URL, …) come from the runtime env, NEVER baked in.
+EXPOSE 8791 8790
+CMD ["sh", "-c", "node apps/${APP}/dist/server.js"]

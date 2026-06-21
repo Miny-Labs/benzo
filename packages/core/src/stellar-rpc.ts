@@ -18,18 +18,17 @@
  * headlessly against testnet.
  */
 
-import { toHex, fromHex } from "./crypto/bytes.js";
+import { toHex } from "./crypto/bytes.js";
 import {
   Account,
   BASE_FEE,
   Contract,
-  StrKey,
   TransactionBuilder,
-  nativeToScVal,
   rpc,
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
+import { scvalForWriteArg } from "./scval.js";
 import type { ChainClient, InvokeResult } from "./stellar.js";
 
 export interface StellarRpcOptions {
@@ -71,6 +70,39 @@ export class StellarRpcClient implements ChainClient {
     });
   }
 
+  private netChecked?: Promise<void>;
+
+  /**
+   * One-time guard: the RPC's network passphrase must match the one the client
+   * is configured for, else every read/write silently targets the wrong network
+   * (e.g. a wallet built for testnet pointed at futurenet). Memoized; a transient
+   * failure of the check itself is retried by the caller.
+   */
+  private async assertNetwork(): Promise<void> {
+    if (!this.netChecked) {
+      this.netChecked = (async () => {
+        const net = await this.server.getNetwork();
+        if (net.passphrase !== this.opts.networkPassphrase) {
+          throw new Error(
+            `network mismatch: RPC reports "${net.passphrase}" but client is configured for "${this.opts.networkPassphrase}"`,
+          );
+        }
+      })().catch((e) => {
+        this.netChecked = undefined; // allow a later retry if the check itself was transient
+        throw e;
+      });
+    }
+    return this.netChecked;
+  }
+
+  /** Heuristic: a transient network/RPC hiccup worth retrying (mirrors StellarCli). */
+  private isTransient(e: unknown): boolean {
+    const msg = String((e as { message?: string })?.message ?? e).toLowerCase();
+    return /timeout|timed out|etimedout|econnreset|econnrefused|enotfound|eai_again|connection|temporarily|gateway|deadline|fetch failed|network ?error|\b(429|502|503|504)\b/.test(
+      msg,
+    );
+  }
+
   async keyAddress(name: string): Promise<string> {
     return this.opts.addressFor(name);
   }
@@ -104,27 +136,48 @@ export class StellarRpcClient implements ChainClient {
     fnArgs: string[],
   ): Promise<InvokeResult> {
     const { method, scArgs } = this.buildCall(fnArgs);
-    const account = new Account(this.opts.addressFor(source), "0"); // sequence irrelevant for simulate
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.opts.networkPassphrase,
-    })
-      .addOperation(new Contract(contractId).call(method, ...scArgs))
-      .setTimeout(30)
-      .build();
-    const sim = await this.server.simulateTransaction(tx);
-    if (rpc.Api.isSimulationError(sim)) {
-      throw new Error(`simulate ${method}: ${sim.error}`);
+    // Bounded exponential-backoff retry on transient RPC errors (mirrors the
+    // Node StellarCli.runRead); a real simulation/contract error is surfaced
+    // immediately (never retried). Safe because simulate is read-only.
+    const attempts = 4;
+    let lastErr: unknown;
+    for (let i = 0; i < attempts; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 300 * 2 ** (i - 1)));
+      try {
+        await this.assertNetwork();
+        const account = new Account(this.opts.addressFor(source), "0"); // sequence irrelevant for simulate
+        const tx = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: this.opts.networkPassphrase,
+        })
+          .addOperation(new Contract(contractId).call(method, ...scArgs))
+          .setTimeout(30)
+          .build();
+        const sim = await this.server.simulateTransaction(tx);
+        if (rpc.Api.isSimulationError(sim)) {
+          // A simulation error is a real contract/account error, not a network
+          // hiccup — classify the common not-funded / missing-contract case so
+          // the caller gets an actionable message instead of a raw host trap.
+          const hint = /account not found|MissingValue|no such|trustline/i.test(sim.error)
+            ? " (is the source account funded, with a USDC trustline, on this network?)"
+            : "";
+          throw new Error(`simulate ${method}: ${sim.error}${hint}`);
+        }
+        const retval = sim.result?.retval;
+        const result = retval ? hexifyDeep(scValToNative(retval)) : null;
+        const raw =
+          result === null
+            ? ""
+            : typeof result === "object"
+              ? JSON.stringify(result, (_k, v) => (typeof v === "bigint" ? v.toString() : v))
+              : String(result);
+        return { result, raw };
+      } catch (e) {
+        lastErr = e;
+        if (!this.isTransient(e)) throw e; // a real (non-transient) error: surface it
+      }
     }
-    const retval = sim.result?.retval;
-    const result = retval ? hexifyDeep(scValToNative(retval)) : null;
-    const raw =
-      result === null
-        ? ""
-        : typeof result === "object"
-          ? JSON.stringify(result, (_k, v) => (typeof v === "bigint" ? v.toString() : v))
-          : String(result);
-    return { result, raw };
+    throw lastErr;
   }
 
   /** Parse ["method","--name","value",…] into a method + coerced ScVal args. */
@@ -134,41 +187,10 @@ export class StellarRpcClient implements ChainClient {
     for (let i = 1; i < fnArgs.length; i++) {
       const tok = fnArgs[i];
       if (!tok.startsWith("--")) continue;
-      scArgs.push(scvalForArg(tok.slice(2), fnArgs[++i]));
+      // scvalForWriteArg = the read table PLUS the Groth16 `--proof` struct, so
+      // the browser can call verify_proof (and build writes) client-side.
+      scArgs.push(scvalForWriteArg(tok.slice(2), fnArgs[++i]));
     }
     return { method, scArgs };
   }
-}
-
-/**
- * Type a CLI-style read arg into an ScVal by its NAME (the protocol uses a
- * consistent naming convention, and the SDK's on-chain spec fetch is broken for
- * our specs). Covers the full read surface; writes go through the relayer (which
- * types via the deployed spec), so this need not handle the proof struct.
- */
-function scvalForArg(name: string, value: string): xdr.ScVal {
-  // ciphertexts + public keys: Bytes (hex-encoded)
-  if (/(^|_)ct\d?$/.test(name) || name === "spend_pub" || name === "view_pub") {
-    return nativeToScVal(fromHex(value), { type: "bytes" });
-  }
-  // addresses (G…/C…)
-  if (["address", "from", "to", "owner", "payee", "relayer", "submitter"].includes(name)) {
-    return nativeToScVal(value, { type: "address" });
-  }
-  // signed token amounts: i128
-  if (["amount", "fee", "min_amount", "paid_amount"].includes(name)) {
-    return nativeToScVal(BigInt(value), { type: "i128" });
-  }
-  // unix timestamps: u64
-  if (name === "expiry") return nativeToScVal(BigInt(value), { type: "u64" });
-  // human strings
-  if (["handle", "reference", "memo"].includes(name)) {
-    return nativeToScVal(value, { type: "string" });
-  }
-  // default: field element (commitment / root / nullifier / tag / key / scalar) → U256
-  if (/^\d+$/.test(value)) return nativeToScVal(BigInt(value), { type: "u256" });
-  if (StrKey.isValidEd25519PublicKey(value) || StrKey.isValidContract(value)) {
-    return nativeToScVal(value, { type: "address" });
-  }
-  return nativeToScVal(value, { type: "string" });
 }

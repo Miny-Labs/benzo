@@ -29,11 +29,22 @@ describe("verifier-parity oracle: snarkjs → Soroban encoding", () => {
     });
   }
 
-  it("trivial proof encodes to the exact Soroban byte shape", () => {
-    const s = proofToSoroban(read("circuits/build/trivial/proof.json"));
+  it("a proof encodes to the exact Soroban byte shape", () => {
+    // Synthetic-but-well-formed Groth16 proof (affine points: G1 z=1, G2 z=[1,0]).
+    // Self-contained on purpose — no longer depends on the cut "trivial" circuit's
+    // build artifacts; it exercises the same proofToSoroban byte-shape encoding.
+    const proof = {
+      pi_a: ["1", "2", "1"],
+      pi_b: [["1", "2"], ["3", "4"], ["1", "0"]],
+      pi_c: ["5", "6", "1"],
+      protocol: "groth16",
+      curve: "bn128",
+    };
+    const s = proofToSoroban(proof as never);
     expect(s.a).toHaveLength(128);
     expect(s.b).toHaveLength(256);
     expect(s.c).toHaveLength(128);
+    for (const h of [s.a, s.b, s.c]) expect(h).toMatch(/^[0-9a-f]+$/);
   });
 
   it("public inputs are decimal U256 (Bn254Fr CLI form)", () => {

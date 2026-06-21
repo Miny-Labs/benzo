@@ -16,7 +16,7 @@
 import { toHex, fromHex } from "./crypto/bytes.js";
 import { xdr, scValToNative } from "@stellar/stellar-sdk";
 import { MerkleTreeMirror } from "./merkle.js";
-import { noteCommitment, noteNullifier } from "./notes.js";
+import { noteCommitment, noteNullifier, orgNullifier } from "./notes.js";
 import { decodeNotePlain, open, type NotePlain } from "./viewkeys.js";
 
 export interface CommitmentRecord {
@@ -223,6 +223,25 @@ export class NoteScanner {
     );
   }
 
+  /**
+   * ORG-treasury notes: those owned by an M-of-N member set (recipientPk ==
+   * orgRecipientPk) that the org's viewing key can decrypt and that are not yet
+   * spent via the org nullifier (keyed by akGroup + blinding, not a single
+   * spendSk). This is how the console rediscovers its dual-controlled treasury
+   * from chain — no backend storage; the org MVK + akGroup are sufficient.
+   */
+  orgSpendable(
+    viewingSecret: Uint8Array,
+    orgRecipientPk: bigint,
+    akGroup: bigint,
+  ): DiscoveredNote[] {
+    return this.scan(viewingSecret)
+      .filter((n) => n.plain.recipientPk === orgRecipientPk)
+      .filter(
+        (n) => !this.isSpent(orgNullifier(akGroup, n.plain.blinding, BigInt(n.leafIndex))),
+      );
+  }
+
   /** Auditor disclosure: decrypt MVK-scope ciphertexts with a scoped TVK. */
   auditorScan(tvkSecret: Uint8Array): NotePlain[] {
     const out: NotePlain[] = [];
@@ -315,12 +334,26 @@ export async function collectEvents(
   let page = json.result!;
   const latest = page.latestLedger;
   all.push(...page.events);
-  for (let guard = 0; guard < 64; guard++) {
-    if (!page.cursor || cursorLedger(page.cursor) >= latest) break;
+  let drained = !page.cursor || cursorLedger(page.cursor) >= latest;
+  // 1024 pages × 10k = a 10M-event backstop (far beyond testnet), not a
+  // functional cap. If it is ever hit before draining, we throw rather than
+  // silently truncate (see below).
+  for (let guard = 0; guard < 1024 && !drained; guard++) {
     const next = await post({ filters, pagination: { cursor: page.cursor, limit: 10000 } });
-    if (next.error) break;
+    // A mid-pagination error must NOT be swallowed: returning the partial set
+    // as if the sync succeeded would let the caller advance the durable cursor
+    // past the gap and permanently skip the un-fetched commitments/nullifiers
+    // (a missed note, or a spent note shown as spendable). Fail loudly so the
+    // caller does not persist an incomplete sync.
+    if (next.error) throw new Error(`getEvents (pagination): ${next.error.message}`);
     page = next.result!;
     all.push(...page.events);
+    drained = !page.cursor || cursorLedger(page.cursor) >= latest;
+  }
+  if (!drained) {
+    throw new Error(
+      "getEvents: pagination exceeded the page budget before reaching latestLedger (incomplete sync)",
+    );
   }
   return all;
 }
@@ -388,4 +421,33 @@ export async function fetchAspLeavesSince(
     leaves.push(leaf);
   }
   return { leaves, cursor };
+}
+
+/**
+ * Reconstruct the ordered authorized-MVK registry leaves from on-chain
+ * `MvkRegistered` events — the raw leaf values, indexed by the event's `index`,
+ * so `MvkRegistryMirror.syncLeaves(...)` can resume a registry that already
+ * holds entries (e.g. a second e2e flow appending to the same deployment).
+ */
+export async function fetchMvkRegistryLeaves(
+  rpcUrl: string,
+  registryContractId: string,
+  startLedger: number,
+): Promise<bigint[]> {
+  const events = await collectEvents(rpcUrl, [registryContractId], startLedger);
+  const byIndex = new Map<number, bigint>();
+  for (const ev of events) {
+    const name = scValToNative(xdr.ScVal.fromXDR(ev.topic[0], "base64"));
+    if (name !== "MvkRegistered") continue;
+    const v = scValToNative(xdr.ScVal.fromXDR(ev.value, "base64")) as Record<string, unknown>;
+    byIndex.set(Number(v.index), toBig(v.leaf));
+  }
+  const max = byIndex.size === 0 ? -1 : Math.max(...byIndex.keys());
+  const leaves: bigint[] = [];
+  for (let i = 0; i <= max; i++) {
+    const leaf = byIndex.get(i);
+    if (leaf === undefined) throw new Error(`MVK registry leaf index ${i} missing from events`);
+    leaves.push(leaf);
+  }
+  return leaves;
 }

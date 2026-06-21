@@ -1,0 +1,9 @@
+# Ephemeral CVM for the TEE-attested phase-2 ceremony (joinsplit_org). Delete after.
+services:
+  benzo-ceremony:
+    image: ghcr.io/akash-mondal/benzo-prover:v4
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    restart: unless-stopped
