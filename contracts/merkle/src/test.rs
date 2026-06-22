@@ -222,3 +222,66 @@ fn duplicate_leaf_rejected() {
     // A distinct leaf still inserts at the next index.
     assert_eq!(client.insert_leaf(&U256::from_u32(&env, 778)), 1u32);
 }
+
+#[test]
+fn insert_leaves_matches_sequential_inserts() {
+    // Correctness ORACLE for the subtree-merge: batch root + next_index must
+    // EXACTLY equal N single inserts, after every chunk. Not a cost test — a
+    // depth-32 batch's Poseidon hashing exceeds the mainnet per-tx limit (the
+    // hash count is the second half of the cap; storage I/O is the first).
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().disable_resource_limits();
+    env.cost_estimate().budget().reset_unlimited();
+    let admin = Address::generate(&env);
+    let op = Address::generate(&env);
+    let batch_id = env.register(BenzoMerkleTree, (admin.clone(), 32u32));
+    let batch = BenzoMerkleTreeClient::new(&env, &batch_id);
+    batch.set_operator(&op);
+    let seq_id = env.register(BenzoMerkleTree, (admin, 32u32));
+    let seq = BenzoMerkleTreeClient::new(&env, &seq_id);
+    seq.set_operator(&op);
+
+    // Chunk sizes exercise many start-index alignments (odd/even start, N=1, 2,
+    // odd, power-of-2) — the frontier-boundary handling depends on next_index
+    // parity, so this catches off-by-one bugs in the merge. Starts hit by these
+    // chunks: 0, 1, 2, 4, 7, 11, 12, 17.
+    let chunks: [u32; 8] = [1, 1, 2, 3, 4, 1, 5, 8];
+    let mut val: u32 = 1;
+    for &c in chunks.iter() {
+        let mut leaves: soroban_sdk::Vec<U256> = soroban_sdk::Vec::new(&env);
+        for _ in 0..c {
+            leaves.push_back(U256::from_u32(&env, val));
+            seq.insert_leaf(&U256::from_u32(&env, val));
+            val += 1;
+        }
+        let indices = batch.insert_leaves(&leaves);
+        assert_eq!(indices.len(), c, "returns one index per leaf");
+        // After each chunk the two trees must agree EXACTLY.
+        assert_eq!(batch.next_index(), seq.next_index(), "next_index after chunk");
+        assert_eq!(batch.current_root(), seq.current_root(), "root after chunk");
+    }
+    assert!(seq.is_known_root(&batch.current_root()));
+}
+
+#[test]
+fn insert_leaves_rejects_intra_batch_duplicate() {
+    // A commitment repeated within one batch must be rejected (it can't take two
+    // leaf slots), and nothing is committed.
+    let (env, _op, _id, client) = setup(8);
+    let mut leaves: soroban_sdk::Vec<U256> = soroban_sdk::Vec::new(&env);
+    leaves.push_back(U256::from_u32(&env, 5));
+    leaves.push_back(U256::from_u32(&env, 6));
+    leaves.push_back(U256::from_u32(&env, 5)); // dup of the first
+    let res = client.try_insert_leaves(&leaves);
+    assert_eq!(res, Err(Ok(Error::DuplicateLeaf)));
+}
+
+#[test]
+fn insert_leaves_requires_operator_auth() {
+    let (env, _op, _id, client) = setup(8);
+    env.mock_auths(&[]);
+    let mut leaves: soroban_sdk::Vec<U256> = soroban_sdk::Vec::new(&env);
+    leaves.push_back(U256::from_u32(&env, 1));
+    assert!(client.try_insert_leaves(&leaves).is_err());
+}

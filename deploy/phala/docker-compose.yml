@@ -1,0 +1,13 @@
+# Benzo confidential prover/issuer enclave (Phala dstack / Intel TDX).
+# Runs the REAL in-enclave Groth16 prover (services/prover-enclave): it generates
+# proofs inside the TEE and serves TDX attestation quotes via the mounted dstack
+# guest-agent socket, so a client attests the enclave (dcap-qvl) and seals the
+# witness to the attested X25519 key BEFORE any witness is transmitted.
+services:
+  benzo-enclave:
+    image: ghcr.io/akash-mondal/benzo-prover:v4
+    ports:
+      - "8080:8080" # HOST:CONTAINER -> https://<app-id>-8080.<node>.phala.network
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    restart: unless-stopped

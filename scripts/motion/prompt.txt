@@ -1,0 +1,17 @@
+Create a 60-second launch film for Benzo — private money businesses can finally use. Premium, calm, confident; NOT crypto-styled. This is designed motion graphics with real-app UI, cinematic but restrained — not generative AI b-roll.
+
+LOOK & FEEL (follow exactly): light theme — warm off-white canvas (#FBFAF7) with deep navy ink (#232A38). Exactly ONE saturated hero color: a vivid violet (#7A4DEF) that means "private / shielded" — use it ONLY at the privacy moment (a value hiding, a payment going private), never sprayed around. Emerald (#34B083) only for "settled / compliant." Headlines in a clean bold grotesk (Helvetica Now Display / Hanken Grotesk); body in Hanken Grotesk. Generous rounded cards. THE SIGNATURE MOTION: information appears fully readable, then REDACTS — digits and names dissolve into soft violet dots. Privacy shown as motion. Reuse this redaction as the through-line of the whole film. The Benzo mark is an angular geometric monogram that reads as both motion and a shield; it settles in with a soft spring.
+
+Beat 1 — Cold open (the leak): a company's money opens like a public billboard — salaries, suppliers, deals, all readable; competitors and staff lean in and stare. Voiceover: "Every company wants money that moves like the internet — instant, global, gone in a second. It's here. They call it stablecoins, and the biggest names in payments are racing to it. There's just one problem: it's completely public."
+
+Beat 2 — The trap: the fast new rail races ahead while a finance lead's hand is stuck covering the exposed board. Voiceover: "Every salary, every supplier, every deal — out in the open. So the businesses who'd gain the most can't touch it."
+
+Beat 3 — The turn: the board calms to dark; a clean payment leaves and its amount and name redact into violet dots; the violet Benzo mark settles in with a soft spring. Voiceover: "Benzo is the missing layer. The same instant money — your amounts and your relationships stay yours."
+
+Beat 4 — How it works (credibility, plain words): a quiet caption-and-voice beat. A single value resolves from violet dots back to crisp ink for one authorized "auditor" figure, then re-shields. Voiceover: "Built on Stellar, with zero-knowledge proofs — math that lets you confirm something is true without revealing what's behind it. So it's private, and compliant. Your finance team stays in control, and you're never the one explaining yourself to a regulator."
+
+Beat 5 — Range: warm cuts — friends split a tab privately; a business pays its team, each salary shielded from the next. Voiceover: "Private for business. Private for people."
+
+Beat 6 — Close: shielded payments flow quietly across the world; the violet mark holds. Voiceover: "The money the internet was waiting for. Private enough for business. Simple enough for everyone. Benzo."
+
+Forbidden: neon, glowing cubes, hexagons, chains, coins, candlestick or price charts, stock hacker / server-room footage, fake dashboards, dark-mode-with-cyan crypto clichés.

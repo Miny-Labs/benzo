@@ -19,6 +19,9 @@ use soroban_sdk::{
 };
 use soroban_utils::{get_zeroes, poseidon2_compress};
 
+soroban_sdk::contractmeta!(key = "binver", val = "0.1.0");
+soroban_sdk::contractmeta!(key = "name", val = "benzo-merkle");
+
 /// Number of recent roots accepted on spend (canonical ROOT_HISTORY = 128).
 pub const ROOT_HISTORY_SIZE: u32 = 128;
 
@@ -206,6 +209,184 @@ impl BenzoMerkleTree {
         .publish(&env);
 
         Ok(next_index)
+    }
+
+    /// Insert MANY leaves in one call; returns their indices in order.
+    /// Operator-only. The batch unlock for `pool::batch_transfer_org`.
+    ///
+    /// Produces the EXACT same final root + frontier as calling `insert_leaf` N
+    /// times (proven by `insert_leaves_matches_sequential_inserts`), but is two
+    /// optimisations cheaper:
+    ///  1. STORAGE: reads the right-frontier into memory once and writes it back
+    ///     once, and adds only the FINAL root to the ring buffer — footprint
+    ///     O(depth + N) instead of O(depth * N).
+    ///  2. HASHING: a subtree-merge (combine new leaves into subtrees, hash each
+    ///     internal node once) costs ~(N + depth) Poseidon hashes instead of
+    ///     N * depth — the dominant CPU cost for a multi-leaf insert.
+    /// Skipping the intermediate roots is sound: a batch is atomic, so only the
+    /// pre-batch root (already known) and the post-batch root are ever referenced
+    /// by a spend proof. Per-leaf events carry the exact index and the post-batch
+    /// root. Duplicate leaves (pre-existing or repeated within the batch) are
+    /// rejected before any state changes.
+    pub fn insert_leaves(env: Env, leaves: Vec<U256>) -> Result<Vec<u32>, Error> {
+        let operator: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Operator)
+            .ok_or(Error::NotInitialized)?;
+        operator.require_auth();
+
+        let n = leaves.len();
+        if n == 0 {
+            return Ok(Vec::new(&env));
+        }
+        let storage = env.storage().persistent();
+        let levels: u32 = storage
+            .get(&DataKey::Levels)
+            .ok_or(Error::NotInitialized)?;
+        let start_index: u32 = storage
+            .get(&DataKey::NextIndex)
+            .ok_or(Error::NotInitialized)?;
+
+        let max_leaves = 1u64.checked_shl(levels).ok_or(Error::WrongLevels)?;
+        if u64::from(start_index)
+            .checked_add(u64::from(n))
+            .ok_or(Error::Overflow)?
+            > max_leaves
+        {
+            return Err(Error::MerkleTreeFull);
+        }
+
+        // Reject duplicates (pre-existing OR repeated within this batch), mark
+        // each leaf present, and collect the level-0 node list.
+        let mut nodes: Vec<U256> = Vec::new(&env);
+        for k in 0..n {
+            let leaf = leaves.get(k).ok_or(Error::NotInitialized)?;
+            if storage.has(&DataKey::Leaf(leaf.clone())) {
+                return Err(Error::DuplicateLeaf);
+            }
+            storage.set(&DataKey::Leaf(leaf.clone()), &true);
+            nodes.push_back(leaf);
+        }
+
+        // Cache the right-frontier + zero hashes in memory (read each once).
+        let zeros: Vec<U256> = get_zeroes(&env);
+        let mut filled: Vec<U256> = Vec::new(&env);
+        for lvl in 0..levels {
+            filled.push_back(
+                storage
+                    .get(&DataKey::FilledSubtree(lvl))
+                    .ok_or(Error::NotInitialized)?,
+            );
+        }
+
+        // Subtree-merge batch append. Instead of recomputing each leaf's full
+        // root-path (N * depth Poseidon hashes), combine the new leaves into
+        // subtrees level by level, computing each distinct internal node ONCE —
+        // ~(N + depth) hashes. `nodes` holds the new node values at the current
+        // level; `first` is the position of `nodes[0]` at that level. At each
+        // level a leading right child pairs with the existing frontier, interior
+        // nodes pair off, and a lone trailing left child pairs with the zero
+        // subtree (the spine). The frontier `filled[lvl]` is set to the value at
+        // the largest even position among the new nodes — exactly what N
+        // sequential inserts leave behind (proven by the equivalence test).
+        let mut first = start_index;
+        for lvl in 0..levels {
+            let zero = zeros.get(lvl).ok_or(Error::WrongLevels)?;
+            let len = nodes.len();
+            let last_pos = first
+                .checked_add(len)
+                .ok_or(Error::Overflow)?
+                .checked_sub(1)
+                .ok_or(Error::Overflow)?;
+            let q = last_pos & !1u32; // largest even position <= last_pos
+            // Pre-batch left sibling at this level — read BEFORE the update below.
+            let old_filled = filled.get(lvl).ok_or(Error::NotInitialized)?;
+
+            let mut parents: Vec<U256> = Vec::new(&env);
+            let mut i: u32 = 0;
+            if first & 1 == 1 {
+                // Leading right child pairs with the existing frontier left sibling.
+                parents.push_back(poseidon2_compress(
+                    &env,
+                    old_filled.clone(),
+                    nodes.get(0).ok_or(Error::NotInitialized)?,
+                ));
+                i = 1;
+            }
+            while i < len {
+                if i == len - 1 {
+                    // Lone trailing left child: pair with the empty (zero) subtree.
+                    parents.push_back(poseidon2_compress(
+                        &env,
+                        nodes.get(i).ok_or(Error::NotInitialized)?,
+                        zero.clone(),
+                    ));
+                    i = i.checked_add(1).ok_or(Error::Overflow)?;
+                } else {
+                    parents.push_back(poseidon2_compress(
+                        &env,
+                        nodes.get(i).ok_or(Error::NotInitialized)?,
+                        nodes
+                            .get(i.checked_add(1).ok_or(Error::Overflow)?)
+                            .ok_or(Error::NotInitialized)?,
+                    ));
+                    i = i.checked_add(2).ok_or(Error::Overflow)?;
+                }
+            }
+
+            // New frontier = value at the largest even position among the new
+            // nodes, if any (q >= first); otherwise unchanged.
+            if q >= first {
+                filled.set(lvl, nodes.get(q - first).ok_or(Error::NotInitialized)?);
+            }
+
+            first >>= 1;
+            nodes = parents;
+        }
+
+        // After `levels` rounds the spine has collapsed to the single new root.
+        let last_root: U256 = nodes.get(0).ok_or(Error::NotInitialized)?;
+
+        // Per-leaf events + index list. The index is exact; the event root is the
+        // post-batch root (a batch is atomic, so no intermediate root is ever
+        // observable on-chain).
+        let mut indices: Vec<u32> = Vec::new(&env);
+        for k in 0..n {
+            let leaf_index = start_index.checked_add(k).ok_or(Error::Overflow)?;
+            indices.push_back(leaf_index);
+            LeafInsertedEvent {
+                leaf: leaves.get(k).ok_or(Error::NotInitialized)?,
+                index: leaf_index,
+                root: last_root.clone(),
+            }
+            .publish(&env);
+        }
+
+        // Flush the frontier once.
+        for lvl in 0..levels {
+            storage.set(
+                &DataKey::FilledSubtree(lvl),
+                &filled.get(lvl).ok_or(Error::NotInitialized)?,
+            );
+        }
+        // Add ONLY the final root to the ring buffer (one churn, not N).
+        let root_index: u32 = storage
+            .get(&DataKey::CurrentRootIndex)
+            .ok_or(Error::NotInitialized)?;
+        let new_root_index = root_index.checked_add(1).ok_or(Error::Overflow)? % ROOT_HISTORY_SIZE;
+        if let Some(evicted) = storage.get::<DataKey, U256>(&DataKey::Root(new_root_index)) {
+            storage.remove(&DataKey::KnownRoot(evicted));
+        }
+        storage.set(&DataKey::Root(new_root_index), &last_root);
+        storage.set(&DataKey::KnownRoot(last_root.clone()), &true);
+        storage.set(&DataKey::CurrentRootIndex, &new_root_index);
+        storage.set(
+            &DataKey::NextIndex,
+            &start_index.checked_add(n).ok_or(Error::Overflow)?,
+        );
+
+        Ok(indices)
     }
 
     /// Current (most recent) Merkle root.

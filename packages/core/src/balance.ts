@@ -85,7 +85,66 @@ export async function proveBalance(params: ProveBalanceParams): Promise<ProveRes
     threshold: params.threshold,
     assetId: params.assetId,
     context: params.context ?? 0n,
-    spendSk: params.spendSk,
+    orgSpendId: params.spendSk,
+    amount,
+    blinding,
+    pathIndices,
+    pathElements,
+  });
+  return params.prover.prove(params.artifacts, witness);
+}
+
+export interface ProveBalanceOrgParams {
+  prover: ProverPort;
+  artifacts: CircuitArtifacts; // proof_of_balance_org wasm + zkey
+  orgMemberRoot: bigint;
+  orgThreshold: bigint; // the org's M (NOT the balance floor)
+  akGroup: bigint;
+  assetId: bigint;
+  minTotal: bigint; // the floor being proven (run total / covenant / liabilities)
+  root: bigint;
+  tree: MerkleTreeMirror;
+  notes: BalanceNote[]; // owned ORG notes (≤ MAX_BALANCE_NOTES) summing ≥ minTotal
+  context?: bigint;
+}
+
+/**
+ * ORG proof-of-balance: prove the M-of-N treasury (owner = orgRecipientPk) holds
+ * AT LEAST `minTotal`, revealing nothing else. Powers "Payroll funded ✓"
+ * (minTotal = run total), reserves-to-lender (covenant), and true solvency
+ * (minTotal = Σ liabilities).
+ */
+export async function proveBalanceOrg(params: ProveBalanceOrgParams): Promise<ProveResult> {
+  if (params.notes.length > MAX_BALANCE_NOTES) {
+    throw new Error(`org proof-of-balance supports at most ${MAX_BALANCE_NOTES} notes`);
+  }
+  const amount: bigint[] = [];
+  const blinding: bigint[] = [];
+  const pathIndices: bigint[] = [];
+  const pathElements: bigint[][] = [];
+  for (let i = 0; i < MAX_BALANCE_NOTES; i++) {
+    const n = params.notes[i];
+    if (n) {
+      const path = params.tree.path(n.leafIndex);
+      amount.push(n.amount);
+      blinding.push(n.blinding);
+      pathIndices.push(path.pathIndices);
+      pathElements.push(path.pathElements);
+    } else {
+      amount.push(0n);
+      blinding.push(0n);
+      pathIndices.push(0n);
+      pathElements.push(new Array<bigint>(params.tree.levels).fill(0n));
+    }
+  }
+  const witness = toWitnessInput({
+    root: params.root,
+    minTotal: params.minTotal,
+    assetId: params.assetId,
+    context: params.context ?? 0n,
+    orgMemberRoot: params.orgMemberRoot,
+    orgThreshold: params.orgThreshold,
+    akGroup: params.akGroup,
     amount,
     blinding,
     pathIndices,

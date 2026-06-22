@@ -1,6 +1,6 @@
 //! Benzo pool contract implementation.
 
-use contract_types::{Groth16Error, Groth16Proof};
+use contract_types::Groth16Proof;
 use soroban_sdk::{
     Address, Bytes, BytesN, Env, Symbol, U256, Vec, contract, contractclient, contracterror,
     contractevent, contractimpl, contracttype, crypto::bn254::Bn254Fr, symbol_short,
@@ -14,6 +14,11 @@ pub const VK_SHIELD: Symbol = symbol_short!("SHIELD");
 pub const VK_TRANSFER: Symbol = symbol_short!("TRANSFER");
 /// vk_id for the UNSHIELD (withdraw + proof-of-innocence) circuit.
 pub const VK_UNSHIELD: Symbol = symbol_short!("UNSHIELD");
+/// vk_id for the ORG join-split (in-circuit M-of-N dual-control) circuit. An org
+/// note (recipientPk = orgRecipientPk) can ONLY be spent through `transfer_org`,
+/// whose proof (JSPLITORG) enforces >= threshold member signatures in-circuit —
+/// so org funds cannot move on a single key. Same 11 public inputs as TRANSFER.
+pub const VK_JSPLITORG: Symbol = symbol_short!("JSPLITORG");
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -44,6 +49,36 @@ pub enum Error {
     Overflow = 11,
     /// Withdrawal would exceed the net shielded supply (turnstile backstop).
     InsufficientPoolSupply = 12,
+    /// registered_mvk_root is not a known root of the authorized-MVK registry
+    WrongMvkRoot = 13,
+    /// A batch settlement was submitted with no items
+    EmptyBatch = 14,
+    /// Two items in one batch reuse the same input nullifier (intra-batch
+    /// double-spend) — rejected before any state is applied
+    DuplicateInBatch = 15,
+}
+
+/// One org join-split inside a batched payroll run. Carries exactly the per-spend
+/// fields of `transfer_org` (minus the shared `submitter`). A `Vec<OrgSpend>` is
+/// settled by `batch_transfer_org` with ONE combined verification.
+#[contracttype]
+#[derive(Clone)]
+pub struct OrgSpend {
+    pub root: U256,
+    pub nullifier0: U256,
+    pub nullifier1: U256,
+    pub out_commitment0: U256,
+    pub out_commitment1: U256,
+    pub fee: i128,
+    pub relayer: Address,
+    pub mvk_tag0: U256,
+    pub mvk_tag1: U256,
+    pub note_ct0: Bytes,
+    pub note_ct1: Bytes,
+    pub mvk_ct0: Bytes,
+    pub mvk_ct1: Bytes,
+    pub registered_mvk_root: U256,
+    pub proof: Groth16Proof,
 }
 
 /// Storage keys for pool persistent state.
@@ -64,6 +99,9 @@ pub(crate) enum DataKey {
     IsPaused,
     /// Net shielded supply (Σ deposits − Σ withdrawals) — the turnstile backstop.
     TotalShielded,
+    /// Authorized-MVK registry (a merkle instance); when set, shield/transfer/
+    /// withdraw require registered_mvk_root to be one of its known roots.
+    MvkRegistry,
 }
 
 // ---- cross-contract clients ----
@@ -75,12 +113,19 @@ pub trait VerifierInterface {
         vk_id: Symbol,
         proof: Groth16Proof,
         public_inputs: Vec<Bn254Fr>,
-    ) -> Result<bool, Groth16Error>;
+    ) -> Result<bool, soroban_sdk::Error>;
+    fn verify_batch(
+        env: Env,
+        vk_id: Symbol,
+        proofs: Vec<Groth16Proof>,
+        pub_inputs: Vec<Vec<Bn254Fr>>,
+    ) -> Result<bool, soroban_sdk::Error>;
 }
 
 #[contractclient(crate_path = "soroban_sdk", name = "MerkleClient")]
 pub trait MerkleInterface {
     fn insert_leaf(env: Env, leaf: U256) -> Result<u32, soroban_sdk::Error>;
+    fn insert_leaves(env: Env, leaves: Vec<U256>) -> Result<Vec<u32>, soroban_sdk::Error>;
     fn is_known_root(env: Env, root: U256) -> Result<bool, soroban_sdk::Error>;
     fn current_root(env: Env) -> Result<U256, soroban_sdk::Error>;
 }
@@ -220,6 +265,7 @@ impl BenzoPool {
         note_ct: Bytes,
         mvk_ct: Bytes,
         asp_membership_root: U256,
+        registered_mvk_root: U256,
         proof: Groth16Proof,
     ) -> Result<u32, Error> {
         from.require_auth();
@@ -253,6 +299,8 @@ impl BenzoPool {
         Self::push_input(&env, &mut public_inputs, &depositor, &modulus)?;
         Self::push_input(&env, &mut public_inputs, &asp_membership_root, &modulus)?;
         Self::push_input(&env, &mut public_inputs, &mvk_tag, &modulus)?;
+        Self::check_mvk_root(&env, &registered_mvk_root)?;
+        Self::push_input(&env, &mut public_inputs, &registered_mvk_root, &modulus)?;
 
         Self::verify(&env, VK_SHIELD, &proof, &public_inputs)?;
 
@@ -325,6 +373,7 @@ impl BenzoPool {
         note_ct1: Bytes,
         mvk_ct0: Bytes,
         mvk_ct1: Bytes,
+        registered_mvk_root: U256,
         proof: Groth16Proof,
     ) -> Result<(), Error> {
         submitter.require_auth();
@@ -376,6 +425,8 @@ impl BenzoPool {
         Self::push_input(&env, &mut public_inputs, &ext_hash, &modulus)?;
         Self::push_input(&env, &mut public_inputs, &mvk_tag0, &modulus)?;
         Self::push_input(&env, &mut public_inputs, &mvk_tag1, &modulus)?;
+        Self::check_mvk_root(&env, &registered_mvk_root)?;
+        Self::push_input(&env, &mut public_inputs, &registered_mvk_root, &modulus)?;
 
         Self::verify(&env, VK_TRANSFER, &proof, &public_inputs)?;
 
@@ -428,6 +479,298 @@ impl BenzoPool {
         Ok(())
     }
 
+    // ===================================================== transfer_org ====
+
+    /// Org join-split with IN-CIRCUIT M-of-N dual-control. Identical to `transfer`
+    /// (same 11 public inputs, same nullifier/root/ext-hash/turnstile bookkeeping)
+    /// EXCEPT it verifies the JSPLITORG verification key instead of TRANSFER. The
+    /// JSPLITORG circuit forces >= threshold distinct member EdDSA signatures for an
+    /// org input, with the org's member-set root + threshold bound into the spent
+    /// note's `recipientPk` (org domain 0x09). Consequences enforced ON-CHAIN here:
+    ///   • an org note can ONLY settle through this entry (a consumer `transfer`
+    ///     proof can't satisfy an org-recipientPk note — cross-domain preimage),
+    ///   • and this entry only accepts a proof that carried M-of-N approval.
+    /// So org funds cannot move on a single key — dual-control is enforced by the
+    /// verifier inside the pool, not by an off-chain checker.
+    #[allow(clippy::too_many_arguments)]
+    pub fn transfer_org(
+        env: Env,
+        submitter: Address,
+        root: U256,
+        nullifier0: U256,
+        nullifier1: U256,
+        out_commitment0: U256,
+        out_commitment1: U256,
+        fee: i128,
+        relayer: Address,
+        mvk_tag0: U256,
+        mvk_tag1: U256,
+        note_ct0: Bytes,
+        note_ct1: Bytes,
+        mvk_ct0: Bytes,
+        mvk_ct1: Bytes,
+        registered_mvk_root: U256,
+        proof: Groth16Proof,
+    ) -> Result<(), Error> {
+        submitter.require_auth();
+        Self::require_not_paused(&env)?;
+
+        if fee < 0 {
+            return Err(Error::WrongAmount);
+        }
+
+        let merkle_addr: Address = Self::get(&env, &DataKey::MerkleTree)?;
+        let merkle = MerkleClient::new(&env, &merkle_addr);
+        if !merkle.is_known_root(&root) {
+            return Err(Error::UnknownRoot);
+        }
+
+        // Idempotent replay rule (Umbra): full replay converges to success
+        // with no state change; partial replay is rejected.
+        let ns_addr: Address = Self::get(&env, &DataKey::NullifierSet)?;
+        let ns = NullifierSetClient::new(&env, &ns_addr);
+        let spent0 = ns.is_spent(&nullifier0);
+        let spent1 = ns.is_spent(&nullifier1);
+        if spent0 && spent1 {
+            return Ok(());
+        }
+        if spent0 || spent1 {
+            return Err(Error::PartialReplay);
+        }
+
+        // Bind relayer + ciphertexts into the proof via the ext-data hash.
+        let ext_hash = Self::hash_transfer_ext(
+            &env, &relayer, fee, &note_ct0, &note_ct1, &mvk_ct0, &mvk_ct1,
+        );
+
+        let modulus = bn256_modulus(&env);
+        let asset_id: U256 = Self::get(&env, &DataKey::AssetId)?;
+        let mut public_inputs: Vec<Bn254Fr> = Vec::new(&env);
+        Self::push_input(&env, &mut public_inputs, &root, &modulus)?;
+        Self::push_input(&env, &mut public_inputs, &asset_id, &modulus)?;
+        Self::push_input(&env, &mut public_inputs, &nullifier0, &modulus)?;
+        Self::push_input(&env, &mut public_inputs, &nullifier1, &modulus)?;
+        Self::push_input(&env, &mut public_inputs, &out_commitment0, &modulus)?;
+        Self::push_input(&env, &mut public_inputs, &out_commitment1, &modulus)?;
+        Self::push_input(
+            &env,
+            &mut public_inputs,
+            &Self::i128_to_u256(&env, fee)?,
+            &modulus,
+        )?;
+        Self::push_input(&env, &mut public_inputs, &ext_hash, &modulus)?;
+        Self::push_input(&env, &mut public_inputs, &mvk_tag0, &modulus)?;
+        Self::push_input(&env, &mut public_inputs, &mvk_tag1, &modulus)?;
+        Self::check_mvk_root(&env, &registered_mvk_root)?;
+        Self::push_input(&env, &mut public_inputs, &registered_mvk_root, &modulus)?;
+
+        // The ONLY difference from `transfer`: the org M-of-N verification key.
+        Self::verify(&env, VK_JSPLITORG, &proof, &public_inputs)?;
+
+        // Spend inputs, insert outputs.
+        ns.spend(&nullifier0);
+        ns.spend(&nullifier1);
+        NewNullifierEvent {
+            nullifier: nullifier0,
+        }
+        .publish(&env);
+        NewNullifierEvent {
+            nullifier: nullifier1,
+        }
+        .publish(&env);
+
+        let idx0 = merkle.insert_leaf(&out_commitment0);
+        let idx1 = merkle.insert_leaf(&out_commitment1);
+
+        if fee > 0 {
+            let token: Address = Self::get(&env, &DataKey::Token)?;
+            TokenClient::new(&env, &token).transfer(
+                &env.current_contract_address(),
+                &relayer,
+                &fee,
+            );
+        }
+
+        let viewkey: Address = Self::get(&env, &DataKey::ViewkeyAnchor)?;
+        let vk_client = ViewkeyAnchorClient::new(&env, &viewkey);
+        vk_client.bind_mvk(&mvk_tag0, &mvk_ct0);
+        vk_client.bind_mvk(&mvk_tag1, &mvk_ct1);
+
+        NewCommitmentEvent {
+            commitment: out_commitment0,
+            index: idx0,
+            encrypted_output: note_ct0,
+            mvk_tag: mvk_tag0,
+        }
+        .publish(&env);
+        NewCommitmentEvent {
+            commitment: out_commitment1,
+            index: idx1,
+            encrypted_output: note_ct1,
+            mvk_tag: mvk_tag1,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    // =================================================== batch_transfer_org ====
+
+    /// Settle a whole org payroll run (N `transfer_org` spends) with ONE combined
+    /// proof verification instead of N. Each spend is an independent JSPLITORG
+    /// statement; this entry validates all of them, calls the verifier's batched
+    /// (random-linear-combination) check ONCE, then applies every spend's state.
+    ///
+    /// HONESTY: this batches *verification*, not settlement. The combined pairing
+    /// check is still LINEAR in N (one `e(A_i,B_i)` term per proof survives), and
+    /// the loop below still spends 2N nullifiers and inserts 2N commitments — the
+    /// merkle/nullifier writes are NOT collapsed. So this is "one verification per
+    /// run", not "N payments folded into one proof", and N per tx is bounded by
+    /// the ledger's instruction/write budget. Intra-batch double-spends are
+    /// rejected up front (a single proof can't reuse a nullifier; this stops it
+    /// ACROSS proofs in the same tx, which no individual circuit can see).
+    pub fn batch_transfer_org(
+        env: Env,
+        submitter: Address,
+        spends: Vec<OrgSpend>,
+    ) -> Result<(), Error> {
+        submitter.require_auth();
+        Self::require_not_paused(&env)?;
+
+        let n = spends.len();
+        if n == 0 {
+            return Err(Error::EmptyBatch);
+        }
+
+        let merkle_addr: Address = Self::get(&env, &DataKey::MerkleTree)?;
+        let merkle = MerkleClient::new(&env, &merkle_addr);
+        let ns_addr: Address = Self::get(&env, &DataKey::NullifierSet)?;
+        let ns = NullifierSetClient::new(&env, &ns_addr);
+        let modulus = bn256_modulus(&env);
+        let asset_id: U256 = Self::get(&env, &DataKey::AssetId)?;
+
+        // ---- Pass 1: validate every spend, build its public inputs, and reject
+        // any already-spent OR intra-batch-duplicated nullifier BEFORE touching
+        // state. Then verify the whole batch in one call.
+        let mut proofs: Vec<Groth16Proof> = Vec::new(&env);
+        let mut batch_inputs: Vec<Vec<Bn254Fr>> = Vec::new(&env);
+        let mut seen: Vec<U256> = Vec::new(&env);
+
+        for i in 0..n {
+            let s = spends.get(i).ok_or(Error::EmptyBatch)?;
+            if s.fee < 0 {
+                return Err(Error::WrongAmount);
+            }
+            if s.proof.is_empty() {
+                return Err(Error::InvalidProof);
+            }
+            if !merkle.is_known_root(&s.root) {
+                return Err(Error::UnknownRoot);
+            }
+            // Freshness: neither input may already be spent on-chain. (Unlike the
+            // single-spend idempotent-replay rule, a batch fails closed on any
+            // already-spent input rather than trying to converge.)
+            if ns.is_spent(&s.nullifier0) || ns.is_spent(&s.nullifier1) {
+                return Err(Error::PartialReplay);
+            }
+            // Intra-batch uniqueness: no nullifier may appear twice across the run
+            // (and the two inputs of one spend must differ).
+            if s.nullifier0 == s.nullifier1
+                || Self::vec_contains(&seen, &s.nullifier0)
+                || Self::vec_contains(&seen, &s.nullifier1)
+            {
+                return Err(Error::DuplicateInBatch);
+            }
+            seen.push_back(s.nullifier0.clone());
+            seen.push_back(s.nullifier1.clone());
+
+            let ext_hash = Self::hash_transfer_ext(
+                &env, &s.relayer, s.fee, &s.note_ct0, &s.note_ct1, &s.mvk_ct0, &s.mvk_ct1,
+            );
+            Self::check_mvk_root(&env, &s.registered_mvk_root)?;
+
+            let mut pi: Vec<Bn254Fr> = Vec::new(&env);
+            Self::push_input(&env, &mut pi, &s.root, &modulus)?;
+            Self::push_input(&env, &mut pi, &asset_id, &modulus)?;
+            Self::push_input(&env, &mut pi, &s.nullifier0, &modulus)?;
+            Self::push_input(&env, &mut pi, &s.nullifier1, &modulus)?;
+            Self::push_input(&env, &mut pi, &s.out_commitment0, &modulus)?;
+            Self::push_input(&env, &mut pi, &s.out_commitment1, &modulus)?;
+            Self::push_input(&env, &mut pi, &Self::i128_to_u256(&env, s.fee)?, &modulus)?;
+            Self::push_input(&env, &mut pi, &ext_hash, &modulus)?;
+            Self::push_input(&env, &mut pi, &s.mvk_tag0, &modulus)?;
+            Self::push_input(&env, &mut pi, &s.mvk_tag1, &modulus)?;
+            Self::push_input(&env, &mut pi, &s.registered_mvk_root, &modulus)?;
+
+            proofs.push_back(s.proof.clone());
+            batch_inputs.push_back(pi);
+        }
+
+        // ONE combined verification for the entire run (all under JSPLITORG).
+        Self::verify_batch(&env, VK_JSPLITORG, &proofs, &batch_inputs)?;
+
+        // ---- Pass 2: every proof is valid — apply each spend's state.
+        // Insert ALL 2N output commitments in ONE batched merkle call (frontier
+        // read/written once, single root-history churn) so the per-tx ledger
+        // footprint is O(depth + N) instead of O(depth * N) — this is what makes
+        // a multi-spend run actually fit a transaction.
+        let mut commitments: Vec<U256> = Vec::new(&env);
+        for i in 0..n {
+            let s = spends.get(i).ok_or(Error::EmptyBatch)?;
+            commitments.push_back(s.out_commitment0.clone());
+            commitments.push_back(s.out_commitment1.clone());
+        }
+        let merkle_addr2: Address = Self::get(&env, &DataKey::MerkleTree)?;
+        let indices = MerkleClient::new(&env, &merkle_addr2).insert_leaves(&commitments);
+
+        let token: Address = Self::get(&env, &DataKey::Token)?;
+        let viewkey: Address = Self::get(&env, &DataKey::ViewkeyAnchor)?;
+        let vk_client = ViewkeyAnchorClient::new(&env, &viewkey);
+
+        for i in 0..n {
+            let s = spends.get(i).ok_or(Error::EmptyBatch)?;
+            ns.spend(&s.nullifier0);
+            ns.spend(&s.nullifier1);
+            NewNullifierEvent { nullifier: s.nullifier0.clone() }.publish(&env);
+            NewNullifierEvent { nullifier: s.nullifier1.clone() }.publish(&env);
+
+            // commitments were pushed [c0, c1] per item, so item i's leaves are
+            // at flat positions 2i and 2i+1 in the returned index vector.
+            let idx0 = indices.get(i.checked_mul(2).ok_or(Error::Overflow)?).ok_or(Error::EmptyBatch)?;
+            let idx1 = indices
+                .get(i.checked_mul(2).ok_or(Error::Overflow)?.checked_add(1).ok_or(Error::Overflow)?)
+                .ok_or(Error::EmptyBatch)?;
+
+            if s.fee > 0 {
+                TokenClient::new(&env, &token).transfer(
+                    &env.current_contract_address(),
+                    &s.relayer,
+                    &s.fee,
+                );
+            }
+
+            vk_client.bind_mvk(&s.mvk_tag0, &s.mvk_ct0);
+            vk_client.bind_mvk(&s.mvk_tag1, &s.mvk_ct1);
+
+            NewCommitmentEvent {
+                commitment: s.out_commitment0.clone(),
+                index: idx0,
+                encrypted_output: s.note_ct0.clone(),
+                mvk_tag: s.mvk_tag0.clone(),
+            }
+            .publish(&env);
+            NewCommitmentEvent {
+                commitment: s.out_commitment1.clone(),
+                index: idx1,
+                encrypted_output: s.note_ct1.clone(),
+                mvk_tag: s.mvk_tag1.clone(),
+            }
+            .publish(&env);
+        }
+
+        Ok(())
+    }
+
     // ========================================================= withdraw ====
 
     /// Unshield (on-chain verb: `withdraw`): spend a note to release public
@@ -450,6 +793,7 @@ impl BenzoPool {
         change_note_ct: Bytes,
         change_mvk_ct: Bytes,
         asp_non_membership_root: U256,
+        registered_mvk_root: U256,
         proof: Groth16Proof,
     ) -> Result<(), Error> {
         submitter.require_auth();
@@ -504,6 +848,8 @@ impl BenzoPool {
             &modulus,
         )?;
         Self::push_input(&env, &mut public_inputs, &change_mvk_tag, &modulus)?;
+        Self::check_mvk_root(&env, &registered_mvk_root)?;
+        Self::push_input(&env, &mut public_inputs, &registered_mvk_root, &modulus)?;
 
         Self::verify(&env, VK_UNSHIELD, &proof, &public_inputs)?;
 
@@ -518,12 +864,23 @@ impl BenzoPool {
         if amount > total {
             return Err(Error::InsufficientPoolSupply);
         }
+        // `checked_sub` for symmetry with shield's `checked_add`; `amount <= total`
+        // above already rules out underflow, but never trust that implicitly.
+        let new_total = total.checked_sub(amount).ok_or(Error::Overflow)?;
         env.storage()
             .persistent()
-            .set(&DataKey::TotalShielded, &(total - amount));
+            .set(&DataKey::TotalShielded, &new_total);
         soroban_utils::bump_persistent(&env, &DataKey::TotalShielded);
 
         // Spend, insert change, release funds.
+        //
+        // ORDERING IS SAFE under Soroban's atomic-trap semantics: these are
+        // NON-`try_` cross-contract calls, so any sub-call that returns `Err`
+        // (or the token transfer failing) TRAPS and reverts the ENTIRE
+        // transaction — including the nullifier spend and turnstile decrement
+        // above. There is no partial-state / second-withdrawal window (this is
+        // not EVM partial-revert). Fail-closed is the default; using the `try_`
+        // variants here would only let us swallow an error we must not swallow.
         ns.spend(&nullifier);
         NewNullifierEvent {
             nullifier: nullifier.clone(),
@@ -587,6 +944,32 @@ impl BenzoPool {
             new_verifier,
         }
         .publish(&env);
+        Ok(())
+    }
+
+    /// Configure the authorized-MVK registry (a merkle instance). Admin-only.
+    /// Once set, shield/transfer/withdraw require `registered_mvk_root` to be a
+    /// known root of this registry — the on-chain half of the audit P0 that pins
+    /// the in-circuit MVK membership to the real registry.
+    pub fn set_mvk_registry(env: Env, registry: Address) -> Result<(), Error> {
+        Self::require_admin(&env)?;
+        env.storage().persistent().set(&DataKey::MvkRegistry, &registry);
+        Ok(())
+    }
+
+    /// Validate `registered_mvk_root` against the configured authorized-MVK
+    /// registry. If no registry is configured the check is skipped (legacy
+    /// deployments), but a configured registry makes the in-circuit MVK
+    /// membership meaningful by pinning the root to the real registry.
+    fn check_mvk_root(env: &Env, registered_mvk_root: &U256) -> Result<(), Error> {
+        if let Some(registry) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Address>(&DataKey::MvkRegistry)
+            && !MerkleClient::new(env, &registry).is_known_root(registered_mvk_root)
+        {
+            return Err(Error::WrongMvkRoot);
+        }
         Ok(())
     }
 
@@ -677,8 +1060,42 @@ impl BenzoPool {
             return Err(Error::InvalidProof);
         }
         let verifier: Address = Self::get(env, &DataKey::Verifier)?;
-        let ok = VerifierClient::new(env, &verifier).verify_proof(&vk_id, proof, public_inputs);
-        if ok { Ok(()) } else { Err(Error::InvalidProof) }
+        // Use the fallible (`try_`) client so a non-verifying proof surfaces the
+        // pool's typed `InvalidProof` instead of trapping the whole invocation.
+        // The verifier returns `Ok(true)` only on success; `Ok(false)` is
+        // unreachable but mapped defensively, and any verifier/host error ⇒
+        // `InvalidProof` (fail closed).
+        match VerifierClient::new(env, &verifier).try_verify_proof(&vk_id, proof, public_inputs) {
+            Ok(Ok(true)) => Ok(()),
+            _ => Err(Error::InvalidProof),
+        }
+    }
+
+    /// Batched analogue of `verify`: one cross-call that verifies N proofs sharing
+    /// `vk_id` via the verifier's random-linear-combination check. Same fail-closed
+    /// contract — anything but `Ok(Ok(true))` ⇒ `InvalidProof`.
+    fn verify_batch(
+        env: &Env,
+        vk_id: Symbol,
+        proofs: &Vec<Groth16Proof>,
+        pub_inputs: &Vec<Vec<Bn254Fr>>,
+    ) -> Result<(), Error> {
+        let verifier: Address = Self::get(env, &DataKey::Verifier)?;
+        match VerifierClient::new(env, &verifier).try_verify_batch(&vk_id, proofs, pub_inputs) {
+            Ok(Ok(true)) => Ok(()),
+            _ => Err(Error::InvalidProof),
+        }
+    }
+
+    /// Linear membership check over a small `Vec<U256>` (batch sizes are tens of
+    /// items, so O(n) scan is cheaper than building a Map).
+    fn vec_contains(seen: &Vec<U256>, x: &U256) -> bool {
+        for v in seen.iter() {
+            if &v == x {
+                return true;
+            }
+        }
+        false
     }
 
     fn push_input(

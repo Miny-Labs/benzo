@@ -65,6 +65,43 @@ fn build_proof(env: &Env) -> (VerificationKeyBytes, Groth16Proof, Vec<Bn254Fr>) 
     build_proof_seeded(env, 7, 6, 7)
 }
 
+/// Build N proofs that all share ONE verification key — the shape a batch must
+/// accept. One `circuit_specific_setup` fixes the VK; each `(a,b)` pair is then
+/// proved against it. This mirrors a real payroll run: many spends, one circuit.
+fn build_shared_vk_batch(
+    env: &Env,
+    seed: u64,
+    pairs: &[(u64, u64)],
+) -> (VerificationKeyBytes, Vec<Groth16Proof>, Vec<Vec<Bn254Fr>>) {
+    let mut rng = StdRng::seed_from_u64(seed);
+    // Setup defines the VK from the circuit STRUCTURE; the witness here is dummy.
+    let setup_circuit = MulCircuit {
+        a: ArkFr::from(1u64),
+        b: ArkFr::from(1u64),
+    };
+    let (pk, vk) =
+        Groth16::<Bn254>::circuit_specific_setup(setup_circuit, &mut rng).expect("setup");
+    let vk_bytes = vk_bytes_from_ark(env, &vk);
+
+    let mut proofs: Vec<Groth16Proof> = Vec::new(env);
+    let mut inputs: Vec<Vec<Bn254Fr>> = Vec::new(env);
+    for &(a, b) in pairs {
+        let af = ArkFr::from(a);
+        let bf = ArkFr::from(b);
+        let proof = Groth16::<Bn254>::prove(&pk, MulCircuit { a: af, b: bf }, &mut rng)
+            .expect("prove");
+        proofs.push_back(Groth16Proof {
+            a: G1Affine::from_bytes(BytesN::from_array(env, &g1_bytes_from_ark(proof.a))),
+            b: G2Affine::from_bytes(BytesN::from_array(env, &g2_bytes_from_ark(proof.b))),
+            c: G1Affine::from_bytes(BytesN::from_array(env, &g1_bytes_from_ark(proof.c))),
+        });
+        let mut pin: Vec<Bn254Fr> = Vec::new(env);
+        pin.push_back(fr_from_ark(env, af * bf));
+        inputs.push_back(pin);
+    }
+    (vk_bytes, proofs, inputs)
+}
+
 #[test]
 fn verify_valid_proof_with_vk() {
     let env = Env::default();
@@ -226,4 +263,152 @@ fn rotate_vk_overwrites_for_governed_rotation() {
     assert!(client.verify_proof(&vk_id, &proof2, &publics2));
     let stale = client.try_verify_proof(&vk_id, &proof, &public_inputs);
     assert!(stale.is_err(), "proof under the rotated-out key must fail");
+}
+
+// ----------------------------------------------------------- batch verification
+
+#[test]
+fn batch_verify_valid_run() {
+    // N proofs sharing one VK all verify together in a single combined check.
+    let env = Env::default();
+    let (vk, proofs, inputs) =
+        build_shared_vk_batch(&env, 7, &[(6, 7), (3, 4), (5, 5), (2, 9)]);
+    let result = BenzoVerifier::verify_batch_with_vk(&env, &vk, proofs, inputs);
+    assert_eq!(result, Ok(true));
+}
+
+#[test]
+fn batch_single_proof_matches_single_verify() {
+    // A batch of one is equivalent to a single verify (regression anchor).
+    let env = Env::default();
+    let (vk, proofs, inputs) = build_shared_vk_batch(&env, 11, &[(6, 7)]);
+    assert_eq!(
+        BenzoVerifier::verify_batch_with_vk(&env, &vk, proofs, inputs),
+        Ok(true)
+    );
+}
+
+#[test]
+fn batch_empty_is_rejected() {
+    // An empty batch proves nothing and must be rejected, not vacuously true.
+    let env = Env::default();
+    let (vk, _p, _i) = build_shared_vk_batch(&env, 7, &[(6, 7)]);
+    let empty_p: Vec<Groth16Proof> = Vec::new(&env);
+    let empty_i: Vec<Vec<Bn254Fr>> = Vec::new(&env);
+    assert_eq!(
+        BenzoVerifier::verify_batch_with_vk(&env, &vk, empty_p, empty_i),
+        Err(Error::MalformedPublicInputs)
+    );
+}
+
+#[test]
+fn batch_rejects_one_tampered_proof() {
+    // A single invalid proof anywhere in the batch must fail the whole check —
+    // an invalid proof cannot hide behind valid ones (the core soundness claim).
+    let env = Env::default();
+    let (vk, proofs, inputs) = build_shared_vk_batch(&env, 7, &[(6, 7), (3, 4), (5, 5)]);
+    // Tamper the middle proof by swapping its A and C points.
+    let mut bad = proofs.clone();
+    let p1 = proofs.get(1).expect("p1");
+    bad.set(
+        1,
+        Groth16Proof {
+            a: p1.c.clone(),
+            b: p1.b.clone(),
+            c: p1.a.clone(),
+        },
+    );
+    assert_eq!(
+        BenzoVerifier::verify_batch_with_vk(&env, &vk, bad, inputs),
+        Err(Error::InvalidProof)
+    );
+}
+
+#[test]
+fn batch_rejects_wrong_public_input() {
+    // One proof carrying a public input that does not match its proof must fail.
+    let env = Env::default();
+    let (vk, proofs, inputs) = build_shared_vk_batch(&env, 7, &[(6, 7), (3, 4), (5, 5)]);
+    let mut bad_inputs = inputs.clone();
+    let mut wrong: Vec<Bn254Fr> = Vec::new(&env);
+    wrong.push_back(fr_from_ark(&env, ArkFr::from(999u64))); // != 3*4
+    bad_inputs.set(1, wrong);
+    assert_eq!(
+        BenzoVerifier::verify_batch_with_vk(&env, &vk, proofs, bad_inputs),
+        Err(Error::InvalidProof)
+    );
+}
+
+#[test]
+fn batch_rejects_two_proofs_with_swapped_c() {
+    // Adversarial forgery shape: take two valid proofs and swap their C points,
+    // making BOTH individually invalid while preserving the multiset of points.
+    // A weak (non-Fiat-Shamir-bound) combiner might let these cancel; ours must
+    // reject because the in-contract challenges bind each proof's own C.
+    let env = Env::default();
+    let (vk, proofs, inputs) = build_shared_vk_batch(&env, 7, &[(6, 7), (3, 4)]);
+    let p0 = proofs.get(0).expect("p0");
+    let p1 = proofs.get(1).expect("p1");
+    let mut swapped: Vec<Groth16Proof> = Vec::new(&env);
+    swapped.push_back(Groth16Proof {
+        a: p0.a.clone(),
+        b: p0.b.clone(),
+        c: p1.c.clone(), // foreign C
+    });
+    swapped.push_back(Groth16Proof {
+        a: p1.a.clone(),
+        b: p1.b.clone(),
+        c: p0.c.clone(), // foreign C
+    });
+    assert_eq!(
+        BenzoVerifier::verify_batch_with_vk(&env, &vk, swapped, inputs),
+        Err(Error::InvalidProof)
+    );
+}
+
+#[test]
+fn batch_rejects_foreign_vk_proof() {
+    // A valid proof from a DIFFERENT trusted setup cannot ride inside a batch
+    // verified against vk1 (no cross-circuit confusion in the batched path).
+    let env = Env::default();
+    let (vk1, proofs1, inputs1) = build_shared_vk_batch(&env, 7, &[(6, 7), (3, 4)]);
+    let (_vk2, proofs2, inputs2) = build_shared_vk_batch(&env, 123, &[(8, 9)]);
+    let mut mixed = proofs1.clone();
+    mixed.push_back(proofs2.get(0).expect("foreign proof"));
+    let mut mixed_inputs = inputs1.clone();
+    mixed_inputs.push_back(inputs2.get(0).expect("foreign inputs"));
+    let _ = proofs1;
+    let _ = inputs1;
+    assert_eq!(
+        BenzoVerifier::verify_batch_with_vk(&env, &vk1, mixed, mixed_inputs),
+        Err(Error::InvalidProof)
+    );
+}
+
+#[test]
+fn batch_verify_via_registered_vk() {
+    // End-to-end through the registry + public entrypoint (storage path).
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(BenzoVerifier, (admin.clone(),));
+    let client = BenzoVerifierClient::new(&env, &contract_id);
+
+    let (vk, proofs, inputs) = build_shared_vk_batch(&env, 7, &[(6, 7), (3, 4), (5, 5)]);
+    let vk_id = Symbol::new(&env, "BATCHRUN");
+    client.set_vk(&vk_id, &vk);
+    assert!(client.verify_batch(&vk_id, &proofs, &inputs));
+
+    // A tampered batch through the same entrypoint must fail closed.
+    let mut bad = proofs.clone();
+    let p0 = proofs.get(0).expect("p0");
+    bad.set(
+        0,
+        Groth16Proof {
+            a: p0.c.clone(),
+            b: p0.b.clone(),
+            c: p0.a.clone(),
+        },
+    );
+    assert!(client.try_verify_batch(&vk_id, &bad, &inputs).is_err());
 }
