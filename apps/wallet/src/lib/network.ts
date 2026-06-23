@@ -8,6 +8,14 @@
  * Everything here is PUBLIC: RPC URLs, contract IDs, and a funded G-address used
  * only as a read/simulation footprint source. No secret material is ever client-side.
  */
+// Single source of truth: the live testnet deployment, imported (and inlined at
+// build) straight from deployments/testnet.json. This makes the wallet's contract
+// IDs PHYSICALLY UNABLE to drift from what is actually deployed — the prior
+// hardcoded block had gone stale against a dead pre-redeploy cluster. A mainnet
+// build overrides via VITE_BENZO_DEPLOYMENT (deployments/mainnet.json). The drift
+// guard in network.drift.test.ts asserts this equality so a future re-hardcode fails CI.
+import testnetDeployment from "../../../../deployments/testnet.json";
+
 const env = import.meta.env as unknown as Record<string, string | undefined>;
 
 export const NETWORK = env.VITE_BENZO_NETWORK ?? "testnet";
@@ -17,21 +25,22 @@ export const NETWORK_PASSPHRASE = env.VITE_NETWORK_PASSPHRASE ?? "Test SDF Netwo
 /** Human label for the active network — never hardcode "testnet" on a money screen. */
 export const NETWORK_LABEL = NETWORK === "public" || NETWORK === "pubnet" ? "Stellar" : "Stellar Testnet";
 
-/** Testnet deployment (deployments/testnet.json) — the zero-config default. */
+/** Testnet deployment — derived from deployments/testnet.json (the zero-config
+ *  default), so these IDs are exactly what is live on-chain and cannot go stale. */
 const TESTNET_DEPLOYMENT = {
-  pool: "CAQZCOJUYFEHDJLGLAMMUTHGWGYGZZACMI3EY32X2T2AVDTD3FMGWPRU",
-  verifier: "CCWBNQCJ3M34OJAY6OTHWNOLV7Y43KGDU5K3LFTQ7Z3G6AP4RFEDVS7A",
-  merkle: "CCSZAPFMOYRFF7KPS4VOKUCW6MW5G7VPLJH23PBTONK6AX4MLWYHJULH",
-  nullifierSet: "CBUHBSP2XBTG2LUYQOD47RUP5LJWNJBOXDAOLRKQ7FKIRVYJLRMSKOYY",
-  aspMembership: "CCBEFUSOTA2HOB5L5EPKMKWH5OETJPR2WLPXCDEK7HLOYFCWDIP4J7MI",
-  aspNonMembership: "CAOH5EM6T6JPK2BJEH4WJU7COEXQ34DWY6CBCFCO6US4TEAN3TXFBVIE",
-  viewkeyAnchor: "CBWAO55F26QNAEUNWS6O2B543SR2DUKA2XBSWZJ5EXRQUWY67VS4O3FA",
-  mvkRegistry: "CDGXWVSKENNAPTLNM35IS2YTSEW7PHAXBCQ52OKQD5Z4EUYY7ARW4CDQ",
-  handleRegistry: "CAOKUPYVHN4ONY2STJK2QQO2Z3X2F3YQQWKYZV6J6NIGGPGU577BBLJI",
-  token: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
-  treeLevels: 32,
-  aspLevels: 16,
-  smtLevels: 16,
+  pool: testnetDeployment.pool,
+  verifier: testnetDeployment.verifier,
+  merkle: testnetDeployment.merkle,
+  nullifierSet: testnetDeployment.nullifierSet,
+  aspMembership: testnetDeployment.aspMembership,
+  aspNonMembership: testnetDeployment.aspNonMembership,
+  viewkeyAnchor: testnetDeployment.viewkeyAnchor,
+  mvkRegistry: testnetDeployment.mvkRegistry,
+  handleRegistry: testnetDeployment.handleRegistry,
+  token: testnetDeployment.token,
+  treeLevels: testnetDeployment.treeLevels,
+  aspLevels: testnetDeployment.aspLevels,
+  smtLevels: testnetDeployment.smtLevels,
 };
 
 /** Deployment coordinates. A mainnet build sets VITE_BENZO_DEPLOYMENT (the JSON
