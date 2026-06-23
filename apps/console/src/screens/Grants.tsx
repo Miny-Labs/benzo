@@ -144,6 +144,9 @@ export function Grants() {
         <p className="mt-1.5 max-w-2xl text-[12.5px] leading-relaxed text-muted">
           Export a network-verified statement of what you paid out for a period, e.g. "Q2 = $X." The total is proven on-chain; the individual salaries behind it stay hidden. The file embeds the proof so your auditor can re-verify it independently.
         </p>
+        <p className="mt-1.5 max-w-2xl text-[11.5px] leading-relaxed text-muted/80">
+          Soundness: this proves the disclosed notes sum to the stated total — not that the set is complete. It attests the total you claim, it does not detect a payout deliberately left out (completeness is bounded only by the authorized-key registry).
+        </p>
         <div className="mt-4 flex items-end gap-3">
           <div className="w-48">
             <Input label="Period" placeholder="2026-Q2" value={period} onChange={(e) => setPeriod(e.target.value)} data-testid="att-period" />

@@ -768,7 +768,15 @@ export async function proveSolvency(liabilitiesStroops: string): Promise<{ solve
  * fake ZK"). Proves the disclosed notes sum to `total` (individual amounts stay
  * hidden) and the chain confirms the SUM proof via verify_proof(SUM,…).
  */
-export async function proveTotal(): Promise<{ total: string; onChain: boolean; ref?: OnChainRef }> {
+// The honest soundness boundary of a proof-of-sum: it proves the DISCLOSED notes
+// sum to `total`, NOT that the disclosed set is complete. A discloser could omit
+// notes and under-report; completeness is only constrained by the authorized-MVK
+// registry binding (only registered keys' notes can enter the pool). Surfaced to
+// the auditor so the attestation is never oversold as "tax-grade / audited".
+export const SUM_SOUNDNESS_BOUNDARY =
+  "Proves the disclosed notes sum to this total; does NOT prove set-completeness (omitted notes are undetectable). Bounds under-reporting only via the authorized-MVK registry.";
+
+export async function proveTotal(): Promise<{ total: string; onChain: boolean; soundness?: string; ref?: OnChainRef }> {
   const c = getClient();
   if (!c) return { total: "0", onChain: false };
   // Real ZK org proof-of-sum over the M-of-N treasury notes, verified ON-CHAIN
@@ -780,7 +788,11 @@ export async function proveTotal(): Promise<{ total: string; onChain: boolean; r
     return {
       total: r.total.toString(),
       onChain: r.onChain,
-      ref: onChainRef("ORGSUM", r.onChain, [{ k: "Disclosed total", v: usdLabel(r.total.toString()) }], { root: r.root?.toString() }),
+      soundness: SUM_SOUNDNESS_BOUNDARY,
+      ref: onChainRef("ORGSUM", r.onChain, [
+        { k: "Disclosed total", v: usdLabel(r.total.toString()) },
+        { k: "Soundness", v: "ownership of the stated total, not set-completeness" },
+      ], { root: r.root?.toString() }),
     };
   } catch {
     return { total: (await c.orgTreasuryBalance(org)).toString(), onChain: false };

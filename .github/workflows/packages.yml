@@ -55,3 +55,36 @@ jobs:
       # the committed VK/proof parity fixtures — runs and enforces invariants.
       - name: Test
         run: pnpm -r test
+      # Honesty guard: no committed file may reference a dead pre-redeploy cluster
+      # address (these once lurked in demo docs and sent reviewers to abandoned
+      # contracts). The live IDs live only in deployments/testnet.json.
+      - name: No stale-cluster addresses
+        run: |
+          if git grep -nE 'CCWBNQCJ|CAQZCOJU|CCSZAPFM' -- . ':!deployments/*.bak'; then
+            echo "::error::a committed file references a dead pre-redeploy cluster address"; exit 1
+          fi
+
+  # Real ZK gate: fetches the exact published proving artifacts and runs the
+  # snarkjs proving + on-chain-parity tests for real, so "green" actually means
+  # proofs were generated and verified — not silently skipped. Opt-in: runs only
+  # where the artifacts are reachable (BENZO_ARTIFACTS_BASE_URL secret set), so a
+  # fork without the Release isn't a false red.
+  zk-proofs:
+    runs-on: ubuntu-latest
+    if: ${{ vars.BENZO_ARTIFACTS_BASE_URL != '' || secrets.BENZO_ARTIFACTS_BASE_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Fetch proving artifacts (exact, sha256-verified against the manifest)
+        env:
+          BENZO_ARTIFACTS_BASE_URL: ${{ vars.BENZO_ARTIFACTS_BASE_URL || secrets.BENZO_ARTIFACTS_BASE_URL }}
+        run: bash scripts/fetch-artifacts.sh
+      - name: Real snarkjs proving + parity tests
+        run: pnpm --filter @benzo/core test
