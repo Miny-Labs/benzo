@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "pnpm install && pnpm --filter @benzo/core build && pnpm --filter @benzo/wallet build",
+  "buildCommand": "pnpm install && pnpm --filter @benzo/core build && pnpm --filter @benzo/wallet-app build",
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [

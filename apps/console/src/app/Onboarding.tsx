@@ -11,6 +11,7 @@ import { BadgeCheck, Building2, Check, FileCheck2, Landmark, Loader2, ScanSearch
 import { api, type OnboardingDraft } from "../lib/api";
 import { friendlyError } from "../lib/format";
 import { Logo } from "../ui/Logo";
+import { StageVideo } from "../ui/StageVideo";
 import { EASE } from "../ui/motion";
 import { Button, Card, Pill } from "../ui/primitives";
 import { Field, Input, Select, useToast } from "../ui/controls";
@@ -403,6 +404,8 @@ function Row({ k, v }: { k: string; v: string }) {
 function Centered({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
   return (
     <div className="relative flex min-h-screen w-full items-center justify-center bg-[var(--color-canvas-outer)] p-6" data-testid="console-onboarding">
+      {/* looping video stage behind the sign-in card (matches the authenticated Shell) */}
+      <StageVideo />
       <div className={`pointer-events-none absolute inset-0 ${wide ? "" : ""} bg-[radial-gradient(50%_40%_at_50%_0%,rgba(115,66,226,0.08),transparent)]`} />
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: EASE }} className="relative z-10">
         {children}
