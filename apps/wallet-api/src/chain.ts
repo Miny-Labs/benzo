@@ -117,7 +117,7 @@ let triedOnce = false;
  * sequentially (never concurrently on the same wallet/state), so a single cached
  * client is safe.
  */
-export function getClient(prover: ProverKind = "local"): BenzoClient | null {
+export function getClient(prover: ProverKind = process.env.VERCEL === "1" ? "tee" : "local"): BenzoClient | null {
   if (client && clientKind === prover) return client;
   if (!client && triedOnce && clientKind === null) return null; // previously failed (no env)
   triedOnce = true;

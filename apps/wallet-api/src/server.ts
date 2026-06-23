@@ -55,9 +55,9 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
   const raw = Buffer.concat(chunks).toString("utf8");
   return (raw ? JSON.parse(raw) : {}) as T;
 }
-/** Read `prover` from query or body; default local. */
+/** Read `prover` from query or body; Vercel can only prove via the attested TEE. */
 function proverOf(url: URL, body?: { prover?: string }): ProverKind {
-  const p = (url.searchParams.get("prover") || body?.prover || "local").toLowerCase();
+  const p = (url.searchParams.get("prover") || body?.prover || (process.env.VERCEL === "1" ? "tee" : "local")).toLowerCase();
   return p === "tee" ? "tee" : "local";
 }
 
