@@ -4,7 +4,24 @@
   "token": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
   "usdcAsset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
   "verifier": "CCBR2Y3ZAD75UFLZSED3NJYZDYIYZIGIEMZO6BQ45Y2NQBWPJ7MXKXYB",
-  "registeredVks": ["SHIELD", "TRANSFER", "UNSHIELD", "SUM", "KYC", "FUNDS", "BALANCE", "ORGAUTH", "JSPLITORG"],
+  "registeredVks": [
+    "SHIELD",
+    "TRANSFER",
+    "UNSHIELD",
+    "SUM",
+    "KYC",
+    "FUNDS",
+    "BALANCE",
+    "ORGAUTH",
+    "JSPLITORG",
+    "ORGSUM",
+    "ORGBAL",
+    "SPENDCAP",
+    "POIPAYOUT",
+    "PAYCOMP",
+    "KYB",
+    "NETTING"
+  ],
   "merkle": "CCZHDDP56VVJKWX5JZ3VESY65NXJUHTNXKK32JD2JULI6Y446E55IPSD",
   "nullifierSet": "CCKFMCZ66ZR3HH254EF3QQGB6YONWTEZMPNWS4ENELVAXG3AWP6OWRPU",
   "aspMembership": "CBFVNE4PZQWJF7AKXCT32YUKTGOJCC5PLKFUDB7PKRJ4AU5F47JMJ6EK",
@@ -41,6 +58,20 @@
       "requestRegistry": "c4e789b7ab776c2a38c11ac8f7df172d6ef498c94c86f7cef3268bcbe9db5db4",
       "orgAccount": "49c93446dacb748c65eee2e9be62f34e5767c0540a10fc4737aaa3f2f557a23c",
       "identityNullifierSet": "56dabca00fb09f62c0ba211f0033f15daef826b92eec4bbf0306bb69726e43e6"
+    },
+    "vkRegistrations": {
+      "note": "7 business-ZK (Z-suite) VKs dropped in the fresh-cluster redeploy, re-registered on the live verifier 2026-06-23",
+      "registeredAt": "2026-06-23",
+      "verifier": "CCBR2Y3ZAD75UFLZSED3NJYZDYIYZIGIEMZO6BQ45Y2NQBWPJ7MXKXYB",
+      "txs": {
+        "ORGSUM": "6604bcf1cae7fa8aedb2c9afb8ad967997ef3298b5ead2364d76c33a730faa75",
+        "ORGBAL": "2fdb2189e33e9d00fd2389d3b84e1d8b75d319173cd126b30202aa11226f16c4",
+        "SPENDCAP": "e412e39e3431d621d4bc7a97c42f593835ef3ac0a6273bb8a23cb0bffa6ed4ac",
+        "POIPAYOUT": "77e331406f98610d21271432ae152010c7630086ff9b5ee86c0ab118ce18b48a",
+        "PAYCOMP": "6469fd2b0f6ddbe32d91186e63885ac13d05ccc1302da21b3caccab046ad3908",
+        "KYB": "e17c23d5e73c97b9460da0273ce87bf596be5205f042e0f2a149a4e8ea646c7d",
+        "NETTING": "4474b9009f87662d125957f60c56038652d24bb56b2ff719757430a90c282d27"
+      }
     }
   }
 }

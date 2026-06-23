@@ -153,9 +153,13 @@ say "issuer_registry: $ISSUERREG"
 say "registering verification keys"
 # NOTE: `trivial` (a pipeline de-risk circuit that proves nothing) is intentionally
 # NOT deployed — it inflates the on-chain VK surface and its degenerate setup can
-# violate the verifier's gamma!=delta anti-malleability check. The 9 VKs below are
-# the real ones (4 settle-gate + 5 attestations).
-for c in shield:SHIELD joinsplit:TRANSFER unshield:UNSHIELD proof_of_sum:SUM kyc_credential:KYC funds_attestation:FUNDS proof_of_balance:BALANCE org_spend_auth:ORGAUTH joinsplit_org:JSPLITORG; do
+# violate the verifier's gamma!=delta anti-malleability check. The 16 VKs below are
+# the real ones: 4 settle-gate (SHIELD/TRANSFER/UNSHIELD/JSPLITORG) + 5 consumer
+# attestations (SUM/KYC/FUNDS/BALANCE/ORGAUTH) + 7 business-ZK "Z-suite"
+# (ORGSUM/ORGBAL/SPENDCAP/POIPAYOUT/PAYCOMP/KYB/NETTING). The Z-suite was dropped in
+# an earlier redeploy and re-registered on 2026-06-23 (see deployments/testnet.json
+# provenance.vkRegistrations); keep them in this loop so a fresh deploy stays at 16.
+for c in shield:SHIELD joinsplit:TRANSFER unshield:UNSHIELD proof_of_sum:SUM kyc_credential:KYC funds_attestation:FUNDS proof_of_balance:BALANCE org_spend_auth:ORGAUTH joinsplit_org:JSPLITORG proof_of_sum_org:ORGSUM proof_of_balance_org:ORGBAL spending_cap:SPENDCAP payout_innocence:POIPAYOUT payroll_computation:PAYCOMP kyb_credential:KYB cross_netting:NETTING; do
   name=${c%%:*}; id=${c##*:}
   build_vk="circuits/build/$name/${name}_vk.json"
   cer_vk="ceremony/$name/${name}_vk.json"
@@ -228,7 +232,7 @@ cat > "$DEPLOY_OUT" <<EOF
   "token": "$TOKEN",
   "usdcAsset": "$USDC_CODE:$USDC_ISSUER",
   "verifier": "$VERIFIER",
-  "registeredVks": ["SHIELD", "TRANSFER", "UNSHIELD", "SUM", "KYC", "FUNDS", "BALANCE", "ORGAUTH", "JSPLITORG"],
+  "registeredVks": ["SHIELD", "TRANSFER", "UNSHIELD", "SUM", "KYC", "FUNDS", "BALANCE", "ORGAUTH", "JSPLITORG", "ORGSUM", "ORGBAL", "SPENDCAP", "POIPAYOUT", "PAYCOMP", "KYB", "NETTING"],
   "merkle": "$MERKLE",
   "nullifierSet": "$NULLS",
   "aspMembership": "$ASPM",
