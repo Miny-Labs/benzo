@@ -527,6 +527,12 @@ interface OrgInvite {
   createdAt: string;
 }
 const invites: OrgInvite[] = [];
+const DEFAULT_WALLET_ORIGIN = "https://wallet.benzo.space";
+const DEFAULT_CONSOLE_ORIGIN = "https://console.benzo.space";
+
+function routeEncodedLink(origin: string, link: string): string {
+  return `${origin.replace(/\/+$/, "")}/claim#${encodeURIComponent(link)}`;
+}
 
 function makeInvite(kind: OrgInvite["kind"], opts: { name?: string; email?: string; role?: string; counterpartyId?: string }): OrgInvite {
   const token = id("tok");
@@ -535,10 +541,14 @@ function makeInvite(kind: OrgInvite["kind"], opts: { name?: string; email?: stri
   // contractor/customer onboards in the consumer WALLET (with an org backref).
   // So only member invites bounce if opened in the wallet (MismatchScreen).
   const app = kind === "member" ? "business" : "consumer";
-  const link = encodeBenzoLink(
+  const payload = encodeBenzoLink(
     { type: "org", orgId: db.org.id, kind, role: opts.role, orgName: db.org.name, token, app, expiresAt: String(expiresAt) },
-    "web",
+    "scheme",
   );
+  const link =
+    app === "consumer"
+      ? routeEncodedLink(process.env.BENZO_WALLET_ORIGIN || DEFAULT_WALLET_ORIGIN, payload)
+      : routeEncodedLink(process.env.BENZO_CONSOLE_ORIGIN || DEFAULT_CONSOLE_ORIGIN, payload);
   return { id: id("invite"), kind, name: opts.name, email: opts.email, role: opts.role, counterpartyId: opts.counterpartyId, link, token, status: "sent", createdAt: now() };
 }
 
