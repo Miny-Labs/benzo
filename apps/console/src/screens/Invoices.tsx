@@ -142,8 +142,15 @@ export function Invoices() {
         : await api.payInvoice(inv.id);
       const prog = "progress" in r.payment ? r.payment.progress : undefined;
       if (local) {
+        if (r.payment.status === "failed") {
+          throw new Error("Payment could not settle on-chain. Check that the contractor has a registered payout handle.");
+        }
+        const settled = r.payment.status === "confirmed" && r.payment.settlement?.onChain === true;
+        if (!settled && r.payment.status !== "needs_approval") {
+          throw new Error("Payment was created but did not settle on-chain.");
+        }
         setLocalInvoices((rows) => {
-          const next = rows.map((row) => row.invoice.id === inv.id ? { ...row, invoice: { ...row.invoice, status: r.invoice.status } } : row);
+          const next = rows.map((row) => row.invoice.id === inv.id ? { ...row, invoice: { ...row.invoice, status: settled ? "paid" : "open" } } : row);
           writeLocalInvoices(next);
           return next;
         });
