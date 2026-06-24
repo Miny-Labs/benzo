@@ -90,7 +90,25 @@ export interface OrgInviteLink {
 }
 
 export const SCHEME = "benzo:";
-export const WEB_BASE = "https://benzo.app/l";
+const DEFAULT_WEB_BASE = "https://wallet.benzo.space/l";
+const LEGACY_WEB_BASE = "https://benzo.app/l";
+
+function normalizedWebBase(raw: string | undefined): string {
+  const v = raw?.trim().replace(/\/+$/, "");
+  return v || DEFAULT_WEB_BASE;
+}
+
+function configuredWebBase(): string {
+  const nodeEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+  return normalizedWebBase(nodeEnv?.BENZO_LINK_BASE ?? viteEnv?.VITE_BENZO_LINK_BASE);
+}
+
+export const WEB_BASE = configuredWebBase();
+
+function webBases(): string[] {
+  return [...new Set([WEB_BASE, DEFAULT_WEB_BASE, LEGACY_WEB_BASE])];
+}
 
 function prefix(base: "scheme" | "web"): string {
   return base === "web" ? `${WEB_BASE}/` : `${SCHEME}//`;
@@ -172,7 +190,7 @@ function parseApp(v: string | null): AppScope | undefined {
   return v === "consumer" || v === "business" ? v : undefined;
 }
 
-/** Parse a benzo:// or https://benzo.app/l link. Returns null if unrecognized. */
+/** Parse a benzo:// or configured Benzo web link. Returns null if unrecognized. */
 export function parseBenzoLink(input: string): BenzoLink | null {
   let rest = input.trim();
   let fragment = "";
@@ -182,8 +200,11 @@ export function parseBenzoLink(input: string): BenzoLink | null {
     rest = rest.slice(0, hashIdx);
   }
   if (rest.startsWith(SCHEME)) rest = rest.slice(SCHEME.length).replace(/^\/\//, "");
-  else if (rest.startsWith(WEB_BASE)) rest = rest.slice(WEB_BASE.length).replace(/^\//, "");
-  else return null;
+  else {
+    const base = webBases().find((b) => rest.startsWith(b));
+    if (!base) return null;
+    rest = rest.slice(base.length).replace(/^\//, "");
+  }
 
   const [pathPart, queryPart = ""] = rest.split("?");
   const q = new URLSearchParams(queryPart);

@@ -61,6 +61,12 @@ describe("BenzoLink round-trip", () => {
     expect(parseBenzoLink("benzo://org?o=org_1&kind=member")).toBeNull(); // no token
     expect(parseBenzoLink("benzo://org?kind=member#tok")).toBeNull(); // no orgId
   });
+
+  it("emits the live wallet web host and keeps legacy benzo.app links parseable", () => {
+    const link: BenzoLink = { type: "claim", secret: "s3cr3t", amount: "1", app: "consumer" };
+    expect(encodeBenzoLink(link, "web")).toMatch(/^https:\/\/wallet\.benzo\.space\/l\/claim\?/);
+    expect(parseBenzoLink("https://benzo.app/l/claim?amount=1&app=consumer#s3cr3t")).toEqual(link);
+  });
 });
 
 describe("app-scope boundary", () => {
