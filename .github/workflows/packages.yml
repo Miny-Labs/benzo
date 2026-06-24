@@ -37,8 +37,25 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Lint
         run: pnpm lint
-      - name: Build
-        run: pnpm -r build
+      - name: Check wallet proving artifact availability
+        id: wallet_artifacts
+        env:
+          BENZO_ARTIFACTS_BASE_URL: ${{ vars.BENZO_ARTIFACTS_BASE_URL || secrets.BENZO_ARTIFACTS_BASE_URL }}
+        run: |
+          if [ -n "$BENZO_ARTIFACTS_BASE_URL" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "BENZO_ARTIFACTS_BASE_URL is not set; skipping wallet static build."
+          fi
+      - name: Build packages
+        run: pnpm -r --filter '!@benzo/wallet-app' build
+      - name: Build wallet app with browser proving artifacts
+        if: steps.wallet_artifacts.outputs.available == 'true'
+        env:
+          BENZO_ARTIFACTS_BASE_URL: ${{ vars.BENZO_ARTIFACTS_BASE_URL || secrets.BENZO_ARTIFACTS_BASE_URL }}
+          BENZO_ARTIFACTS_TOKEN: ${{ secrets.BENZO_ARTIFACTS_TOKEN || github.token }}
+        run: pnpm --filter @benzo/wallet-app build
       # Poseidon2 constant-parity guard: the circom <-> TS <-> host hash must
       # never drift (a one-byte change would silently produce commitments the
       # chain can never match — a fund-loss class). Regenerate the params from
