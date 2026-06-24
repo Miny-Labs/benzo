@@ -15,7 +15,7 @@ function defaultOrgBase(): string {
 const ORG_BASE = ((import.meta as { env?: Record<string, string> }).env?.VITE_CONSOLE_ORIGIN) || defaultOrgBase();
 
 async function ohttp<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${ORG_BASE}/api${path}`, {
+  const res = await fetch(`${ORG_BASE}/api/rpc?path=${encodeURIComponent(path)}`, {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
   });
