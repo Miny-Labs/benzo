@@ -71,7 +71,6 @@ jobs:
   # fork without the Release isn't a false red.
   zk-proofs:
     runs-on: ubuntu-latest
-    if: ${{ vars.BENZO_ARTIFACTS_BASE_URL != '' || secrets.BENZO_ARTIFACTS_BASE_URL != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -82,9 +81,22 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Check proving artifact availability
+        id: artifacts
+        env:
+          BENZO_ARTIFACTS_BASE_URL: ${{ vars.BENZO_ARTIFACTS_BASE_URL || secrets.BENZO_ARTIFACTS_BASE_URL }}
+        run: |
+          if [ -n "$BENZO_ARTIFACTS_BASE_URL" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "BENZO_ARTIFACTS_BASE_URL is not set; skipping real proving gate."
+          fi
       - name: Fetch proving artifacts (exact, sha256-verified against the manifest)
+        if: steps.artifacts.outputs.available == 'true'
         env:
           BENZO_ARTIFACTS_BASE_URL: ${{ vars.BENZO_ARTIFACTS_BASE_URL || secrets.BENZO_ARTIFACTS_BASE_URL }}
         run: bash scripts/fetch-artifacts.sh
       - name: Real snarkjs proving + parity tests
+        if: steps.artifacts.outputs.available == 'true'
         run: pnpm --filter @benzo/core test
