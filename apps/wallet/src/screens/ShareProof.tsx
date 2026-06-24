@@ -66,7 +66,10 @@ export function ShareProof() {
         }
       }
     } catch (e) {
-      setErr((e as Error).message);
+      const msg = (e as Error).message ?? "";
+      setErr(/phala prover failed|HTTP 400|proof_of_balance/i.test(msg)
+        ? "Balance proofs in the secure enclave are not available on this testnet build yet. Use a capable desktop to prove on-device."
+        : msg);
       setPhase("form");
     }
   }

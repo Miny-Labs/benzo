@@ -25,6 +25,7 @@ import {
 } from "@benzo/core";
 import { verifyBalanceProofOnChain } from "./chain";
 import { RPC_URL, NETWORK_PASSPHRASE, SIM_SOURCE, DEPLOYMENT, RELAYER_ADDRESS, TEE_CONFIG } from "./network";
+import { preferDeviceProving } from "./proverPolicy";
 
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -165,7 +166,10 @@ async function getClient(): Promise<BenzoClient | null> {
     cli,
     deployment: DEPLOYMENT,
     circuits: CIRCUITS as never,
-    prover: pickBrowserProver({ mode: "auto", tee: TEE_CONFIG ?? missingTee() }),
+    prover: pickBrowserProver({
+      mode: preferDeviceProving() ? "on-device" : "tee",
+      tee: TEE_CONFIG ?? missingTee(),
+    }),
     rpcUrl: RPC_URL,
     txSource: "sim",
     handleRegistry: DEPLOYMENT.handleRegistry,
