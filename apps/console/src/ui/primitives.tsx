@@ -1,14 +1,15 @@
 import { EyeOff, Loader2 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 import { motion } from "framer-motion";
 
 export * from "./controls";
 
 /** Surface card. */
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function Card({ children, className = "", ...rest }: { children: ReactNode; className?: string } & HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       className={`rounded-[var(--radius-card)] border border-border bg-surface ${className}`}
+      {...rest}
     >
       {children}
     </div>

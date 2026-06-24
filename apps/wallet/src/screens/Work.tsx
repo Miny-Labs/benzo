@@ -8,19 +8,48 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Briefcase, Check, ChevronDown, FileText, Send } from "lucide-react";
+import { Briefcase, Check, ChevronDown, FileText, Send, Building2 } from "lucide-react";
 import { orgApi, type OrgInvoice } from "../lib/orgApi";
 import { friendlyError } from "../lib/errors";
 import { fmtUsd } from "../lib/format";
+import { useWallet } from "../lib/store";
 import { Screen } from "../ui/motion";
 import { ScreenHeader } from "../ui/chrome";
 import { AmountField, Button, Card, Input, EmptyState, Skeleton, useToast } from "../ui/primitives";
 
 const MAX_INVOICE = 1_000_000; // sanity cap so a fat-fingered amount can't post
 
+function consoleOrigin(): string {
+  const configured = (import.meta as { env?: Record<string, string> }).env?.VITE_CONSOLE_ORIGIN;
+  if (configured) return configured.replace(/\/+$/, "");
+  if (typeof window === "undefined") return "http://localhost:5174";
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" ? "http://localhost:5174" : "https://console.benzo.space";
+}
+
+function b64url(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  bytes.forEach((b) => { bin += String.fromCharCode(b); });
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function invoiceHandoffLink(inv: OrgInvoice, opts: { org: string; counterpartyName?: string; handle?: string }): string {
+  const packet = {
+    v: 1,
+    orgName: opts.org,
+    counterpartyName: opts.counterpartyName,
+    handle: opts.handle,
+    invoice: inv,
+    issuedAt: new Date().toISOString(),
+  };
+  return `${consoleOrigin()}/invoices#import=${b64url(JSON.stringify(packet))}`;
+}
+
 export function Work() {
   const [params] = useSearchParams();
   const toast = useToast();
+  const { session } = useWallet();
   const cp = params.get("cp") ?? "";
   const org = params.get("org") ?? "the company";
   const [amount, setAmount] = useState("");
@@ -29,6 +58,7 @@ export function Work() {
   const [mine, setMine] = useState<OrgInvoice[] | null>(null);
   const [loadErr, setLoadErr] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const [handoff, setHandoff] = useState<string | null>(null);
 
   const n = Number(amount);
   const amountOk = Number.isFinite(n) && n > 0 && n <= MAX_INVOICE;
@@ -51,7 +81,8 @@ export function Work() {
     if (!amountOk || !desc.trim() || !cp) return;
     setBusy(true);
     try {
-      await orgApi.submitInvoice(cp, amount, desc.trim());
+      const inv = await orgApi.submitInvoice(cp, amount, desc.trim());
+      setHandoff(invoiceHandoffLink(inv, { org, counterpartyName: session?.profile.name ?? session?.handle, handle: session?.handle ?? session?.profile.handle }));
       setAmount("");
       setDesc("");
       await load();
@@ -84,6 +115,23 @@ export function Work() {
             <Send size={16} /> Send invoice
           </Button>
         </Card>
+
+        {handoff ? (
+          <Card className="mt-4 p-4" data-testid="work-invoice-handoff">
+            <div className="flex items-center gap-2 text-[13px] font-semibold text-ink">
+              <Building2 size={15} className="text-accent" /> Ready for AP
+            </div>
+            <a
+              href={handoff}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-full bg-card px-5 py-3 text-[15px] font-semibold text-ink shadow-[0_6px_18px_rgba(25,40,55,0.05)] outline-none transition hover:shadow-[0_8px_22px_rgba(25,40,55,0.09)] focus-visible:ring-2 focus-visible:ring-accent/40"
+              data-testid="work-invoice-open-console"
+            >
+              Open in company console <ChevronDown size={16} className="-rotate-90" />
+            </a>
+          </Card>
+        ) : null}
 
         <div className="mt-6">
           <div className="mb-2 text-[12px] font-bold uppercase tracking-wide text-muted">Your invoices</div>

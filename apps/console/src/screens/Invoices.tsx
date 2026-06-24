@@ -4,7 +4,7 @@
  * confidential settlement as a payroll run (over the policy threshold → Approvals
  * first). One engine, two front-doors: employer-pushed runs and contractor invoices.
  */
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FileText, Send, Wallet, ShieldCheck } from "lucide-react";
 import type { Invoice } from "@benzo/types";
 import { api, type OnChainRef } from "../lib/api";
@@ -15,16 +15,90 @@ import { Page, Proving, Reveal, Stagger } from "../ui/motion";
 import { OnChainDetail } from "../ui/onchain";
 import { Button, Card, EmptyState, Input, Skeleton, StatusPill, useToast } from "../ui/primitives";
 
+const LOCAL_INVOICES = "benzo.console.localInvoices";
+
+interface LocalInvoiceRecord {
+  invoice: Invoice;
+  counterpartyName?: string;
+  handle?: string;
+  importedAt: string;
+}
+
+interface InvoicePacket {
+  v?: number;
+  counterpartyName?: string;
+  handle?: string;
+  invoice?: Invoice;
+}
+
+function decodeB64url(s: string): string {
+  const raw = atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "="));
+  const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function readLocalInvoices(): LocalInvoiceRecord[] {
+  try {
+    const rows = JSON.parse(localStorage.getItem(LOCAL_INVOICES) || "[]") as LocalInvoiceRecord[];
+    return Array.isArray(rows) ? rows.filter((r) => r?.invoice?.id) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalInvoices(rows: LocalInvoiceRecord[]): void {
+  localStorage.setItem(LOCAL_INVOICES, JSON.stringify(rows));
+}
+
+function packetFromHash(hash: string): LocalInvoiceRecord | null {
+  const q = new URLSearchParams(hash.replace(/^#/, ""));
+  const raw = q.get("import");
+  if (!raw) return null;
+  try {
+    const packet = JSON.parse(decodeB64url(raw)) as InvoicePacket;
+    if (!packet.invoice?.id || !packet.invoice.total?.amount || !Array.isArray(packet.invoice.lineItems)) return null;
+    return {
+      invoice: packet.invoice,
+      counterpartyName: packet.counterpartyName,
+      handle: packet.handle,
+      importedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function Invoices() {
   const toast = useToast();
   const { invoices, counterparties, masked, refresh, loading } = useConsole();
-  const name = (id?: string) => counterparties.find((c) => c.id === id)?.name ?? "Unknown";
+  const [localInvoices, setLocalInvoices] = useState<LocalInvoiceRecord[]>(() => readLocalInvoices());
+  const localMeta = (id?: string) => localInvoices.find((r) => r.invoice.id === id);
+  const name = (id?: string) => counterparties.find((c) => c.id === id)?.name ?? localMeta(id)?.counterpartyName ?? "Unknown";
   const [busy, setBusy] = useState<string | null>(null);
   // Confirm gate for single-invoice Pay (mirrors the bulk Pay-all confirm).
   const [confirmPay, setConfirmPay] = useState<Invoice | null>(null);
 
-  const open = invoices.filter((i) => i.status !== "paid" && i.status !== "cancelled");
-  const paid = invoices.filter((i) => i.status === "paid");
+  useEffect(() => {
+    const rec = packetFromHash(window.location.hash);
+    if (!rec) return;
+    setLocalInvoices((rows) => {
+      const next = [rec, ...rows.filter((r) => r.invoice.id !== rec.invoice.id)];
+      writeLocalInvoices(next);
+      return next;
+    });
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    toast({ title: "Invoice imported", tone: "success" });
+  }, [toast]);
+
+  const allInvoices = useMemo(
+    () => [
+      ...localInvoices.map((r) => r.invoice),
+      ...invoices.filter((i) => !localInvoices.some((r) => r.invoice.id === i.id)),
+    ],
+    [invoices, localInvoices],
+  );
+  const open = allInvoices.filter((i) => i.status !== "paid" && i.status !== "cancelled");
+  const paid = allInvoices.filter((i) => i.status === "paid");
   const openTotal = open.reduce((s, i) => s + BigInt(i.total.amount), 0n).toString();
   const [payAllOpen, setPayAllOpen] = useState(false);
   const [payingAll, setPayingAll] = useState(false);
@@ -52,8 +126,28 @@ export function Invoices() {
   async function pay(inv: Invoice) {
     setBusy(inv.id);
     try {
-      const r = await api.payInvoice(inv.id);
-      const prog = r.payment.progress;
+      const local = localMeta(inv.id);
+      const r = local
+        ? {
+            invoice: { ...inv, status: "paid" as const },
+            payment: await api.createPayment({
+              type: "invoice_payment",
+              fromAccountId: "acc_op",
+              toCounterpartyId: inv.counterpartyId,
+              amount: inv.total,
+              memo: inv.number,
+              toHandle: local.handle,
+            }),
+          }
+        : await api.payInvoice(inv.id);
+      const prog = "progress" in r.payment ? r.payment.progress : undefined;
+      if (local) {
+        setLocalInvoices((rows) => {
+          const next = rows.map((row) => row.invoice.id === inv.id ? { ...row, invoice: { ...row.invoice, status: r.invoice.status } } : row);
+          writeLocalInvoices(next);
+          return next;
+        });
+      }
       toast({
         title: prog && !prog.satisfied ? `Queued for approval · needs ${prog.nextRole}` : r.invoice.status === "paid" ? "Invoice paid privately" : "Payment created",
         tone: "success",
@@ -158,7 +252,7 @@ export function Invoices() {
         <Stagger className="space-y-4">
           {open.map((inv, i) => (
             <Stagger.Item key={inv.id} index={i}>
-              <Card className="flex items-center gap-4 p-5">
+              <Card className="flex items-center gap-4 p-5" data-testid={localMeta(inv.id) ? "imported-invoice-row" : undefined}>
                 <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <FileText size={20} />
                 </div>
