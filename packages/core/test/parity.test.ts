@@ -8,15 +8,24 @@
  * circuit verification keys against that exact layout.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { vkToSoroban, proofToSoroban, publicsToSoroban, g1Hex, g2Hex, feHex } from "../src/crypto/groth16.js";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const read = (p: string) => JSON.parse(readFileSync(`${repo}/${p}`, "utf8"));
 const fe = (n: number | bigint) => BigInt(n).toString(16).padStart(64, "0");
+const vkPath = (c: string) => `${repo}/circuits/build/${c}/${c}_vk.json`;
+const HAVE_VKS = ["shield", "joinsplit", "unshield"].every((c) => existsSync(vkPath(c)));
 
-describe("verifier-parity oracle: snarkjs → Soroban encoding", () => {
+if (!HAVE_VKS) {
+  console.warn(
+    "\n⚠️  ZK VERIFYING KEYS ABSENT — verifier-parity VK byte-shape tests are SKIPPED.\n" +
+      "    `pnpm test:zk` hard-fails on missing artifacts before this suite runs.\n",
+  );
+}
+
+describe.skipIf(!HAVE_VKS)("verifier-parity oracle: real VK byte-shape", () => {
   for (const c of ["shield", "joinsplit", "unshield"]) {
     it(`${c} VK encodes to the exact Soroban byte shape`, () => {
       const vk = read(`circuits/build/${c}/${c}_vk.json`);
@@ -28,7 +37,9 @@ describe("verifier-parity oracle: snarkjs → Soroban encoding", () => {
       for (const h of [s.alpha, s.beta, s.gamma, s.delta, ...s.ic]) expect(h).toMatch(/^[0-9a-f]+$/);
     });
   }
+});
 
+describe("verifier-parity oracle: snarkjs → Soroban encoding", () => {
   it("a proof encodes to the exact Soroban byte shape", () => {
     // Synthetic-but-well-formed Groth16 proof (affine points: G1 z=1, G2 z=[1,0]).
     // Self-contained on purpose — no longer depends on the cut "trivial" circuit's
