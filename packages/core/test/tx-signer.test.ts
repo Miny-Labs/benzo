@@ -176,6 +176,27 @@ describe("scvalForWriteArg", () => {
     expect(() => scvalForWriteArg("reference", "ab".repeat(33))).toThrow(/longer than 32 bytes/);
   });
 
+  it("types org_account ids, thresholds, and member lists for setup calls", () => {
+    expect(scvalForWriteArg("org_id", "1").switch()).toBe(xdr.ScValType.scvU64());
+    expect(scvalForWriteArg("threshold", "2").switch()).toBe(xdr.ScValType.scvU32());
+
+    const members = scvalForWriteArg(
+      "members",
+      JSON.stringify(["GBRMUZELYDNXSBYF5KOLLSV4XLQYNZJQNLXQ3HTFCWNRIBS3I6EUBCMP"]),
+    );
+    expect(members.switch()).toBe(xdr.ScValType.scvVec());
+    expect(members.vec()).toHaveLength(1);
+    expect(members.vec()![0].switch()).toBe(xdr.ScValType.scvAddress());
+  });
+
+  it("types unit enum variants as Vec(Symbol(Variant))", () => {
+    const status = scvalForWriteArg("status", "Approved");
+    expect(status.switch()).toBe(xdr.ScValType.scvVec());
+    expect(status.vec()).toHaveLength(1);
+    expect(status.vec()![0].switch()).toBe(xdr.ScValType.scvSymbol());
+    expect(status.vec()![0].sym().toString()).toBe("Approved");
+  });
+
   it("routes --proof through the struct coercion", () => {
     const a = "11".repeat(64);
     const b = "22".repeat(128);

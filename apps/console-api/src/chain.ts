@@ -431,9 +431,7 @@ export async function attestKyb(approve: boolean): Promise<{ onChain: boolean; s
     contractId: org,
     source: TX_SOURCE,
     send: true,
-    // The KybStatus union arg is passed as JSON to the CLI (a unit variant → a
-    // JSON string), e.g. `"Approved"`.
-    fnArgs: ["attest_kyb", "--org_id", KYB_ORG_ID, "--status", JSON.stringify(approve ? "Approved" : "Rejected"), "--inquiry_ref", inquiryRef],
+    fnArgs: ["attest_kyb", "--org_id", KYB_ORG_ID, "--status", approve ? "Approved" : "Rejected", "--inquiry_ref", inquiryRef],
   });
   const after = await getKybStatus();
   return { onChain: true, status: after?.status ?? (approve ? "approved" : "rejected"), txHash: r.txHash, inquiryRef };

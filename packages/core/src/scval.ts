@@ -36,6 +36,16 @@ export function scvalForArg(name: string, value: string): xdr.ScVal {
     const arr = JSON.parse(value) as (string | number)[];
     return xdr.ScVal.scvVec(arr.map((x) => nativeToScVal(BigInt(x), { type: "u256" })));
   }
+  // org_account member lists: Vec<Address>, JSON-encoded by the caller.
+  if (name === "members") {
+    const arr = JSON.parse(value) as string[];
+    return xdr.ScVal.scvVec(arr.map((x) => nativeToScVal(x, { type: "address" })));
+  }
+  // Unit enum variants are encoded as Vec(Symbol(Variant)).
+  if (name === "status") {
+    const variant = value.startsWith('"') ? (JSON.parse(value) as string) : value;
+    return xdr.ScVal.scvVec([nativeToScVal(variant, { type: "symbol" })]);
+  }
   // fixed 32-byte public keys / references (hex-encoded)
   if (["reference", "spend_pub", "view_pub", "mvk_scalar"].includes(name)) {
     return nativeToScVal(fixedBytes32(value), { type: "bytes" });
@@ -52,8 +62,10 @@ export function scvalForArg(name: string, value: string): xdr.ScVal {
   if (["amount", "fee", "min_amount", "paid_amount"].includes(name)) {
     return nativeToScVal(BigInt(value), { type: "i128" });
   }
-  // unix timestamps: u64
-  if (name === "expiry") return nativeToScVal(BigInt(value), { type: "u64" });
+  // u64 ids / timestamps
+  if (["expiry", "org_id"].includes(name)) return nativeToScVal(BigInt(value), { type: "u64" });
+  // u32 contract fields
+  if (name === "threshold") return nativeToScVal(Number(value), { type: "u32" });
   // human strings
   if (["handle", "memo"].includes(name)) {
     return nativeToScVal(value, { type: "string" });
