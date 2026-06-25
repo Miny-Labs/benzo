@@ -25,7 +25,7 @@ export function LockGate({ onUnlock }: { onUnlock: () => void }) {
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-canvas/95 backdrop-blur-xl"
+      className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-6 overflow-hidden bg-canvas"
       data-testid="lock-gate"
     >
       <motion.div
