@@ -1,6 +1,6 @@
 /**
  * Auto-load `.env` into process.env on import (side effect) — so the wallet BFF
- * never silently runs seeded just because the operator forgot to source it.
+ * can fail closed if the operator forgot to source live env.
  * Zero-dep; never clobbers an already-set var. Imported FIRST in server.ts.
  * (Identical in spirit to apps/console-api/src/loadEnv.ts.)
  */
@@ -12,7 +12,7 @@ function loadEnv(path = join(process.env.BENZO_ROOT || process.cwd(), ".env")): 
   try {
     text = readFileSync(path, "utf8");
   } catch {
-    return; // no .env — rely on shell-exported env (or run demo)
+    return; // no .env — rely on shell-exported env; live checks fail closed if absent
   }
   for (const raw of text.split("\n")) {
     const line = raw.trim();

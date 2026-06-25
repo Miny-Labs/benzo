@@ -1,9 +1,8 @@
 /**
- * Auto-load `.env` into process.env as a SIDE EFFECT on import — so the BFF never
- * silently runs in seeded/demo mode just because the operator forgot to
- * `set -a; . ./.env; set +a`. Zero-dep; never overwrites already-set vars (an
- * explicit shell export still wins). Imported FIRST in server.ts so it runs
- * before chain.ts reads any env.
+ * Auto-load `.env` into process.env as a SIDE EFFECT on import so the BFF can
+ * fail closed when live env is absent. Zero-dep; never overwrites already-set
+ * vars (an explicit shell export still wins). Imported FIRST in server.ts so it
+ * runs before chain.ts reads any env.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +12,7 @@ function loadEnv(path = join(process.env.BENZO_ROOT || process.cwd(), ".env")): 
   try {
     text = readFileSync(path, "utf8");
   } catch {
-    return; // no .env — rely on shell-exported env (or run in demo mode)
+    return; // no .env — rely on shell-exported env; live checks fail closed if absent
   }
   for (const raw of text.split("\n")) {
     const line = raw.trim();

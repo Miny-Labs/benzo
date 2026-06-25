@@ -48,7 +48,7 @@ export function formatDate(ts: number | string | Date): string {
 // Default to the build's active network (NETWORK), never a hardcoded "testnet":
 // these links are the real settlement receipts, so on a mainnet/public build they
 // must deep-link to the right explorer (a testnet default => "tx not found" => the
-// payment looks fake). A caller can still pass an explicit network when it has one
+// payment looks unverified). A caller can still pass an explicit network when it has one
 // (e.g. the on-chain ref's own network field).
 export function explorerTxUrl(hash: string, network: string = NETWORK): string {
   return `https://stellar.expert/explorer/${network}/tx/${hash}`;

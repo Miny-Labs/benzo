@@ -10,7 +10,7 @@ import type { Approval } from "./approvals.js";
 /** Per-recipient line status within a batch. */
 export type PayrollLineStatus = "pending" | "paid" | "failed";
 
-/** Where the payroll roster came from (sandbox sources are first-class). */
+/** Where the payroll roster came from. */
 export type PayrollSource = "manual" | "csv" | "merge" | "gusto";
 
 /** Batch lifecycle — one approval, one batched shielded settlement. */
@@ -32,7 +32,7 @@ export interface PayrollLine {
   status: PayrollLineStatus;
   /** settlement tx hash once paid */
   txHash?: string;
-  /** TRUE only when really settled on-chain; false/undefined => demo (not settled). */
+  /** TRUE only when really settled on-chain; false/undefined => not settled. */
   onChain?: boolean;
   /** populated for CSV/import rows that failed validation */
   error?: string;

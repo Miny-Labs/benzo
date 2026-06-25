@@ -53,7 +53,7 @@ export function Send() {
   const { contacts: bffContacts, session, publicBalance, refresh } = useWallet();
   const contacts = useMemo(() => mergeContacts(bffContacts), [bffContacts]); // C6: BFF + saved
   const { state, receipt, run, reset } = useSendStream();
-  const [to, setTo] = useState(() => params.get("to") ?? ""); // seeded from Contacts / a request
+  const [to, setTo] = useState(() => params.get("to") ?? ""); // prefilled from Contacts / a request
   const [amount, setAmount] = useState(() => params.get("amount") ?? "");
   const [memo, setMemo] = useState(() => params.get("memo") ?? "");
   const [step, setStep] = useState<Step>("form");
@@ -293,7 +293,7 @@ function PublicSendDone({ display, address, amount, result, onDone }: { display:
 }
 
 /** Just-in-time ID step-up (C5). Honest: the real bump runs through a verification
- *  provider; we don't fake a success. The ID never goes on-chain. */
+ *  provider; we don't claim success without a provider result. The ID never goes on-chain. */
 function StepUpSheet({ message, onClose }: { message: string; onClose: () => void }) {
   return (
     <motion.div

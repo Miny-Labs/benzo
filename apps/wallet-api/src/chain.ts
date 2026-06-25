@@ -1,8 +1,9 @@
 /**
  * The LIVE seam to @benzo/core for the consumer wallet. With the testnet env
  * loaded (`set -a; . ./.env; set +a`) and the ~/.benzo wallet present, these
- * settle REAL testnet USDC (real Groth16 proofs + Soroban). Otherwise we serve
- * the seeded demo store so the UI builds offline.
+ * settle REAL testnet USDC (real Groth16 proofs + Soroban). If the live client
+ * cannot be initialized, API routes fail closed instead of serving local balances
+ * or fabricated settlement results.
  *
  * Proving path is selectable per call — `local` (NodeProver, snarkjs on this
  * host) or `tee` (PhalaProver, the attested Phala enclave). This is what the test
@@ -114,7 +115,7 @@ export function teeConfig(): { endpoint: string; measurement: string } | null {
     const d = deployment() as { tee?: { endpoint?: string; composeHash?: string } };
     if (d.tee?.endpoint && d.tee?.composeHash) return { endpoint: d.tee.endpoint, measurement: d.tee.composeHash };
   } catch {
-    // deployment record unreadable (e.g. demo run outside the repo) — no TEE info.
+    // deployment record unreadable — no TEE info.
   }
   return null;
 }
@@ -225,7 +226,7 @@ export function getClient(prover: ProverKind = process.env.VERCEL === "1" ? "tee
     clientKind = prover;
     mvkWired = false; // a rebuilt client (e.g. prover switch) must re-wire its MVK mirror
   } catch (e) {
-    console.error("[wallet-api] live client unavailable, using seeded store:", (e as Error).message);
+    console.error("[wallet-api] live client unavailable; refusing app data:", (e as Error).message);
     client = null;
     clientKind = null;
   }
@@ -236,11 +237,12 @@ export function isLive(): boolean {
   return getClient() !== null;
 }
 
-export function liveStatus(): { live: boolean; mode: "live" | "demo"; missing: string[] } {
+export function liveStatus(): { live: boolean; mode: "live" | "unavailable"; missing: string[] } {
   const missing: string[] = [];
   if (!process.env.SOROBAN_RPC_URL) missing.push("SOROBAN_RPC_URL");
   if (!process.env.DEPLOYER_SECRET) missing.push("DEPLOYER_SECRET");
-  return { live: isLive(), mode: isLive() ? "live" : "demo", missing };
+  const live = isLive();
+  return { live, mode: live ? "live" : "unavailable", missing };
 }
 
 /** Which proving backends are reachable + the attested-TEE coordinates. */
@@ -317,7 +319,7 @@ export async function getBalanceStroops(): Promise<{ stroops: string; live: bool
     await c.sync();
     return { stroops: (await c.getBalance()).toString(), live: true };
   }
-  return { stroops: "0", live: false };
+  throw new Error("Live testnet client unavailable. Balance was not read.");
 }
 
 // ----------------------------------------------------------------- history
@@ -513,15 +515,15 @@ function mapRampError(e: unknown, dir: "in" | "out"): RampError {
 }
 
 /** Live USDC reserve balance (stroops) — readable by anyone, straight from chain. */
-export async function getRampReserve(): Promise<{ reserve: string; live: boolean } | null> {
+export async function getRampReserve(): Promise<{ reserve: string; live: boolean }> {
   try {
     const ramp = rampId();
     const c = getClient();
-    if (!ramp || !c) return null;
+    if (!ramp || !c) throw new Error("Live ramp reserve unavailable.");
     const r = await c.opts.cli.view(ramp, TX_SOURCE, ["reserve"]);
     return { reserve: String(r), live: true };
   } catch {
-    return null; // demo mode / no deployment record → no live reserve
+    throw new Error("Live ramp reserve unavailable.");
   }
 }
 
@@ -642,17 +644,17 @@ export async function addMoney(amount: string, prover: ProverKind = "local"): Pr
 // The address is public; the shield is the same real Groth16/BN254 on-chain op.
 
 /** The wallet's public deposit address + its current LIQUID (unshielded) USDC. */
-export async function getDepositInfo(): Promise<{ address: string; liquid: string; asset: string; issuer: string; live: boolean } | null> {
+export async function getDepositInfo(): Promise<{ address: string; liquid: string; asset: string; issuer: string; live: boolean }> {
   try {
     const c = getClient();
-    if (!c) return null;
+    if (!c) throw new Error("Live testnet client unavailable.");
     const address = await selfAddress(c);
     const token = deployment().token as string;
     const liquid = String(await c.opts.cli.view(token, TX_SOURCE, ["balance", "--id", address]));
     const [asset, issuer] = String(deployment().usdcAsset ?? "USDC:").split(":");
     return { address, liquid, asset: asset || "USDC", issuer: issuer || "", live: true };
-  } catch {
-    return null;
+  } catch (e) {
+    throw new Error((e as Error).message || "Live deposit address unavailable.");
   }
 }
 
@@ -694,7 +696,6 @@ export async function importDeposit(amount: string | undefined, prover: ProverKi
  *  Reuses the same liquid read as getDepositInfo(). */
 export async function publicBalance(): Promise<{ stroops: string; address: string; asset: string; issuer: string; live: boolean }> {
   const info = await getDepositInfo();
-  if (!info) return { stroops: "0", address: "", asset: "USDC", issuer: "", live: false };
   return { stroops: info.liquid, address: info.address, asset: info.asset, issuer: info.issuer, live: true };
 }
 
@@ -771,10 +772,9 @@ export async function sendPublic(toAddress: string, amount: string): Promise<{ t
 
 /** The consumer's assurance tier. zkLogin/passkey onboarding establishes T1
  * (unique human); document IDV (T2) is a just-in-time step-up for the fiat ramp.
- * TESTNET STAND-IN: this is a fixed default (env-overridable), NOT backed by a
- * real IDV provider — raising it to T2 requires a KYC vendor integration (the
- * same external-provider seam as KYB). The UI badge + send/invite gates read it;
- * the README discloses this as mocked. */
+ * TESTNET ASSURANCE SOURCE: this is env-configured for the live testnet
+ * deployment. Raising it to T2 requires a KYC vendor integration (the same
+ * external-provider seam as KYB). */
 let kycTier = Number(process.env.BENZO_KYC_TIER ?? 1) || 1;
 export function getKycTier(): number {
   return kycTier;

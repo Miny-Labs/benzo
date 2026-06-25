@@ -1,9 +1,10 @@
 /**
  * @benzo/wallet-api — the BFF the consumer wallet UI calls. node:http, CORS-open
  * for local dev (add a bearer before exposing). On-chain ops route through
- * chain.ts (the @benzo/core seam); profile/contacts come from the seeded store.
+ * chain.ts (the @benzo/core seam). If the live chain client is unavailable, app
+ * API routes fail closed instead of serving local state as live data.
  */
-import "./loadEnv.js"; // FIRST: load .env so the BFF doesn't silently run seeded.
+import "./loadEnv.js"; // FIRST: load .env so missing live env fails closed.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   addMoney,
@@ -99,12 +100,11 @@ route("GET", "/api/live", (_q, res) => json(res, 200, liveStatus()));
 route("GET", "/api/prover", (_q, res) => json(res, 200, { ...proverInfo(), live: isLive() }));
 
 route("GET", "/api/balance", async (_q, res) => json(res, 200, await getBalanceStroops()));
-route("GET", "/api/ramp/reserve", async (_q, res) => json(res, 200, (await getRampReserve()) ?? { reserve: null, live: false }));
+route("GET", "/api/ramp/reserve", async (_q, res) => json(res, 200, await getRampReserve()));
 route("GET", "/api/history", async (_q, res) => json(res, 200, await getActivity()));
-// Recents/contacts: seeded names are DEMO-only. In live mode return none (the
-// wallet merges the user's own on-device contacts) so a live user never sees
-// fabricated handles.
-route("GET", "/api/contacts", (_q, res) => json(res, 200, isLive() ? [] : db.contacts));
+// Contacts are device-local in the wallet UI; the hosted API never provides
+// fabricated people.
+route("GET", "/api/contacts", (_q, res) => json(res, 200, []));
 
 route("POST", "/api/send", async (req, res, url) => {
   const body = await readJson<{ to?: string; handle?: string; amount: string; memo?: string; prover?: string }>(req);
@@ -114,7 +114,7 @@ route("POST", "/api/send", async (req, res, url) => {
 
   // Stream the 3-phase ceremony when the client asks for it (fetch + reader, not
   // EventSource, so a POST body works). Otherwise fall back to a single JSON reply
-  // (keeps non-streaming callers + the existing demo e2e green).
+  // (keeps non-streaming callers compatible).
   if ((req.headers.accept ?? "").includes("text/event-stream")) {
     cors(res);
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -183,7 +183,7 @@ route("POST", "/api/add-money", async (req, res, url) => {
 });
 
 // Direct deposit / import USDC from any external wallet (no ramp, no bank).
-route("GET", "/api/deposit-address", async (_q, res) => json(res, 200, (await getDepositInfo()) ?? { address: null, liquid: "0", asset: "USDC", issuer: "", live: false }));
+route("GET", "/api/deposit-address", async (_q, res) => json(res, 200, await getDepositInfo()));
 route("POST", "/api/import", async (req, res, url) => {
   const body = await readJson<{ amount?: string; prover?: string }>(req);
   try {
@@ -258,6 +258,12 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   try {
     const r = routes.find((x) => x.method === (req.method ?? "GET") && x.path === effectiveUrl.pathname);
     if (!r) return json(res, 404, { error: "not found" });
+    if (effectiveUrl.pathname.startsWith("/api/") && effectiveUrl.pathname !== "/api/live" && !isLive()) {
+      return json(res, 503, {
+        error: "Live testnet client unavailable. Refusing to serve app data.",
+        ...liveStatus(),
+      });
+    }
     await r.handler(req, res, effectiveUrl);
   } catch (e) {
     json(res, 500, { error: String((e as Error)?.message ?? e) });
@@ -275,7 +281,7 @@ if (process.env.VERCEL !== "1") server.listen(PORT, () => {
     console.error("[benzo-wallet-api] MODE=LIVE — REAL on-chain shielded USDC via @benzo/core (testnet).");
   } else {
     console.error(
-      `[benzo-wallet-api] MODE=DEMO — SEEDED fixtures (balances/settlement NOT real). ` +
+      `[benzo-wallet-api] MODE=UNAVAILABLE — refusing app data. ` +
         `Missing: ${s.missing.join(", ") || "(client init failed)"}. To go live: set -a; . ./.env; set +a; restart.`,
     );
   }

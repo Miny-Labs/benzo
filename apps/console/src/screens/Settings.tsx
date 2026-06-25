@@ -162,11 +162,7 @@ export function SettingsScreen() {
                 integrations.map((it) => (
                   <div key={it.id} className="flex items-center gap-3 px-5 py-3 text-[13.5px]">
                     <div className="min-w-0 flex-1 truncate capitalize">{it.provider}</div>
-                    {it.sandbox && it.status === "connected" ? (
-                      <Pill tone="warning">Test connector</Pill>
-                    ) : (
-                      <StatusPill status={it.status} />
-                    )}
+                    <StatusPill status={it.status} />
                   </div>
                 ))
               )}

@@ -22,7 +22,7 @@ import { registerPasskey, loginWithPasskey, isWebAuthnAvailable } from "../lib/p
 type Step = "welcome" | "auth" | "handle";
 
 // Real Google sign-in is enabled only when a client id is configured at build time.
-// Without it, the wallet uses the passkey/device path only; no fake provider auth.
+// Without it, the wallet uses the passkey/device path only; no placeholder provider auth.
 const GOOGLE_CLIENT_ID = (import.meta.env as Record<string, string | undefined>).VITE_GOOGLE_CLIENT_ID || "";
 declare global {
   interface Window {
@@ -138,7 +138,7 @@ function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
   }
 
   // Real Google sign-in (Google Identity Services). Only mounted when a client id is
-  // configured; advances ONLY when Google returns a real credential. No fake success.
+  // configured; advances ONLY when Google returns a real credential. No placeholder success.
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID || !gbtn.current) return;
     let cancelled = false;

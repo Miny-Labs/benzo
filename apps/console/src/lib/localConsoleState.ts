@@ -214,10 +214,10 @@ export async function snapshot(loadSeed: () => Promise<ConsoleSeed>): Promise<Co
       memorySnapshot = existing;
       return existing;
     }
-    const seeded = normalizeSnapshot(await loadSeed());
-    memorySnapshot = seeded;
-    await writeEncrypted(seeded);
-    return seeded;
+    const initial = normalizeSnapshot(await loadSeed());
+    memorySnapshot = initial;
+    await writeEncrypted(initial);
+    return initial;
   })();
   try {
     return clone(await pending);
@@ -564,7 +564,7 @@ export const localConsole = {
         const p = s.payments.find((x) => x.id === payment!.id);
         if (!p) return;
         p.status = settled.onChain ? "confirmed" : "failed";
-        p.settlement = { txHash: settled.txHash, onChain: settled.onChain, mode: settled.onChain ? "onchain" : "demo", nullifiers: settled.txHash ? [settled.txHash] : [] };
+        p.settlement = { txHash: settled.txHash, onChain: settled.onChain, mode: settled.onChain ? "onchain" : "failed", nullifiers: settled.txHash ? [settled.txHash] : [] };
         p.updatedAt = now();
         payment = clone(p);
       });
@@ -595,7 +595,7 @@ export const localConsole = {
         const p = s.payments.find((x) => x.id === payment!.id);
         if (!p) return;
         p.status = settled.onChain ? "confirmed" : "failed";
-        p.settlement = { txHash: settled.txHash, onChain: settled.onChain, mode: settled.onChain ? "onchain" : "demo", nullifiers: settled.txHash ? [settled.txHash] : [] };
+        p.settlement = { txHash: settled.txHash, onChain: settled.onChain, mode: settled.onChain ? "onchain" : "failed", nullifiers: settled.txHash ? [settled.txHash] : [] };
         p.updatedAt = now();
         payment = clone(p);
       });

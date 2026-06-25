@@ -2,8 +2,8 @@
  * The LIVE seam to @benzo/core — the headless SDK that settles REAL testnet
  * USDC via BenzoClient (real Groth16 proofs + Soroban + relayer). When the
  * process has the testnet env loaded (`set -a; . ./.env; set +a`) and the
- * ~/.benzo wallet exists, these functions perform real on-chain operations;
- * otherwise they fall back to the seeded store so the UI can build offline.
+ * ~/.benzo wallet exists, these functions perform real on-chain operations. If
+ * the live client cannot be initialized, API routes fail closed.
  *
  * Mirrors apps/cli makeClient: NodeProver, StellarCli(configFromEnv), the
  * deployment from deployments/testnet.json, the circuit artifacts, and the
@@ -102,7 +102,7 @@ function chainClientForRuntime(): ChainClient {
   });
 }
 
-/** Build (once) a live BenzoClient bound to the ~/.benzo wallet, or null if env is absent. */
+/** Build (once) a live BenzoClient bound to the configured wallet, or null if env is absent. */
 export function getClient(relayer = false): BenzoClient | null {
   if (clientTried) return client;
   clientTried = true;
@@ -156,7 +156,7 @@ export function getClient(relayer = false): BenzoClient | null {
     c.useAccount(account);
     client = c;
   } catch (e) {
-    console.error("[console-api] live client unavailable, using seeded store:", (e as Error).message);
+    console.error("[console-api] live client unavailable; refusing app data:", (e as Error).message);
     client = null;
   }
   return client;
@@ -185,11 +185,11 @@ function isValidStellarAddress(addr: string): boolean {
  * The treasury's PUBLIC (liquid, unshielded) USDC balance — the SAC balance at
  * the treasury's own public Stellar address. This is the plain liquid USDC any
  * external wallet/exchange sees; the org's M-of-N shielded pool is separate
- * (payableBalance/computeTreasury). null-safe: {live:false} in demo mode.
+ * (payableBalance/computeTreasury).
  */
 export async function treasuryPublicBalance(): Promise<{ stroops: string; address: string; asset: string; issuer: string; live: boolean }> {
   const c = getClient();
-  if (!c) return { stroops: "0", address: "", asset: "USDC", issuer: "", live: false };
+  if (!c) throw new Error("Live console client unavailable. Treasury balance was not read.");
   const address = await selfAddress(c);
   const token = deployment?.token as string;
   const stroops = String(await c.opts.cli.view(token, TX_SOURCE, ["balance", "--id", address]));
@@ -200,17 +200,17 @@ export async function treasuryPublicBalance(): Promise<{ stroops: string; addres
 /**
  * The treasury's public receive coordinates (address + asset/issuer) for a
  * Receive QR — so any wallet/exchange can pay the org's PUBLIC balance. Mirrors
- * the wallet getDepositInfo (address half). null in demo mode.
+ * the wallet getDepositInfo (address half).
  */
-export async function treasuryReceiveInfo(): Promise<{ address: string; asset: string; issuer: string; live: boolean } | null> {
+export async function treasuryReceiveInfo(): Promise<{ address: string; asset: string; issuer: string; live: boolean }> {
   try {
     const c = getClient();
-    if (!c) return null;
+    if (!c) throw new Error("Live console client unavailable.");
     const address = await selfAddress(c);
     const [asset, issuer] = String((deployment?.usdcAsset as string) ?? "USDC:").split(":");
     return { address, asset: asset || "USDC", issuer: issuer || "", live: true };
-  } catch {
-    return null;
+  } catch (e) {
+    throw new Error((e as Error).message || "Live treasury receive info unavailable.");
   }
 }
 
@@ -286,15 +286,15 @@ async function wireMvkRegistry(c: BenzoClient): Promise<void> {
 
 /**
  * Onboarding step 6 — register the org owner's MVK on-chain (the one genuinely
- * real, ZK action in business onboarding; KYB is a labeled mock). Treasury decode
+ * real, ZK action in business onboarding). Treasury decode
  * + prove-balance depend on it. Returns the tx + the resulting registry root.
  */
 export async function registerOwnerMvk(): Promise<{ onChain: boolean; txHash?: string; mvkRoot?: string }> {
   const c = getClient();
-  if (!c) return { onChain: false };
+  if (!c) throw new Error("Live console client unavailable. MVK was not registered.");
   const registry = deployment?.mvkRegistry as string | undefined;
   const rpc = process.env.SOROBAN_RPC_URL;
-  if (!registry || !rpc) return { onChain: false };
+  if (!registry || !rpc) throw new Error("MVK registry deployment is missing.");
   const myMvk = c.account.mvkScalar;
   const myLeaf = mvkRegistryLeaf(myMvk, 0n);
   let leaves = await fetchMvkRegistryLeaves(rpc, registry, 1);
@@ -310,7 +310,7 @@ export async function registerOwnerMvk(): Promise<{ onChain: boolean; txHash?: s
 }
 
 // ---------------------------------------------------------------- on-chain KYB
-// KYB is a REAL on-chain attestation, not a BFF mock. The decision is signed by
+// KYB is a REAL on-chain attestation. The decision is signed by
 // the designated issuer key and stored in org_account; the console READS it from
 // chain. The issuer key is the integration seam: today it is our own key; a real
 // provider (Persona/Sumsub) would hold it (or we re-point to theirs) and post
@@ -384,17 +384,17 @@ function kybLabel(raw: unknown): "unverified" | "pending" | "approved" | "reject
   return "unverified";
 }
 
-/** Read the org's KYB status + inquiry ref straight from chain. null in demo mode. */
-export async function getKybStatus(): Promise<{ status: "unverified" | "pending" | "approved" | "rejected"; inquiryRef: string; onChain: boolean } | null> {
+/** Read the org's KYB status + inquiry ref straight from chain. */
+export async function getKybStatus(): Promise<{ status: "unverified" | "pending" | "approved" | "rejected"; inquiryRef: string; onChain: boolean }> {
   try {
     const c = getClient();
     const org = orgAccountId();
-    if (!c || !org) return null;
+    if (!c || !org) throw new Error("Live KYB contract unavailable.");
     const r = await c.opts.cli.view(org, TX_SOURCE, ["kyb_status", "--org_id", KYB_ORG_ID]);
     const arr = Array.isArray(r) ? r : [r, "0"]; // contract returns (KybStatus, U256)
     return { status: kybLabel(arr[0]), inquiryRef: String(arr[1] ?? "0"), onChain: true };
-  } catch {
-    return null;
+  } catch (e) {
+    throw new Error((e as Error).message || "Live KYB status unavailable.");
   }
 }
 
@@ -424,13 +424,12 @@ async function ensureOrgRegistered(c: BenzoClient, org: string): Promise<void> {
 
 /**
  * Post the org's KYB decision ON-CHAIN, signed by the issuer key (issuer-gated in
- * the contract). Returns the resulting on-chain status. In demo mode (no live
- * client) it reports a clearly off-chain decision so the UI can still build.
+ * the contract). Returns the resulting on-chain status.
  */
 export async function attestKyb(approve: boolean): Promise<{ onChain: boolean; status: string; txHash?: string; inquiryRef: string }> {
   const c = getClient();
   const org = orgAccountId();
-  if (!c || !org) return { onChain: false, status: approve ? "approved" : "rejected", inquiryRef: "0" };
+  if (!c || !org) throw new Error("Live KYB contract unavailable. KYB was not attested.");
   await ensureOrgRegistered(c, org);
   const inquiryRef = Date.now().toString(); // ties the on-chain record to the provider case file
   const r = await c.opts.cli.invoke({
@@ -440,7 +439,7 @@ export async function attestKyb(approve: boolean): Promise<{ onChain: boolean; s
     fnArgs: ["attest_kyb", "--org_id", KYB_ORG_ID, "--status", approve ? "Approved" : "Rejected", "--inquiry_ref", inquiryRef],
   });
   const after = await getKybStatus();
-  return { onChain: true, status: after?.status ?? (approve ? "approved" : "rejected"), txHash: r.txHash, inquiryRef };
+  return { onChain: true, status: after.status, txHash: r.txHash, inquiryRef };
 }
 
 // The org treasury balance requires an incremental chain re-sync, which is slow
@@ -461,10 +460,10 @@ async function orgTreasuryStroops(c: BenzoClient): Promise<bigint> {
   return stroops;
 }
 
-/** The org's dual-controlled TREASURY balance (stroops); {live:false, 0n} in demo. */
+/** The org's dual-controlled TREASURY balance (stroops). */
 export async function payableBalance(): Promise<{ live: boolean; stroops: bigint }> {
   const c = getClient();
-  if (!c) return { live: false, stroops: 0n };
+  if (!c) throw new Error("Live console client unavailable. Treasury balance was not read.");
   return { live: true, stroops: await orgTreasuryStroops(c) };
 }
 
@@ -515,20 +514,20 @@ export async function payOne(handle: string | undefined, amount: string): Promis
   }
 }
 
-/** Live status + which env vars block live mode — so the UI can badge live vs demo. */
-export function liveStatus(): { live: boolean; mode: "live" | "demo"; missing: string[] } {
+/** Live status + which env vars block live mode. */
+export function liveStatus(): { live: boolean; mode: "live" | "unavailable"; missing: string[] } {
   const missing: string[] = [];
   if (!process.env.SOROBAN_RPC_URL) missing.push("SOROBAN_RPC_URL");
   if (!process.env.DEPLOYER_SECRET) missing.push("DEPLOYER_SECRET");
   const live = getClient() !== null;
-  return { live, mode: live ? "live" : "demo", missing };
+  return { live, mode: live ? "live" : "unavailable", missing };
 }
 
 function toBig(v: unknown): bigint {
   return typeof v === "bigint" ? v : BigInt(String(v ?? 0));
 }
 
-/** Treasury view — the REAL dual-controlled (M-of-N) treasury balance; no seeded numbers. */
+/** Treasury view — the REAL dual-controlled (M-of-N) treasury balance. */
 export async function computeTreasury(): Promise<TreasuryView> {
   const c = getClient();
   if (c) {
@@ -541,9 +540,7 @@ export async function computeTreasury(): Promise<TreasuryView> {
     }));
     return { totalHidden: money(stroops.toString()), accounts, proveBalanceAvailable: true, live: true };
   }
-  // Not live: honest zeros badged `live:false` (NO fabricated balances).
-  const accounts = db.accounts.map((account) => ({ account, balance: { amount: "0", assetCode: "USDC" } }));
-  return { totalHidden: { amount: "0", assetCode: "USDC" }, accounts, proveBalanceAvailable: false, live: false };
+  throw new Error("Live console client unavailable. Treasury was not computed.");
 }
 
 /** A normalized on-chain reference the console renders in a "see on-chain" detail view. */
@@ -634,10 +631,7 @@ export async function proveBalance(
 ): Promise<{ holds: boolean; onChain: boolean; minStroops: string; ref: OnChainRef }> {
   const publics = [{ k: publicLabel, v: usdLabel(minStroops) }];
   const c = getClient();
-  if (!c) {
-    const holds = BigInt(minStroops) <= 0n;
-    return { holds, onChain: false, minStroops, ref: onChainRef(vkLabel, false, publics) };
-  }
+  if (!c) throw new Error("Live console client unavailable. Balance proof was not generated.");
   await c.sync();
   await wireMvkRegistry(c);
   await ensureOrgSetup(c);
@@ -675,7 +669,7 @@ export async function proveLineCap(
   context = 0n,
 ): Promise<{ withinCap: boolean; onChain: boolean }> {
   const c = getClient();
-  if (!c) return { withinCap: false, onChain: false };
+  if (!c) throw new Error("Live console client unavailable. Spending-cap proof was not generated.");
   try {
     const to = await c.resolveHandle(handle.replace(/^@/, ""));
     const r = await c.proveOrgPayoutCap({ to, amount: BigInt(amountStroops), cap: BigInt(capStroops), context });
@@ -698,7 +692,7 @@ export async function proveLineInnocence(
   context = 0n,
 ): Promise<{ innocent: boolean; onChain: boolean }> {
   const c = getClient();
-  if (!c) return { innocent: false, onChain: false };
+  if (!c) throw new Error("Live console client unavailable. Innocence proof was not generated.");
   try {
     const to = await c.resolveHandle(handle.replace(/^@/, ""));
     const r = await c.proveOrgPayoutInnocence({ to, amount: BigInt(amountStroops), context });
@@ -720,7 +714,7 @@ export async function proveNetting(
   context = 0n,
 ): Promise<{ onChain: boolean; net: string; wetPay: boolean; ref?: OnChainRef }> {
   const c = getClient();
-  if (!c) return { onChain: false, net: "0", wetPay: true };
+  if (!c) throw new Error("Live console client unavailable. Netting proof was not generated.");
   try {
     const r = await c.proveCrossNetting({ aOwesB: BigInt(weOweStroops), bOwesA: BigInt(theyOweStroops), context });
     const wetPay = r.payerIsA === 1n;
@@ -754,7 +748,7 @@ export function jurisdictionLabel(code: string): string {
  */
 export async function proveKybCredential(): Promise<{ ok: boolean; onChain: boolean; jurisdiction: string; tier: string; ref?: OnChainRef }> {
   const c = getClient();
-  if (!c) return { ok: false, onChain: false, jurisdiction: jurisdictionLabel(KYB_JURISDICTION.toString()), tier: KYB_TIER.toString() };
+  if (!c) throw new Error("Live console client unavailable. KYB proof was not generated.");
   try {
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
     const r = await c.proveOrgKyb({
@@ -791,7 +785,7 @@ export async function proveRunComputation(
   context = 0n,
 ): Promise<{ ok: boolean; onChain: boolean; runTotal: string; ref?: OnChainRef }> {
   const c = getClient();
-  if (!c) return { ok: false, onChain: false, runTotal: "0" };
+  if (!c) throw new Error("Live console client unavailable. Payroll computation proof was not generated.");
   try {
     const compLines = [];
     for (let i = 0; i < lines.length; i++) {
@@ -828,7 +822,7 @@ export async function proveAnonymousApproval(
   runId: string,
 ): Promise<{ approved: boolean; onChain: boolean; approvers: number; threshold: number; memberCount: number; ref?: OnChainRef }> {
   const c = getClient();
-  if (!c) return { approved: false, onChain: false, approvers: 0, threshold: Number(ORG_THRESHOLD), memberCount: ORG_MEMBERS };
+  if (!c) throw new Error("Live console client unavailable. Anonymous approval proof was not generated.");
   try {
     const r = await c.proveOrgApproval({
       memberSeeds: ORG_APPROVER_SEEDS,
@@ -858,8 +852,7 @@ export async function proveSolvency(liabilitiesStroops: string): Promise<{ solve
 
 /**
  * Disclose the EXACT treasury total to an auditor as a real ZK proof-of-sum,
- * VERIFIED ON-CHAIN (replaces the old plaintext `disclosedTotal()` — the "killer
- * fake ZK"). Proves the disclosed notes sum to `total` (individual amounts stay
+ * VERIFIED ON-CHAIN. Proves the disclosed notes sum to `total` (individual amounts stay
  * hidden) and the chain confirms the SUM proof via verify_proof(SUM,…).
  */
 // The honest soundness boundary of a proof-of-sum: it proves the DISCLOSED notes
@@ -872,7 +865,7 @@ export const SUM_SOUNDNESS_BOUNDARY =
 
 export async function proveTotal(): Promise<{ total: string; onChain: boolean; soundness?: string; ref?: OnChainRef }> {
   const c = getClient();
-  if (!c) return { total: "0", onChain: false };
+  if (!c) throw new Error("Live console client unavailable. Total proof was not generated.");
   // Real ZK org proof-of-sum over the M-of-N treasury notes, verified ON-CHAIN
   // (vk_id ORGSUM): reveals only the total, never an individual salary. Falls
   // back to the view-key figure only if no org notes exist yet.
@@ -912,9 +905,9 @@ export async function proveTotalAttestation(period: string): Promise<{
   sorobanProof: unknown;
   sorobanPublics: string[];
   issuedAt: string;
-} | null> {
+}> {
   const c = getClient();
-  if (!c) return null;
+  if (!c) throw new Error("Live console client unavailable. Total attestation was not generated.");
   await c.sync();
   await wireMvkRegistry(c);
   await ensureOrgSetup(c);
@@ -944,14 +937,14 @@ export async function proveTotalAttestation(period: string): Promise<{
  */
 export function auditorGrantViewKey(scopeLabel: string): { viewKey: string; live: boolean } {
   const c = getClient();
-  if (!c) return { viewKey: "", live: false };
+  if (!c) throw new Error("Live console client unavailable. Auditor grant key was not generated.");
   const tvk = deriveTvk(c.account.mvkSecret, scopeLabel || "audit");
   return { viewKey: toHex(tvk.publicKey), live: true };
 }
 
 /**
- * Settle a shielded transfer for `po`. LIVE: a real joinsplit proof + on-chain
- * submit to `toHandle`. Offline: store-backed stub.
+ * Settle a shielded transfer for `po` with a real joinsplit proof + on-chain
+ * submit to `toHandle`.
  */
 export async function submitShieldedTransfer(po: PaymentOrder, toHandle?: string): Promise<PaymentOrder> {
   const c = getClient();
@@ -965,7 +958,7 @@ export async function submitShieldedTransfer(po: PaymentOrder, toHandle?: string
     }
     if (r.error) {
       po.status = "failed";
-      po.settlement = { onChain: false, mode: "demo" };
+      po.settlement = { onChain: false, mode: "failed" };
       po.updatedAt = now();
       console.warn(`[console-api] payment ${po.id} settlement failed: ${r.error}`);
       return po;
@@ -974,18 +967,17 @@ export async function submitShieldedTransfer(po: PaymentOrder, toHandle?: string
   }
   // NOT settled on-chain — the BFF isn't live, or the recipient has no on-chain
   // @handle. Do NOT fabricate a txHash or approved state.
-  const reason = c ? "recipient has no on-chain @handle" : "BFF not live (env not loaded)";
+  const reason = c ? "recipient has no on-chain @handle" : "live client unavailable";
   console.warn(`[console-api] payment ${po.id} NOT settled on-chain (${reason})`);
   po.status = "failed";
-  po.settlement = { onChain: false, mode: "demo" };
+  po.settlement = { onChain: false, mode: "failed" };
   po.updatedAt = now();
   return po;
 }
 
 /**
- * Confidential batch payroll — LIVE: a real joinsplit per recipient (amounts
- * note-hidden) via client.payroll; offline: stub tx hashes. Returns a tx hash
- * per item (aligned with `items`).
+ * Confidential batch payroll — a real joinsplit per recipient (amounts
+ * note-hidden) via client.payroll. Returns a tx hash per item.
  */
 export async function runPayroll(
   items: { handle?: string; amount: string }[],
@@ -1023,7 +1015,7 @@ export async function runPayroll(
     return res.map((r) => ({ onChain: true, txHash: r.txHash ?? undefined }));
   }
   // NOT settled on-chain — don't fabricate tx hashes.
-  const reason = c ? "missing recipient @handle(s)" : "BFF not live (env not loaded)";
+  const reason = c ? "missing recipient @handle(s)" : "live client unavailable";
   console.warn(`[console-api] payroll NOT settled on-chain (${reason})`);
   return items.map(() => ({ onChain: false }));
 }

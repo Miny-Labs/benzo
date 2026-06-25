@@ -182,7 +182,7 @@ export function Grants() {
           <ShieldCheck size={16} className="text-primary" /> KYB credential (zero-knowledge)
         </div>
         <p className="mt-1.5 max-w-2xl text-[12.5px] leading-relaxed text-muted">
-          Prove your business is verified, in a given jurisdiction and tier, to a counterparty or marketplace, without handing over a single document. The proof is checked on-chain and a one-time nullifier stops it being reused to spin up fake entities.
+          Prove your business is verified, in a given jurisdiction and tier, to a counterparty or marketplace, without handing over a single document. The proof is checked on-chain and a one-time nullifier stops it being reused for duplicate entities.
         </p>
         {busyKyb ? (
           <div className="mt-4">

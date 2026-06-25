@@ -44,14 +44,14 @@ export interface DashboardSummary {
   openInvoices: number;
   scheduledPayrolls: number;
   recentActivity: ActivityItem[];
-  /** TRUE when the BFF is serving real on-chain data; false => seeded demo data. */
+  /** TRUE when the BFF is serving real on-chain data. */
   live: boolean;
 }
 
 /** GET /api/live — is the BFF wired to live testnet, and if not, why. */
 export interface LiveStatusResponse {
   live: boolean;
-  mode: "live" | "demo";
+  mode: "live" | "unavailable";
   /** env vars that are missing/blocking live mode (empty when live). */
   missing: string[];
 }
@@ -68,7 +68,7 @@ export interface TreasuryView {
   accounts: TreasuryAccountView[];
   /** whether a prove-balance proof can be produced for a threshold */
   proveBalanceAvailable: boolean;
-  /** TRUE => real decoded on-chain balance; false => seeded demo balances. */
+  /** TRUE => real decoded on-chain balance. */
   live: boolean;
 }
 
@@ -139,7 +139,7 @@ export interface CreateViewingGrantRequest {
 
 export interface ConnectIntegrationRequest {
   provider: IntegrationProvider;
-  /** sandbox OAuth/public token or linked-account token (sandbox only) */
+  /** OAuth/public token or linked-account token */
   token?: string;
 }
 
@@ -152,7 +152,7 @@ export interface ProveBalanceResponse {
   /** the org holds at least `min` (proof attached) */
   holds: boolean;
   proof: string;
-  /** TRUE => real Groth16 proof from testnet; false => demo stub (BFF not live). */
+  /** TRUE => real Groth16 proof from testnet; false => no on-chain proof. */
   onChain: boolean;
 }
 

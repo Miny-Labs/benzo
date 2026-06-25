@@ -10,7 +10,7 @@ export interface Session {
   handle?: string;
   kycTier?: number;
   live: boolean;
-  mode: "live" | "demo";
+  mode: "live" | "unavailable";
   missing: string[];
   prover: { available: ProverKind[]; tee: { endpoint: string; measurement: string } | null };
 }

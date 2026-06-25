@@ -1,6 +1,6 @@
 /**
  * Profile — who you are, the proof-of-balance entry point, and the few honest
- * settings (mask balance, live/demo mode, where proofs run). Calm, not a crypto
+ * settings (mask balance, live mode, where proofs run). Calm, not a crypto
  * settings dump.
  */
 import { useEffect, useState } from "react";

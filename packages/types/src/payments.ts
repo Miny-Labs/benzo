@@ -81,9 +81,9 @@ export interface SettlementRefs {
   providerTxId?: string;
   /** TRUE only when really settled on-chain. false/undefined => not on-chain. */
   onChain?: boolean;
-  /** "onchain" = real testnet settlement; "demo" = BFF not live or no recipient
-   *  handle, so NO real settlement happened (and `txHash` is intentionally unset). */
-  mode?: "onchain" | "demo";
+  /** "onchain" = real testnet settlement; "failed" = no real settlement happened
+   *  and `txHash` is intentionally unset. */
+  mode?: "onchain" | "failed";
 }
 
 /** The canonical payment order across all rails. */

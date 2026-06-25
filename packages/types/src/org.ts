@@ -1,6 +1,6 @@
 import type { MemberId, OrgId, ShieldedAddress, StellarAddress, Timestamp } from "./common.js";
 
-/** KYB lifecycle for the business entity (Mock provider in sandbox). */
+/** KYB lifecycle for the business entity. */
 export type KybStatus = "unverified" | "pending" | "approved" | "rejected";
 
 /** A business tenant — the top-level account everything hangs off. */

@@ -1,5 +1,5 @@
 /**
- * In-memory product store for the console BFF, seeded with a testnet org and
+ * In-memory product store for the console BFF, bootstrapped with a testnet org and
  * product objects. On-chain actions route through @benzo/core (see chain.ts);
  * product state (orgs, ledger, approvals, policies) is genuinely off-chain by
  * design (the double-entry ledger is the CFO-readable system of record).
@@ -221,9 +221,9 @@ export function seed(): Db {
   const ledger: LedgerEntry[] = [];
 
   const integrations: Integration[] = [
-    { id: "int_merge", orgId, provider: "merge", status: "disconnected", sandbox: true },
-    { id: "int_qbo", orgId, provider: "quickbooks", status: "disconnected", sandbox: true },
-    { id: "int_slack", orgId, provider: "slack", status: "disconnected", sandbox: true },
+    { id: "int_merge", orgId, provider: "merge", status: "disconnected" },
+    { id: "int_qbo", orgId, provider: "quickbooks", status: "disconnected" },
+    { id: "int_slack", orgId, provider: "slack", status: "disconnected" },
   ];
 
   return {

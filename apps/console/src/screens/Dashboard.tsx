@@ -40,7 +40,7 @@ function useCountUp(target: number, durationMs = 1000): number {
  * up the org + treasury keys but the workspace is one un-met prerequisite away from
  * a first payout: it needs funds and a distinct approver (maker-checker blocks the
  * first payout otherwise). Rather than letting the user discover that via an error,
- * we surface a guided checklist seeded from REAL store state — each item flips to
+ * we surface a guided checklist from REAL store state — each item flips to
  * done on its own when the underlying condition is met. It auto-hides once all three
  * are complete, and the user can dismiss it (persisted) at any time.
  */

@@ -15,7 +15,7 @@ export interface Notif {
   kind: "in" | "out" | "info";
   read: boolean;
   /** true ONLY for a real on-chain-settled payment in live mode — drives the
-   *  abstracted "proof verified" line. Never set for demo/pending rows (honesty gate). */
+   *  abstracted "proof verified" line. Never set for pending rows (honesty gate). */
   verified: boolean;
 }
 
@@ -51,7 +51,7 @@ function lineFor(row: ActivityRow): { title: string; body: string; kind: Notif["
 
 /** Derive the notification feed (newest first) from the activity history.
  *  `live` gates the abstracted "proof verified" line so it shows ONLY for real
- *  on-chain-settled payments (never demo) — a strict honesty gate. */
+ *  on-chain-settled payments — a strict honesty gate. */
 export function deriveNotifications(history: ActivityRow[], opts: { live?: boolean } = {}): Notif[] {
   const read = readSet();
   return [...history]

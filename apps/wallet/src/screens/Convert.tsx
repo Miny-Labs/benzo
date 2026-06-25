@@ -6,7 +6,7 @@
  *                                      balance (unshield → your own address).
  *                                      api.makePublic.
  * Both run the same REAL Groth16/BN254 on-chain op as Cash; we reuse the Cash
- * "journey" done-overlay so the moment feels crafted and honest (no fake toast).
+ * "journey" done-overlay so the moment feels crafted and honest.
  * The amount you can move is capped by the source balance, surfaced inline.
  */
 import { useEffect, useState } from "react";

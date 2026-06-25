@@ -51,14 +51,28 @@ async function request(path: string, init: { method?: string; headers?: Record<s
   };
 }
 
-test("routes nested wallet endpoints through the Vercel rpc shim", async () => {
-  const res = await request(`/api/rpc?path=${encodeURIComponent("/handle/available?h=ab")}`);
+test("reports unavailable live status when chain env is absent", async () => {
+  const res = await request("/api/live");
   expect(res.status).toBe(200);
-  await expect(res.json()).resolves.toMatchObject({ available: false });
+  await expect(res.json()).resolves.toMatchObject({ live: false, mode: "unavailable" });
 });
 
-test("does not export wallet account material from hosted deployments", async () => {
+test("fails closed for nested wallet endpoints when live client is unavailable", async () => {
+  const res = await request(`/api/rpc?path=${encodeURIComponent("/handle/available?h=ab")}`);
+  expect(res.status).toBe(503);
+  await expect(res.json()).resolves.toMatchObject({
+    live: false,
+    mode: "unavailable",
+    error: "Live testnet client unavailable. Refusing to serve app data.",
+  });
+});
+
+test("fails closed before hosted wallet account export can expose anything", async () => {
   const res = await request("/api/dev/account");
-  expect(res.status).toBe(404);
-  await expect(res.json()).resolves.toMatchObject({ error: "account export disabled" });
+  expect(res.status).toBe(503);
+  await expect(res.json()).resolves.toMatchObject({
+    live: false,
+    mode: "unavailable",
+    error: "Live testnet client unavailable. Refusing to serve app data.",
+  });
 });

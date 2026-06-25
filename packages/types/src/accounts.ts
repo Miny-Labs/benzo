@@ -31,7 +31,7 @@ export type AccountNumberType = "stellar" | "benzo_shielded" | "bank";
 export interface ExternalAccount {
   id: string;
   accountNumberType: AccountNumberType;
-  /** Stellar/shielded address, or a tokenized bank reference (sandbox) */
+  /** Stellar/shielded address, or a tokenized bank reference */
   address?: string;
   /** masked bank details for display (real details live in the provider) */
   bankLast4?: string;
@@ -64,7 +64,7 @@ export interface Counterparty {
   externalAccounts: ExternalAccount[];
   /** stable join key for accounting/ERP sync */
   externalId?: string;
-  /** tax form on file (sandbox: W9 / W8-BEN flag) */
+  /** tax form on file */
   taxFormType?: "W9" | "W8-BEN" | "none";
   /**
    * Pay rate card — the source-of-truth a payroll run COMPUTES each line from

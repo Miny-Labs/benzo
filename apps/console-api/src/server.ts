@@ -1,11 +1,11 @@
 /**
  * @benzo/console-api — the BFF the console UI calls. Matches the repo's
  * node:http style (cf. anchor/relayer). Implements the typed endpoint registry
- * from @benzo/types over an in-memory, seeded store; on-chain ops route through
- * chain.ts (the @benzo/core seam). CORS-open for local dev; add the same bearer
- * pattern as the relayer before exposing it.
+ * from @benzo/types over the workspace state; on-chain ops route through chain.ts
+ * (the @benzo/core seam). If the live chain client is unavailable, app API routes
+ * fail closed instead of serving local state as live data.
  */
-import "./loadEnv.js"; // FIRST: load .env so the BFF doesn't silently run seeded.
+import "./loadEnv.js"; // FIRST: load .env so missing live env fails closed.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 import type {
@@ -161,7 +161,7 @@ function postLedger(entry: LedgerEntry): void {
   entry.hash = chainHash(db.ledger[db.ledger.length - 1]?.hash, entry);
   db.ledger.push(entry);
 }
-/** One-time backfill so pre-existing (seeded) entries join the chain as genesis. */
+/** One-time backfill so pre-existing ledger entries join the chain as genesis. */
 function sealSeedLedger(): void {
   let prev: string | undefined;
   for (const e of db.ledger) {
@@ -346,7 +346,7 @@ route("POST", "/api/auth/google", async (req, res) => {
 // The wizard's draft + the real on-chain actions. KYB is a REAL on-chain
 // attestation (org_account, issuer-signed) — the console reads the decision from
 // chain, it is NOT fabricated here. The member MVK registration is likewise a
-// genuine on-chain tx when live. NO ZK and (now) NO KYB is mocked on-chain.
+// genuine on-chain tx when live. ZK and KYB paths are on-chain.
 interface OnboardingDraft {
   name?: string;
   legalName?: string;
@@ -381,7 +381,7 @@ route("POST", "/api/onboarding/kyb", async (req, res) => {
     const attested = await attestKyb(body.approve !== false);
     onboarding.kyb = {
       status: attested.status as "approved" | "pending" | "rejected" | "unverified",
-      provider: attested.onChain ? "On-chain attestation (org_account)" : "Pending (offline)",
+      provider: "On-chain attestation (org_account)",
       inquiryRef: attested.inquiryRef,
       checks: ["business_registration", "beneficial_owners", "ofac_screen", "tax_id"],
       onChain: attested.onChain,
@@ -396,7 +396,7 @@ route("POST", "/api/onboarding/kyb", async (req, res) => {
 /** The org's KYB status, read live FROM CHAIN (org_account.kyb_status). */
 route("GET", "/api/onboarding/kyb-status", async (_req, res) => {
   const s = await getKybStatus();
-  json(res, 200, s ?? { status: "unverified", inquiryRef: "0", onChain: false });
+  json(res, 200, s);
 });
 /** Register the org owner's MVK on-chain — the real ZK action of onboarding. */
 route("POST", "/api/onboarding/register-mvk", async (_req, res) => {
@@ -413,7 +413,7 @@ route("POST", "/api/onboarding/finish", async (_req, res) => {
   // Reflect the REAL on-chain KYB decision (read from chain when live), so the
   // workspace boots with the attested status rather than an assumed one.
   const chainKyb = await getKybStatus();
-  db.org.kybStatus = chainKyb?.status ?? onboarding.kyb?.status ?? "pending";
+  db.org.kybStatus = chainKyb.status;
   const member = db.members.find((m) => m.id === db.sessionMemberId)!;
   json(res, 200, { member, org: db.org, permissions: ROLE_PERMISSIONS[member.role] });
 });
@@ -466,7 +466,6 @@ route("POST", "/api/invoices/net", async (req, res) => {
 route("POST", "/api/records/period-total", async (req, res) => {
   const body = await readJson<{ period?: string }>(req);
   const att = await proveTotalAttestation(body.period || db.org?.name + " period");
-  if (!att) return json(res, 200, { live: false });
   json(res, 200, { live: true, org: db.org?.name ?? "Organization", ...att });
 });
 // True solvency — prove treasury >= Σ liabilities (pending payroll + open
@@ -493,7 +492,7 @@ route("GET", "/api/treasury/public-balance", async (_req, res) => json(res, 200,
 // Receive: address + asset/issuer for a Receive QR (inbound lands in Public).
 route("GET", "/api/treasury/receive", async (_req, res) => {
   const info = await treasuryReceiveInfo();
-  json(res, 200, info ?? { address: "", asset: "USDC", issuer: "", live: false });
+  json(res, 200, info);
 });
 // "Send to a wallet": a real on-chain USDC transfer from the Public balance to an
 // external G-address (credits the recipient's USDC trustline). Friendly errors.
@@ -1088,7 +1087,7 @@ route("GET", "/api/grants", (_req, res) => json(res, 200, db.grants));
 route("POST", "/api/grants", async (req, res) => {
   const body = await readJson<CreateViewingGrantRequest>(req);
   // Real scoped viewing key (one-way TVK derived from the org MVK + scope) —
-  // decrypt-only, never a signer. Not a random hash. {viewKey:""} in demo mode.
+  // decrypt-only, never a signer. Not a random hash.
   const vk = auditorGrantViewKey(body.scope?.label || body.tier || "audit");
   const grant = {
     id: id("vg"), orgId: db.org.id, auditorName: body.auditorName, auditorPubKey: body.auditorPubKey,
@@ -1196,7 +1195,7 @@ route("POST", "/api/integrations", async (req, res) => {
     existing.status = "disconnected";
     return json(res, 200, { ...existing, note });
   }
-  const integration = { id: id("int"), orgId: db.org.id, provider: body.provider, status: "disconnected" as const, sandbox: true, connectedAt: undefined };
+  const integration = { id: id("int"), orgId: db.org.id, provider: body.provider, status: "disconnected" as const, connectedAt: undefined };
   db.integrations.push(integration);
   json(res, 201, { ...integration, note });
 });
@@ -1217,6 +1216,12 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   try {
     const m = match(req.method ?? "GET", effectiveUrl.pathname);
     if (!m) return json(res, 404, { error: "not found" });
+    if (effectiveUrl.pathname.startsWith("/api/") && effectiveUrl.pathname !== "/api/live" && !isLive()) {
+      return json(res, 503, {
+        error: "Live testnet client unavailable. Refusing to serve app data.",
+        ...liveStatus(),
+      });
+    }
     await m.handler(req, res, m.params);
   } catch (e) {
     json(res, 500, { error: String((e as Error)?.message ?? e) });
@@ -1225,7 +1230,7 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
 
 export default handle;
 
-sealSeedLedger(); // bring pre-existing (seeded) ledger entries into the audit chain as genesis
+sealSeedLedger(); // bring pre-existing ledger entries into the audit chain as genesis
 const server = createServer(handle);
 if (process.env.VERCEL !== "1") server.listen(PORT, () => {
   const s = liveStatus();
@@ -1234,7 +1239,7 @@ if (process.env.VERCEL !== "1") server.listen(PORT, () => {
     console.error("[benzo-console-api] MODE=LIVE — serving REAL on-chain data via @benzo/core (testnet).");
   } else {
     console.error(
-      `[benzo-console-api] MODE=DEMO — serving SEEDED fixtures (balances/settlement are NOT real). ` +
+      `[benzo-console-api] MODE=UNAVAILABLE — refusing app data. ` +
         `Missing: ${s.missing.join(", ") || "(client init failed — see logs)"}. ` +
         `To go live: set -a; . ./.env; set +a; then restart.`,
     );

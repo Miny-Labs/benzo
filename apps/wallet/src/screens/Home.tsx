@@ -2,7 +2,7 @@
  * Home — the single focal screen. One big balance (Helvetica Now, counts up), the
  * ambient Private chip, a 3-pill action row (Send is the purple+glow focal
  * action), and a plain-English activity preview. No tx hashes, gas, or "connect
- * wallet". A demo banner appears only when the BFF isn't live.
+ * wallet". A blocking banner appears only when the BFF isn't live.
  */
 import { ArrowDownLeft, ArrowUpRight, Eye, Globe, Landmark, Lock, Plus, QrCode, Send as SendIcon, Smartphone } from "lucide-react";
 import { useNavigate } from "react-router-dom";

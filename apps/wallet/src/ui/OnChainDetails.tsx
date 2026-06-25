@@ -44,7 +44,7 @@ export function OnChainDetails({
   kind?: OnChainKind;
 }) {
   const [open, setOpen] = useState(false);
-  if (!onChain) return null; // demo/offline: nothing real to point at
+  if (!onChain) return null; // nothing real to point at
   const p = KIND_PROOF[kind];
   const proverLabel = prover === "tee" ? "Secure enclave (Phala TEE, attested)" : "This device (in-browser)";
 

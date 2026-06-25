@@ -45,7 +45,7 @@ export function Cash() {
   const [reserve, setReserve] = useState<string | null>(null);
   const [reserveErr, setReserveErr] = useState(false);
 
-  // Live on-chain reserve — the proof this ramp is real, not a fake balance bump.
+  // Live on-chain reserve — proof that the USDC leg is real.
   const loadReserve = () =>
     api
       .rampReserve()

@@ -1,10 +1,6 @@
 import type { IntegrationId, OrgId, Timestamp } from "./common.js";
 
-/**
- * Third-party connectors with self-serve PUBLIC SANDBOXES (verified). Merge is
- * the unified-API leverage point (accounting + HRIS in one) that sidesteps the
- * per-provider partner gates for NetSuite/Gusto/Deel/Rippling.
- */
+/** Third-party connector records for provider sync status. */
 export type IntegrationProvider =
   | "merge"
   | "quickbooks"
@@ -26,14 +22,12 @@ export const PROVIDER_CATEGORY: Record<IntegrationProvider, IntegrationCategory>
 
 export type IntegrationStatus = "disconnected" | "connected" | "error";
 
-/** A connected (sandbox) integration for an org. */
+/** A connected integration for an org. */
 export interface Integration {
   id: IntegrationId;
   orgId: OrgId;
   provider: IntegrationProvider;
   status: IntegrationStatus;
-  /** true while pointed at the provider's sandbox/test environment */
-  sandbox: boolean;
   /** provider-side ids (linked account / company / item), non-secret */
   externalRefs?: Record<string, string>;
   connectedAt?: Timestamp;
