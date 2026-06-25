@@ -223,8 +223,9 @@ route("POST", "/api/share-proof", async (req, res, url) => {
   json(res, 200, await shareProof(body.min, proverOf(url, body)));
 });
 
-// TESTNET-DEV ONLY (BENZO_DEV_EXPORT=1): provision the account to the device so
-// the browser reads its shielded balance/history straight from chain (no BFF).
+// LOCAL TESTNET-DEV ONLY (BENZO_DEV_EXPORT=1): provision the account to a
+// localhost device so the browser reads its shielded balance/history straight
+// from chain (no BFF). Hosted deployments must never export account material.
 route("GET", "/api/dev/account", (_q, res) => {
   const acct = exportAccountForDevice();
   if (!acct) return json(res, 404, { error: "account export disabled" });

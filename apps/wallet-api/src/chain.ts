@@ -1002,13 +1002,14 @@ export async function shareProof(
 
 // --------------------------------------------------- dev: provision account to device
 //
-// TESTNET-DEV ONLY. Hands the existing (file-custody) testnet account's keys to
-// the browser so the device can read its shielded balance/history DIRECTLY from
-// the chain (no BFF in the read path) — the "blockchain is the backend" thesis.
-// HARD-GATED behind BENZO_DEV_EXPORT=1 and the live testnet client; returns null
-// otherwise. In PRODUCTION the device derives these keys from the passkey on
-// device and they are NEVER transmitted — this endpoint is purely the testnet
-// migration affordance for the pre-existing funded account.
+// LOCAL TESTNET-DEV ONLY. Hands the existing (file-custody) testnet account's
+// keys to a localhost browser so the device can read its shielded balance/history
+// DIRECTLY from the chain (no BFF in the read path) — the "blockchain is the
+// backend" thesis.
+// HARD-GATED behind BENZO_DEV_EXPORT=1, testnet, and a non-Vercel runtime;
+// returns null otherwise. In hosted deployments the device derives these keys
+// from passkey/zk-login material and they are NEVER transmitted. This endpoint
+// is purely a local migration affordance for the pre-existing funded account.
 // Stateless gas-paying RELAY: the browser proves a transfer on-device and hands
 // over ONLY {contractId, fnArgs} (the proof + public commitments/nullifiers —
 // NEVER the witness). We submit it with our key (paying the XLM fee). Restricted
@@ -1091,6 +1092,7 @@ function buildWriteCall(fnArgs: string[]): { method: string; scArgs: xdr.ScVal[]
 export function exportAccountForDevice(): { spendSk: string; viewSecret: string; mvkSecret: string } | null {
   if (process.env.BENZO_DEV_EXPORT !== "1") return null;
   if ((process.env.STELLAR_NETWORK ?? "testnet") !== "testnet") return null; // never on mainnet
+  if (process.env.VERCEL === "1") return null; // never export wallet material from hosted deployments
   const c = getClient();
   if (!c) return null;
   const a = c.account;

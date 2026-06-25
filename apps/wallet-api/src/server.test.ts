@@ -6,6 +6,7 @@ let handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
 beforeAll(async () => {
   process.env.VERCEL = "1";
+  process.env.BENZO_DEV_EXPORT = "1";
   ({ handle } = await import("./server.js"));
 });
 
@@ -54,4 +55,10 @@ test("routes nested wallet endpoints through the Vercel rpc shim", async () => {
   const res = await request(`/api/rpc?path=${encodeURIComponent("/handle/available?h=ab")}`);
   expect(res.status).toBe(200);
   await expect(res.json()).resolves.toMatchObject({ available: false });
+});
+
+test("does not export wallet account material from hosted deployments", async () => {
+  const res = await request("/api/dev/account");
+  expect(res.status).toBe(404);
+  await expect(res.json()).resolves.toMatchObject({ error: "account export disabled" });
 });

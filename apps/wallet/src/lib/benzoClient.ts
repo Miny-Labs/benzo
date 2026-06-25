@@ -6,12 +6,12 @@
  * note scanner, syncs the pool from the Soroban RPC, trial-decrypts its own
  * notes, and sums the spendable balance — all on-device.
  *
- * Key provenance: in production the account is derived from the passkey on the
- * device (S3) and never leaves it. For the existing funded TESTNET account we
- * fetch it once from the BFF's hard-gated /api/dev/account (BENZO_DEV_EXPORT=1,
- * testnet only) — the one-time "migrate file-custody → device-custody" step. If
- * that endpoint is disabled, this returns null and the caller falls back to the
- * BFF read; nothing breaks.
+ * Key provenance: in hosted deployments the account must be derived from the
+ * passkey/zk-login material on the device and never leave it. For local testnet
+ * development only, /api/dev/account can be enabled with BENZO_DEV_EXPORT=1 as
+ * the one-time "migrate file-custody → device-custody" step. If that endpoint is
+ * disabled, this returns null and the caller falls back to the BFF read; nothing
+ * breaks.
  */
 import {
   BenzoClient,
