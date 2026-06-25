@@ -174,7 +174,7 @@ export function TxDetail() {
               <ExternalLink size={16} /> View receipt
             </a>
           ) : null}
-          {row.direction === "out" && privatePayment ? (
+          {onChain && privatePayment ? (
             <Button variant="secondary" full onClick={() => nav("/share-proof")} data-testid="txdetail-share">
               <ShieldCheck size={16} /> Share a provable receipt
             </Button>

@@ -5,7 +5,7 @@
  * MotionConfig in main.tsx; these variants also collapse to no-transform).
  */
 import { motion, type Variants, type Transition } from "framer-motion";
-import type { ReactNode } from "react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
 
 export const EASE = [0.22, 1, 0.36, 1] as const; // the signature ease-out
 export const spring: Transition = { type: "spring", stiffness: 420, damping: 32, mass: 0.8 };
@@ -46,9 +46,9 @@ export function Screen({ children, className = "" }: { children: ReactNode; clas
 }
 
 /** A cascading list/section: wrap items in <Stagger.Item>. */
-export function Stagger({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function Stagger({ children, className = "", ...props }: { children: ReactNode; className?: string } & ComponentPropsWithoutRef<typeof motion.div>) {
   return (
-    <motion.div variants={stagger} initial="hidden" animate="show" className={className}>
+    <motion.div variants={stagger} initial="hidden" animate="show" className={className} {...props}>
       {children}
     </motion.div>
   );
