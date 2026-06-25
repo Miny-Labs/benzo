@@ -111,12 +111,12 @@ export function App() {
   // also a routable screen so deep-links + back work. The shell stays mounted.
   return (
     <div
-      className="relative flex min-h-[100dvh] w-full items-center justify-center bg-[#dfe0dc] sm:bg-[radial-gradient(125%_85%_at_50%_-10%,#ecece7,#dcdcd5_55%,#d3d4cd)] sm:p-6"
+      className="fixed inset-0 flex h-[100dvh] w-full items-center justify-center overflow-hidden bg-[#dfe0dc] sm:bg-[radial-gradient(125%_85%_at_50%_-10%,#ecece7,#dcdcd5_55%,#d3d4cd)] sm:p-6"
       data-testid="app-root"
     >
       {/* desktop ambient: the looping video stage BEHIND the device (not inside it) */}
       {isDesktop ? <StageVideo /> : null}
-      <div className="device relative z-10 flex h-[100dvh] w-full flex-col overflow-hidden bg-canvas shadow-[0_40px_90px_rgba(25,40,55,0.28)] sm:h-[840px] sm:w-[400px] sm:rounded-[44px] sm:p-2.5">
+      <div className="device relative z-10 flex h-[100dvh] w-full flex-col overflow-hidden bg-canvas shadow-[0_40px_90px_rgba(25,40,55,0.28)] sm:h-[min(798px,calc(100dvh-48px))] sm:w-[min(380px,calc((100dvh-48px)/2.1))] sm:rounded-[44px] sm:p-2.5">
         <div className="relative flex flex-1 flex-col overflow-hidden sm:rounded-[34px]">
           {/* the app's background — the looping sky video, inside the phone on
               EVERY viewport (desktop + mobile). On desktop the StageVideo also
