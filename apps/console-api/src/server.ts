@@ -40,6 +40,26 @@ const pendingPayrollHandles = new Map<string, { handle?: string; amount: string 
 /** Per-contractor @handle (from CSV import / roster edit) used for live settlement. */
 const cpHandle = new Map<string, string>();
 
+function normalizeHandle(handle: string): string {
+  return handle.startsWith("@") ? handle : `@${handle}`;
+}
+
+function applyCounterpartyHandle(cp: Counterparty, handle: string): string {
+  const normalized = normalizeHandle(handle);
+  cpHandle.set(cp.id, normalized);
+  cp.paymentAddress = {
+    shielded: normalized,
+    spendPub: cp.paymentAddress?.spendPub ?? `demo-spend-${cp.id}`,
+    viewPub: cp.paymentAddress?.viewPub ?? `demo-view-${cp.id}`,
+    mvkScalar: cp.paymentAddress?.mvkScalar ?? `demo-mvk-${cp.id}`,
+  };
+  return normalized;
+}
+
+for (const cp of db.counterparties) {
+  if (cp.paymentAddress?.shielded) applyCounterpartyHandle(cp, cp.paymentAddress.shielded);
+}
+
 const privateEventKey = deriveEventKey(
   process.env.BENZO_PRIVATE_EVENT_SECRET ||
     process.env.DEPLOYER_SECRET ||
@@ -112,7 +132,7 @@ function assemblePayroll(reqLines: Array<{ counterpartyId: string }>): {
     // v1: fixed-monthly retainer — gross is the stored rate, computed here, not by the caller.
     total += BigInt(rate);
     lines.push({ counterpartyId: cp.id, amount: rate, rate, status: "pending" });
-    handles.push({ handle: cpHandle.get(cp.id), amount: rate });
+    handles.push({ handle: cp.paymentAddress?.shielded ?? cpHandle.get(cp.id), amount: rate });
   }
   return { lines, total: total.toString(), handles };
 }
@@ -528,7 +548,8 @@ route("POST", "/api/payments", async (req, res) => {
   // the approve/release step when the payment needs approval first. Resolve it
   // from the selected payee's saved handle when the caller didn't pass one, so
   // the UI never makes the user re-type a handle the dropdown already implies.
-  const toHandle = (body as CreatePaymentRequest & { toHandle?: string }).toHandle ?? cpHandle.get(po.toCounterpartyId ?? "");
+  const payee = db.counterparties.find((c) => c.id === po.toCounterpartyId);
+  const toHandle = (body as CreatePaymentRequest & { toHandle?: string }).toHandle ?? payee?.paymentAddress?.shielded ?? cpHandle.get(po.toCounterpartyId ?? "");
   if (toHandle) pendingHandles.set(po.id, toHandle);
   if (!policy) await submitShieldedTransfer(po, toHandle); // auto-settle when no approval needed
   db.payments.push(po);
@@ -646,7 +667,7 @@ function upsertContractor(name: string, handle?: string): Counterparty {
     cp = { id: id("cp"), orgId: db.org.id, name, type: "contractor", status: "pending_screening", externalAccounts: [], createdAt: now() };
     db.counterparties.push(cp);
   }
-  if (handle) cpHandle.set(cp.id, handle.startsWith("@") ? handle : `@${handle}`);
+  if (handle) applyCounterpartyHandle(cp, handle);
   return cp;
 }
 
@@ -697,7 +718,7 @@ route("POST", "/api/invites/accept", async (req, res) => {
     }
     const cp = db.counterparties.find((c) => c.id === body.counterpartyId);
     if (cp && body.handle) {
-      cpHandle.set(cp.id, body.handle.startsWith("@") ? body.handle : `@${body.handle}`);
+      applyCounterpartyHandle(cp, body.handle);
       cp.status = "allowlisted";
     }
     return json(res, 200, { ok: true, orgName: db.org.name, kind: body.kind, counterpartyId: body.counterpartyId, orgId: body.orgId ?? db.org.id });
@@ -706,9 +727,11 @@ route("POST", "/api/invites/accept", async (req, res) => {
   inv.status = "accepted";
   // a contractor accepting from the wallet hands over their @handle for settlement
   if (inv.counterpartyId && body.handle) {
-    cpHandle.set(inv.counterpartyId, body.handle.startsWith("@") ? body.handle : `@${body.handle}`);
     const cp = db.counterparties.find((c) => c.id === inv.counterpartyId);
-    if (cp) cp.status = "allowlisted";
+    if (cp) {
+      applyCounterpartyHandle(cp, body.handle);
+      cp.status = "allowlisted";
+    }
   }
   json(res, 200, { ok: true, orgName: db.org.name, kind: inv.kind, counterpartyId: inv.counterpartyId, orgId: db.org.id });
 });
@@ -824,7 +847,7 @@ route("POST", "/api/payrolls/import", async (req, res) => {
       };
       db.counterparties.push(cp);
     }
-    if (r.handle) cpHandle.set(cp.id, r.handle);
+    if (r.handle) applyCounterpartyHandle(cp, r.handle);
     imported.push(cp);
   }
   json(res, 200, { imported: imported.length, errors, contractors: db.counterparties.filter((c) => c.type === "contractor") });
@@ -841,7 +864,7 @@ route("PATCH", "/api/counterparties/:id", async (req, res, p) => {
   }
   if (body.status) cp.status = body.status;
   if (body.name) cp.name = body.name;
-  if (body.handle) cpHandle.set(cp.id, body.handle.startsWith("@") ? body.handle : `@${body.handle}`);
+  if (body.handle) applyCounterpartyHandle(cp, body.handle);
   json(res, 200, cp);
 });
 route("POST", "/api/payrolls/:id/approve", async (req, res, p) => {

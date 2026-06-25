@@ -147,11 +147,11 @@ export function seed(): Db {
 
   const counterparties: Counterparty[] = [
     // Contractors carry a rate card (payRate) — the source a payroll run COMPUTES from.
-    { id: "cp_grace", orgId, name: "Grace Hopper", type: "contractor", status: "allowlisted", email: "grace@contractors.test", externalAccounts: [], taxFormType: "W8-BEN", payRate: { amount: usd(4200), assetCode: "USDC" }, payCadence: "monthly", createdAt: now() },
-    { id: "cp_ada", orgId, name: "Ada Lovelace", type: "contractor", status: "allowlisted", email: "ada@contractors.test", externalAccounts: [], taxFormType: "W8-BEN", payRate: { amount: usd(7000), assetCode: "USDC" }, payCadence: "monthly", createdAt: now() },
-    { id: "cp_nico", orgId, name: "Nico Vega", type: "contractor", status: "allowlisted", email: "nico@contractors.test", externalAccounts: [], taxFormType: "W8-BEN", payRate: { amount: usd(3500), assetCode: "USDC" }, payCadence: "monthly", createdAt: now() },
+    { id: "cp_grace", orgId, name: "Grace Hopper", type: "contractor", status: "allowlisted", email: "grace@contractors.test", paymentAddress: { shielded: "@grace", spendPub: "demo-spend-cp-grace", viewPub: "demo-view-cp-grace", mvkScalar: "demo-mvk-cp-grace" }, externalAccounts: [], taxFormType: "W8-BEN", payRate: { amount: usd(4200), assetCode: "USDC" }, payCadence: "monthly", createdAt: now() },
+    { id: "cp_ada", orgId, name: "Ada Lovelace", type: "contractor", status: "allowlisted", email: "ada@contractors.test", paymentAddress: { shielded: "@ada", spendPub: "demo-spend-cp-ada", viewPub: "demo-view-cp-ada", mvkScalar: "demo-mvk-cp-ada" }, externalAccounts: [], taxFormType: "W8-BEN", payRate: { amount: usd(7000), assetCode: "USDC" }, payCadence: "monthly", createdAt: now() },
+    { id: "cp_nico", orgId, name: "Nico Vega", type: "contractor", status: "allowlisted", email: "nico@contractors.test", paymentAddress: { shielded: "@nico", spendPub: "demo-spend-cp-nico", viewPub: "demo-view-cp-nico", mvkScalar: "demo-mvk-cp-nico" }, externalAccounts: [], taxFormType: "W8-BEN", payRate: { amount: usd(3500), assetCode: "USDC" }, payCadence: "monthly", createdAt: now() },
     { id: "cp_new", orgId, name: "Lucía Marín", type: "contractor", status: "pending_screening", externalAccounts: [], payRate: { amount: usd(2800), assetCode: "USDC" }, payCadence: "monthly", createdAt: now() },
-    { id: "cp_supplier", orgId, name: "Shenzhen Parts Co.", type: "vendor", status: "allowlisted", externalAccounts: [], externalId: "QBO:VEND:11", createdAt: now() },
+    { id: "cp_supplier", orgId, name: "Shenzhen Parts Co.", type: "vendor", status: "allowlisted", paymentAddress: { shielded: "@shenzhen-parts", spendPub: "demo-spend-cp-supplier", viewPub: "demo-view-cp-supplier", mvkScalar: "demo-mvk-cp-supplier" }, externalAccounts: [], externalId: "QBO:VEND:11", createdAt: now() },
   ];
 
   const policies: ApprovalPolicy[] = [
