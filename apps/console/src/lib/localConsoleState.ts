@@ -59,12 +59,15 @@ const KEY_RECORD = "aes-key";
 const SNAPSHOT_RECORD = "console-snapshot";
 const FALLBACK_KEY = "benzo.console.state.key.fallback.v1";
 const FALLBACK_SNAPSHOT = "benzo.console.state.encrypted.fallback.v1";
+const IDENTITY_KEY = "benzo.console.identityKey";
 const AAD = "benzo.console.state.v1";
 const WALLET_ORIGIN = "https://wallet.benzo.space";
 const CONSOLE_ORIGIN = "https://console.benzo.space";
 
 let memorySnapshot: ConsoleSnapshot | null = null;
+let memorySnapshotScope: string | null = null;
 let pending: Promise<ConsoleSnapshot> | null = null;
+let pendingScope: string | null = null;
 
 function now(): string {
   return new Date().toISOString();
@@ -78,6 +81,18 @@ function id(prefix: string): string {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function storageScope(): string {
+  try {
+    return localStorage.getItem(IDENTITY_KEY) || "anonymous";
+  } catch {
+    return "anonymous";
+  }
+}
+
+function scoped(key: string): string {
+  return `${key}:${storageScope()}`;
 }
 
 function normalizeSnapshot(seed: ConsoleSeed): ConsoleSnapshot {
@@ -149,19 +164,19 @@ function bufferSource(bytes: Uint8Array): BufferSource {
 }
 
 async function cryptoKey(): Promise<CryptoKey> {
-  const existing = await idbGet<CryptoKey>(KEY_RECORD);
+  const existing = await idbGet<CryptoKey>(scoped(KEY_RECORD));
   if (existing) return existing;
   if (hasIndexedDb()) {
     const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-    await idbSet(KEY_RECORD, key);
+    await idbSet(scoped(KEY_RECORD), key);
     return key;
   }
-  let raw = localStorage.getItem(FALLBACK_KEY);
+  let raw = localStorage.getItem(scoped(FALLBACK_KEY));
   if (!raw) {
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
     raw = b64(bytes);
-    localStorage.setItem(FALLBACK_KEY, raw);
+    localStorage.setItem(scoped(FALLBACK_KEY), raw);
   }
   return crypto.subtle.importKey("raw", bufferSource(unb64(raw)), "AES-GCM", false, ["encrypt", "decrypt"]);
 }
@@ -189,8 +204,8 @@ async function decryptSnapshot(record: { iv: string; ciphertext: string }): Prom
 
 async function readEncrypted(): Promise<ConsoleSnapshot | null> {
   const record = hasIndexedDb()
-    ? await idbGet<{ iv: string; ciphertext: string }>(SNAPSHOT_RECORD)
-    : JSON.parse(localStorage.getItem(FALLBACK_SNAPSHOT) || "null") as { iv: string; ciphertext: string } | null;
+    ? await idbGet<{ iv: string; ciphertext: string }>(scoped(SNAPSHOT_RECORD))
+    : JSON.parse(localStorage.getItem(scoped(FALLBACK_SNAPSHOT)) || "null") as { iv: string; ciphertext: string } | null;
   if (!record) return null;
   try {
     return await decryptSnapshot(record);
@@ -201,28 +216,33 @@ async function readEncrypted(): Promise<ConsoleSnapshot | null> {
 
 async function writeEncrypted(snapshot: ConsoleSnapshot): Promise<void> {
   const record = await encryptSnapshot(snapshot);
-  if (hasIndexedDb()) await idbSet(SNAPSHOT_RECORD, record);
-  else localStorage.setItem(FALLBACK_SNAPSHOT, JSON.stringify(record));
+  if (hasIndexedDb()) await idbSet(scoped(SNAPSHOT_RECORD), record);
+  else localStorage.setItem(scoped(FALLBACK_SNAPSHOT), JSON.stringify(record));
 }
 
 export async function snapshot(loadSeed: () => Promise<ConsoleSeed>): Promise<ConsoleSnapshot> {
-  if (memorySnapshot) return clone(memorySnapshot);
-  if (pending) return clone(await pending);
+  const scope = storageScope();
+  if (memorySnapshot && memorySnapshotScope === scope) return clone(memorySnapshot);
+  if (pending && pendingScope === scope) return clone(await pending);
   pending = (async () => {
     const existing = await readEncrypted();
     if (existing?.version === 1) {
       memorySnapshot = existing;
+      memorySnapshotScope = scope;
       return existing;
     }
     const initial = normalizeSnapshot(await loadSeed());
     memorySnapshot = initial;
+    memorySnapshotScope = scope;
     await writeEncrypted(initial);
     return initial;
   })();
+  pendingScope = scope;
   try {
     return clone(await pending);
   } finally {
     pending = null;
+    pendingScope = null;
   }
 }
 
@@ -231,6 +251,7 @@ async function mutate(loadSeed: () => Promise<ConsoleSeed>, fn: (s: ConsoleSnaps
   fn(s);
   s.savedAt = now();
   memorySnapshot = clone(s);
+  memorySnapshotScope = storageScope();
   await writeEncrypted(s);
   return clone(s);
 }
@@ -765,5 +786,7 @@ export type PayrollProofResponses = {
 
 export function __resetLocalConsoleMemoryForTests(): void {
   memorySnapshot = null;
+  memorySnapshotScope = null;
   pending = null;
+  pendingScope = null;
 }

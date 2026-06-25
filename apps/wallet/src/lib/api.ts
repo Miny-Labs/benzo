@@ -78,13 +78,49 @@ export function apiHref(path: string): string {
 }
 
 const GOOGLE_TOKEN_KEY = "benzo.googleCredential";
+const GOOGLE_IDENTITY_KEY = "benzo.identityKey";
+
+function b64urlJson(seg: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(atob(seg.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(seg.length / 4) * 4, "="))) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function identityKeyFromCredential(credential: string): string {
+  const parts = credential.split(".");
+  const payload = parts.length === 3 ? b64urlJson(parts[1]) : null;
+  const iss = typeof payload?.iss === "string" ? payload.iss : "unknown";
+  const aud = typeof payload?.aud === "string" ? payload.aud : "unknown";
+  const sub = typeof payload?.sub === "string" ? payload.sub : "unknown";
+  let h = 0x811c9dc5;
+  for (const ch of `wallet|${iss}|${aud}|${sub}`) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `g${(h >>> 0).toString(16).padStart(8, "0")}`;
+}
 
 export function storeGoogleCredential(credential: string): void {
+  const nextIdentity = identityKeyFromCredential(credential);
+  const prevIdentity = localStorage.getItem(GOOGLE_IDENTITY_KEY);
+  if (prevIdentity && prevIdentity !== nextIdentity) {
+    for (const key of [
+      "benzo.onboarded",
+      "benzo.contacts.local.v1",
+      "benzo.requests.v1",
+      "benzo.notif.read.v1",
+      "benzo.hidden",
+    ]) localStorage.removeItem(key);
+  }
+  localStorage.setItem(GOOGLE_IDENTITY_KEY, nextIdentity);
   localStorage.setItem(GOOGLE_TOKEN_KEY, credential);
 }
 
 export function clearGoogleCredential(): void {
   localStorage.removeItem(GOOGLE_TOKEN_KEY);
+  localStorage.removeItem(GOOGLE_IDENTITY_KEY);
 }
 
 function authHeaders(): Record<string, string> {
