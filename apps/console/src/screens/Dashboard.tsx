@@ -114,7 +114,7 @@ export function Dashboard() {
   // A payment row is unverified when its backing payment never settled on-chain.
   const unverifiedActivityIds = new Set(
     payments
-      .filter((p) => p.settlement?.mode === "demo" || p.settlement?.onChain === false)
+      .filter((p) => p.settlement?.onChain === false)
       .map((p) => p.id),
   );
   const targetDollars = Number(treasury?.totalHidden.amount ?? dashboard?.totalPosition.amount ?? "0") / 1e7;
