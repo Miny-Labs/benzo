@@ -7,7 +7,7 @@ import { useState } from "react";
 import { CheckCheck, Download, ShieldCheck, Users } from "lucide-react";
 import { motion } from "framer-motion";
 import type { PayrollBatch } from "@benzo/types";
-import { api, apiHref, type OnChainRef } from "../lib/api";
+import { api, type OnChainRef } from "../lib/api";
 import { useConsole, useCounterpartyName } from "../lib/store";
 import { explorerTxUrl, fmtUsd, friendlyError } from "../lib/format";
 import { Page, Proving, Stagger } from "../ui/motion";
@@ -146,6 +146,37 @@ export function Payroll() {
 
   const approvedCount = (b: PayrollBatch) => (b.approvals ?? []).filter((a) => a.decision === "approved").length;
 
+  function download(name: string, text: string, type: string) {
+    const blob = new Blob([text], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadPayslips(b: PayrollBatch) {
+    const rows = b.lines.map((l) => ({
+      period: b.period,
+      contractor: name(l.counterpartyId),
+      gross: l.amount,
+      status: l.status,
+      txHash: l.txHash,
+      error: l.error,
+    }));
+    download(`benzo-payslips-${b.period}.json`, JSON.stringify(rows, null, 2), "application/json");
+  }
+
+  function exportCsv(b: PayrollBatch) {
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = [
+      ["period", "contractor", "amount_stroops", "status", "tx_hash", "error"],
+      ...b.lines.map((l) => [b.period, name(l.counterpartyId), l.amount, l.status, l.txHash ?? "", l.error ?? ""]),
+    ];
+    download(`benzo-payroll-${b.period}.csv`, rows.map((r) => r.map(esc).join(",")).join("\n"), "text/csv");
+  }
+
   return (
     <Page>
       <div className="mb-5">
@@ -275,12 +306,12 @@ export function Payroll() {
                     <div className="mb-1.5 flex items-center justify-between">
                       <span className="text-[12px] font-semibold uppercase tracking-[0.05em] text-muted">Run register</span>
                       <div className="flex items-center gap-4">
-                        <a href={apiHref(`/payrolls/${b.id}/payslips`)} download={`benzo-payslips-${b.period}.json`} className="inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline" data-testid="download-payslips">
+                        <button onClick={() => downloadPayslips(b)} className="inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline" data-testid="download-payslips">
                           <Download size={13} /> Payslips
-                        </a>
-                        <a href={apiHref(`/payrolls/${b.id}/export`)} download className="inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline" data-testid="export-csv">
+                        </button>
+                        <button onClick={() => exportCsv(b)} className="inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline" data-testid="export-csv">
                           <Download size={13} /> Export CSV
-                        </a>
+                        </button>
                       </div>
                     </div>
                     {b.lines.map((l, li) => (
