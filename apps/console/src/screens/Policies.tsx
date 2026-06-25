@@ -14,7 +14,20 @@ import { useConsole } from "../lib/store";
 import { friendlyError } from "../lib/format";
 import { policySummary, conditionLabel, totalApprovers } from "../lib/policy";
 import { Page, Stagger, motion, AnimatePresence, EASE } from "../ui/motion";
-import { Button, Card, Pill, useToast } from "../ui/primitives";
+import { Button, Card, Input, Pill, useToast } from "../ui/primitives";
+
+function stroopsToHuman(v: string | string[]): string {
+  if (Array.isArray(v)) return "";
+  const raw = BigInt(v || "0");
+  const whole = raw / 10_000_000n;
+  const frac = (raw % 10_000_000n).toString().padStart(7, "0").replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : whole.toString();
+}
+
+function humanToStroops(v: string): string {
+  const [whole = "0", frac = ""] = v.replace(/[$,]/g, "").trim().split(".");
+  return (BigInt(whole || "0") * 10_000_000n + BigInt(frac.padEnd(7, "0").slice(0, 7) || "0")).toString();
+}
 
 export function Policies() {
   const { policies, refresh, loading } = useConsole();
@@ -43,11 +56,12 @@ export function Policies() {
 
 function PolicyEditor({ policy, onSaved }: { policy: ApprovalPolicy; onSaved: () => Promise<unknown> }) {
   const toast = useToast();
+  const [conditions, setConditions] = useState(() => policy.conditions.map((c) => ({ ...c })));
   const [steps, setSteps] = useState<ApprovalStep[]>(() => policy.steps.map((s) => ({ ...s })));
   const [gate, setGate] = useState<ApprovalStep | undefined>(() => (policy.releaseGate ? { ...policy.releaseGate } : undefined));
   const [busy, setBusy] = useState(false);
-  const dirty = JSON.stringify({ steps, gate }) !== JSON.stringify({ steps: policy.steps, gate: policy.releaseGate });
-  const draft = { ...policy, steps, releaseGate: gate };
+  const dirty = JSON.stringify({ conditions, steps, gate }) !== JSON.stringify({ conditions: policy.conditions, steps: policy.steps, gate: policy.releaseGate });
+  const draft = { ...policy, conditions, steps, releaseGate: gate };
 
   function bumpStep(idx: number, delta: number) {
     setSteps((ss) => ss.map((s, i) => (i === idx ? { ...s, minApprovers: Math.max(1, s.minApprovers + delta) } : s)));
@@ -58,11 +72,14 @@ function PolicyEditor({ policy, onSaved }: { policy: ApprovalPolicy; onSaved: ()
   function bumpGate(delta: number) {
     setGate((g) => (g ? { ...g, minApprovers: Math.max(1, g.minApprovers + delta) } : g));
   }
+  function setAmountCondition(idx: number, human: string) {
+    setConditions((cs) => cs.map((c, i) => (i === idx ? { ...c, value: humanToStroops(human) } : c)));
+  }
 
   async function save() {
     setBusy(true);
     try {
-      await api.updatePolicy(policy.id, { steps, releaseGate: gate });
+      await api.updatePolicy(policy.id, { conditions, steps, releaseGate: gate });
       await onSaved();
       toast({ title: "Policy saved", tone: "success" });
     } catch (e) {
@@ -82,12 +99,24 @@ function PolicyEditor({ policy, onSaved }: { policy: ApprovalPolicy; onSaved: ()
 
       {/* Routing — evaluated privately by the BFF (Benzo hides amount/counterparty on-chain). */}
       <Section label="Routing · evaluated privately by Benzo">
-        {policy.conditions.length === 0 ? (
+        {conditions.length === 0 ? (
           <div className="text-[13px] text-muted">Applies to every payment.</div>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            {policy.conditions.map((c, i) => (
-              <Pill key={i} tone="primary">{conditionLabel(c)}</Pill>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {conditions.map((c, i) => (
+              <div key={i} className="rounded-lg bg-canvas px-3.5 py-2.5" data-testid="policy-condition">
+                {c.field === "amount" ? (
+                  <Input
+                    label={`Amount ${c.operator}`}
+                    inputMode="decimal"
+                    value={stroopsToHuman(c.value)}
+                    onChange={(e) => setAmountCondition(i, e.target.value.replace(/[^0-9.]/g, ""))}
+                    data-testid="policy-condition-amount"
+                  />
+                ) : (
+                  <Pill tone="primary">{conditionLabel(c)}</Pill>
+                )}
+              </div>
             ))}
           </div>
         )}
