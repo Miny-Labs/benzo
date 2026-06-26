@@ -4,7 +4,7 @@
  * confidential settlement as a payroll run (over the policy threshold → Approvals
  * first). One engine, two front-doors: employer-pushed runs and contractor invoices.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { FileText, Send, Wallet, ShieldCheck } from "lucide-react";
 import type { Invoice, PaymentOrder } from "@benzo/types";
 import { api, type ApprovalProgressView, type OnChainRef } from "../lib/api";
@@ -14,15 +14,6 @@ import { statusMeta } from "../lib/status";
 import { Page, Proving, Reveal, Stagger } from "../ui/motion";
 import { OnChainDetail } from "../ui/onchain";
 import { Button, Card, EmptyState, Input, Skeleton, StatusPill, useToast } from "../ui/primitives";
-
-const LOCAL_INVOICES = "benzo.console.localInvoices";
-
-interface LocalInvoiceRecord {
-  invoice: Invoice;
-  counterpartyName?: string;
-  handle?: string;
-  importedAt: string;
-}
 
 interface InvoicePacket {
   v?: number;
@@ -37,32 +28,14 @@ function decodeB64url(s: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-function readLocalInvoices(): LocalInvoiceRecord[] {
-  try {
-    const rows = JSON.parse(localStorage.getItem(LOCAL_INVOICES) || "[]") as LocalInvoiceRecord[];
-    return Array.isArray(rows) ? rows.filter((r) => r?.invoice?.id) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeLocalInvoices(rows: LocalInvoiceRecord[]): void {
-  localStorage.setItem(LOCAL_INVOICES, JSON.stringify(rows));
-}
-
-function packetFromHash(hash: string): LocalInvoiceRecord | null {
+function packetFromHash(hash: string): InvoicePacket | null {
   const q = new URLSearchParams(hash.replace(/^#/, ""));
   const raw = q.get("import");
   if (!raw) return null;
   try {
     const packet = JSON.parse(decodeB64url(raw)) as InvoicePacket;
     if (!packet.invoice?.id || !packet.invoice.total?.amount || !Array.isArray(packet.invoice.lineItems)) return null;
-    return {
-      invoice: packet.invoice,
-      counterpartyName: packet.counterpartyName,
-      handle: packet.handle,
-      importedAt: new Date().toISOString(),
-    };
+    return packet;
   } catch {
     return null;
   }
@@ -71,34 +44,41 @@ function packetFromHash(hash: string): LocalInvoiceRecord | null {
 export function Invoices() {
   const toast = useToast();
   const { invoices, counterparties, masked, refresh, loading } = useConsole();
-  const [localInvoices, setLocalInvoices] = useState<LocalInvoiceRecord[]>(() => readLocalInvoices());
-  const localMeta = (id?: string) => localInvoices.find((r) => r.invoice.id === id);
-  const name = (id?: string) => counterparties.find((c) => c.id === id)?.name ?? localMeta(id)?.counterpartyName ?? "Unknown";
+  const name = (id?: string) => counterparties.find((c) => c.id === id)?.name ?? "Unknown";
   const [busy, setBusy] = useState<string | null>(null);
   // Confirm gate for single-invoice Pay (mirrors the bulk Pay-all confirm).
   const [confirmPay, setConfirmPay] = useState<Invoice | null>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
-    const rec = packetFromHash(window.location.hash);
-    if (!rec) return;
-    setLocalInvoices((rows) => {
-      const next = [rec, ...rows.filter((r) => r.invoice.id !== rec.invoice.id)];
-      writeLocalInvoices(next);
-      return next;
-    });
+    const packet = packetFromHash(window.location.hash);
+    if (!packet?.invoice) return;
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    toast({ title: "Invoice imported", tone: "success" });
-  }, [toast]);
+    let cancelled = false;
+    setImporting(true);
+    api.createInvoice({
+      counterpartyId: packet.invoice.counterpartyId,
+      number: packet.invoice.number,
+      lineItems: packet.invoice.lineItems,
+      assetCode: packet.invoice.total.assetCode,
+      dueDate: packet.invoice.dueDate,
+      externalId: packet.invoice.externalId ?? packet.invoice.id,
+      counterpartyName: packet.counterpartyName,
+      handle: packet.handle,
+    }).then(async () => {
+      if (cancelled) return;
+      await refresh();
+      toast({ title: "Invoice imported", tone: "success" });
+    }).catch((e) => {
+      if (!cancelled) toast({ title: friendlyError(e, "Couldn't import this invoice."), tone: "danger" });
+    }).finally(() => {
+      if (!cancelled) setImporting(false);
+    });
+    return () => { cancelled = true; };
+  }, [refresh, toast]);
 
-  const allInvoices = useMemo(
-    () => [
-      ...localInvoices.map((r) => r.invoice),
-      ...invoices.filter((i) => !localInvoices.some((r) => r.invoice.id === i.id)),
-    ],
-    [invoices, localInvoices],
-  );
-  const open = allInvoices.filter((i) => i.status !== "paid" && i.status !== "cancelled");
-  const paid = allInvoices.filter((i) => i.status === "paid");
+  const open = invoices.filter((i) => i.status !== "paid" && i.status !== "cancelled");
+  const paid = invoices.filter((i) => i.status === "paid");
   const openTotal = open.reduce((s, i) => s + BigInt(i.total.amount), 0n).toString();
   const [payAllOpen, setPayAllOpen] = useState(false);
   const [payingAll, setPayingAll] = useState(false);
@@ -126,36 +106,9 @@ export function Invoices() {
   async function pay(inv: Invoice) {
     setBusy(inv.id);
     try {
-      const local = localMeta(inv.id);
-      const r = local
-        ? {
-            invoice: inv,
-            payment: await api.createPayment({
-              type: "invoice_payment",
-              fromAccountId: "acc_op",
-              toCounterpartyId: inv.counterpartyId,
-              amount: inv.total,
-              memo: inv.number,
-              toHandle: local.handle,
-            }),
-          }
-        : await api.payInvoice(inv.id);
+      const r = await api.payInvoice(inv.id);
       const payment = r.payment as PaymentOrder & { progress?: ApprovalProgressView };
       const prog = payment.progress;
-      if (local) {
-        if (r.payment.status === "failed") {
-          throw new Error("Payment could not settle on-chain. Check that the contractor has a registered payout handle.");
-        }
-        const settled = r.payment.status === "confirmed" && r.payment.settlement?.onChain === true;
-        if (!settled && r.payment.status !== "needs_approval") {
-          throw new Error("Payment was created but did not settle on-chain.");
-        }
-        setLocalInvoices((rows) => {
-          const next: LocalInvoiceRecord[] = rows.map((row) => row.invoice.id === inv.id ? { ...row, invoice: { ...row.invoice, status: settled ? "paid" : "open" } } : row);
-          writeLocalInvoices(next);
-          return next;
-        });
-      }
       toast({
         title: prog && !prog.satisfied ? `Queued for approval · needs ${prog.nextRole}` : r.invoice.status === "paid" ? "Invoice paid privately" : "Payment did not settle on-chain",
         tone: prog && !prog.satisfied || r.invoice.status === "paid" ? "success" : "danger",
@@ -255,13 +208,18 @@ export function Invoices() {
             </Card>
           ))}
         </div>
+      ) : importing ? (
+        <Card className="p-5">
+          <Skeleton className="h-4 w-56" />
+          <Skeleton className="mt-3 h-3 w-40" />
+        </Card>
       ) : open.length === 0 ? (
         <EmptyState title="Inbox zero" hint="No invoices waiting to be paid." />
       ) : (
         <Stagger className="space-y-4">
           {open.map((inv, i) => (
             <Stagger.Item key={inv.id} index={i}>
-              <Card className="flex items-center gap-4 p-5" data-testid={localMeta(inv.id) ? "imported-invoice-row" : undefined}>
+              <Card className="flex items-center gap-4 p-5">
                 <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <FileText size={20} />
                 </div>

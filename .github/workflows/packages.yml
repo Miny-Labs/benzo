@@ -59,6 +59,11 @@ jobs:
           if git grep -nE 'benzo\.console\.privateEvents|recordConsolePrivateEvent|clientAudit(Packet|OrgHash|PacketHash)' -- apps/console/src ':!apps/console/src/screens/AuditLog.test.tsx'; then
             echo "::error::private audit packets must come from the encrypted hosted tenant store, not browser localStorage"; exit 1
           fi
+      - name: No client-side invoice import store
+        run: |
+          if git grep -n 'benzo.console.localInvoices' -- apps/console/src ':!apps/console/src/screens/Invoices.test.tsx'; then
+            echo "::error::invoice handoffs must persist through the encrypted hosted tenant store, not browser localStorage"; exit 1
+          fi
       - name: Build wallet app with browser proving artifacts
         if: steps.wallet_artifacts.outputs.available == 'true'
         env:

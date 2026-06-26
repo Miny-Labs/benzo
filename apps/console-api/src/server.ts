@@ -909,12 +909,29 @@ route("POST", "/api/invites/accept", async (req, res) => {
 route("GET", "/api/invoices", (_req, res) => json(res, 200, db.invoices));
 route("POST", "/api/invoices", async (req, res) => {
   const body = await readJson<CreateInvoiceRequest>(req);
+  if (body.externalId) {
+    const existing = db.invoices.find((x) => x.externalId === body.externalId);
+    if (existing) return json(res, 200, existing);
+  }
+  if (!body.counterpartyId) return json(res, 400, { error: "counterpartyId required" });
+  if (!Array.isArray(body.lineItems) || body.lineItems.length === 0) return json(res, 400, { error: "invoice must include at least one line item" });
+  let cp = db.counterparties.find((c) => c.id === body.counterpartyId);
+  if (!cp && body.counterpartyName) {
+    cp = { id: body.counterpartyId, orgId: db.org.id, name: body.counterpartyName, type: "contractor", status: "pending_screening", externalAccounts: [], createdAt: now() };
+    db.counterparties.push(cp);
+  }
+  if (!cp) return json(res, 404, { error: "counterparty not found" });
+  if (body.handle) {
+    applyCounterpartyHandle(cp, body.handle);
+    cp.status = "allowlisted";
+  }
   const total = body.lineItems.reduce((s, li) => s + BigInt(li.unitAmount) * BigInt(li.quantity), 0n);
+  if (total <= 0n) return json(res, 400, { error: "invoice total must be positive" });
   const inv = {
     id: id("inv"), orgId: db.org.id, number: body.number ?? `INV-${db.invoices.length + 1001}`,
     counterpartyId: body.counterpartyId, lineItems: body.lineItems,
     total: { amount: total.toString(), assetCode: body.assetCode }, status: "open" as const,
-    dueDate: body.dueDate, hostedUrl: `https://pay.benzo.test/i/${id("secret")}`, paymentOrderIds: [], createdAt: now(),
+    dueDate: body.dueDate, hostedUrl: `https://pay.benzo.test/i/${id("secret")}`, paymentOrderIds: [], externalId: body.externalId, createdAt: now(),
   };
   db.invoices.push(inv);
   appendPrivateEvent(

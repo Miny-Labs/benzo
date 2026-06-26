@@ -96,6 +96,11 @@ export interface CreateInvoiceRequest {
   lineItems: LineItem[];
   assetCode: string;
   dueDate?: string;
+  /** Idempotency key from an external invoice source, e.g. a wallet handoff. */
+  externalId?: string;
+  /** Optional payee metadata supplied by a contractor handoff. */
+  counterpartyName?: string;
+  handle?: string;
 }
 
 export interface CreatePayrollRequest {

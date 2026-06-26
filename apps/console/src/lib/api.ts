@@ -8,6 +8,7 @@ import type {
   ApproveRequest,
   AuthSession,
   Counterparty,
+  CreateInvoiceRequest,
   CreatePaymentRequest,
   CreatePayrollRequest,
   CreateViewingGrantRequest,
@@ -283,6 +284,8 @@ export const api = {
     http<PayrollPolicyProofResponse>(`/payrolls/${id}/prove-policy`, { method: "POST", body: JSON.stringify({ cap }) }),
 
   invoices: () => http<Invoice[]>("/invoices"),
+  createInvoice: (body: CreateInvoiceRequest) =>
+    http<Invoice>("/invoices", { method: "POST", body: JSON.stringify(body) }),
   payInvoice: (id: string) =>
     http<{ invoice: Invoice; payment: PaymentOrder }>(`/invoices/${id}/pay`, { method: "POST", body: "{}" }),
   // Cross-entity private netting (Z8): net mutual invoices, settle the difference, grosses hidden (NETTING).
