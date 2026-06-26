@@ -46,6 +46,13 @@ export interface ProofReceipt {
   createdAt: number;
 }
 
+export interface IdempotencyRecord {
+  bodyHash: string;
+  status: number;
+  body: unknown;
+  createdAt: number;
+}
+
 export interface Profile {
   handle: string;
   name: string;
@@ -65,6 +72,7 @@ export interface WalletDb {
   activity: ActivityRow[];
   rateLimits: Record<string, RateBucket>;
   proofReceipts: ProofReceipt[];
+  idempotency: Record<string, IdempotencyRecord>;
 }
 
 export function seed(): WalletDb {
@@ -74,6 +82,7 @@ export function seed(): WalletDb {
     activity: [],
     rateLimits: {},
     proofReceipts: [],
+    idempotency: {},
   };
 }
 

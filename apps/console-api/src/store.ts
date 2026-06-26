@@ -121,6 +121,7 @@ export interface Db {
   privateEvents: PrivateEventEnvelope[];
   rateLimits: Record<string, RateBucket>;
   proofReceipts: ProofReceipt[];
+  idempotency: Record<string, IdempotencyRecord>;
   /** the session member (owner) */
   sessionMemberId: string;
 }
@@ -140,6 +141,13 @@ export interface ProofReceipt {
   txHash?: string;
   root?: string;
   publicInputs?: unknown;
+  createdAt: string;
+}
+
+export interface IdempotencyRecord {
+  bodyHash: string;
+  status: number;
+  body: unknown;
   createdAt: string;
 }
 
@@ -287,6 +295,7 @@ export function seed(): Db {
     privateEvents: [],
     rateLimits: {},
     proofReceipts: [],
+    idempotency: {},
     sessionMemberId: owner.id,
   };
 }
@@ -353,6 +362,7 @@ export function freshHostedDb(authKey: string, claims?: { email?: string; name?:
     privateEvents: [],
     rateLimits: {},
     proofReceipts: [],
+    idempotency: {},
     sessionMemberId: owner.id,
   };
 }

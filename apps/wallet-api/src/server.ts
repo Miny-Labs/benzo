@@ -5,6 +5,8 @@
  * API routes fail closed instead of serving local state as live data.
  */
 import "./loadEnv.js"; // FIRST: load .env so missing live env fails closed.
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   addMoney,
@@ -41,6 +43,8 @@ import { authFromRequest, runWithAuth } from "./auth.js";
 import { googleConfigured, verifyGoogleIdToken } from "./google-oidc.js";
 
 const PORT = Number(process.env.WALLET_API_PORT ?? 8791);
+const rawBodies = new WeakMap<IncomingMessage, string>();
+const idempotencyScope = new AsyncLocalStorage<{ key: string; bodyHash: string }>();
 
 function cors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", process.env.WALLET_ALLOWED_ORIGIN ?? "*");
@@ -51,11 +55,23 @@ function json(res: ServerResponse, code: number, body: unknown): void {
   cors(res);
   res.writeHead(code, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+  const idem = idempotencyScope.getStore();
+  if (idem && code < 500) {
+    db.idempotency ??= {};
+    db.idempotency[idem.key] = { bodyHash: idem.bodyHash, status: code, body, createdAt: nowSec() };
+  }
 }
-async function readJson<T>(req: IncomingMessage): Promise<T> {
+async function rawBody(req: IncomingMessage): Promise<string> {
+  const cached = rawBodies.get(req);
+  if (cached !== undefined) return cached;
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   const raw = Buffer.concat(chunks).toString("utf8");
+  rawBodies.set(req, raw);
+  return raw;
+}
+async function readJson<T>(req: IncomingMessage): Promise<T> {
+  const raw = await rawBody(req);
   return (raw ? JSON.parse(raw) : {}) as T;
 }
 /** Read `prover` from query or body; Vercel can only prove via the attested TEE. */
@@ -142,6 +158,28 @@ function rateLimit(path: string, method: string): { ok: true } | { ok: false; re
   db.rateLimits[key] = bucket;
   if (bucket.count > limit) return { ok: false, retryAfter: Math.max(1, 60 - (now - bucket.windowStart)) };
   return { ok: true };
+}
+
+function idempotencyHeader(req: IncomingMessage): string | null {
+  const h = req.headers["idempotency-key"];
+  const v = Array.isArray(h) ? h[0] : h;
+  return v?.trim() || null;
+}
+
+async function runIdempotent(req: IncomingMessage, res: ServerResponse, path: string, fn: () => Promise<void>): Promise<void> {
+  const method = req.method ?? "GET";
+  const header = method === "GET" ? null : idempotencyHeader(req);
+  if (!header) return fn();
+  const raw = await rawBody(req);
+  const bodyHash = createHash("sha256").update(raw).digest("hex");
+  const key = `${method}:${path}:${header}`;
+  db.idempotency ??= {};
+  const existing = db.idempotency[key];
+  if (existing) {
+    if (existing.bodyHash !== bodyHash) return json(res, 409, { error: "Idempotency key was already used with a different request body." });
+    return json(res, existing.status, existing.body);
+  }
+  await idempotencyScope.run({ key, bodyHash }, fn);
 }
 
 route("GET", "/api/balance", async (_q, res) => json(res, 200, await getBalanceStroops()));
@@ -342,7 +380,7 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
           const rl = rateLimit(effectiveUrl.pathname, req.method ?? "GET");
           if (!rl.ok) return json(res, 429, { error: "Too many requests. Please wait a moment and try again.", retryAfter: rl.retryAfter });
         }
-        await r.handler(req, res, effectiveUrl);
+        await runIdempotent(req, res, effectiveUrl.pathname, () => Promise.resolve(r.handler(req, res, effectiveUrl)));
       });
     });
   } catch (e) {

@@ -100,6 +100,12 @@ test("hosted console persists operational state in the encrypted tenant document
       publicInputs: [{ k: "Total", v: "hidden" }],
       createdAt: new Date().toISOString(),
     });
+    db.idempotency["POST:/api/payments:key_ops"] = {
+      bodyHash: "hash_ops",
+      status: 201,
+      body: { id: "po_ops" },
+      createdAt: new Date().toISOString(),
+    };
   });
 
   await runWithConsoleTenant("ops", null, async () => {
@@ -109,5 +115,6 @@ test("hosted console persists operational state in the encrypted tenant document
     expect(db.privateEvents.map((e) => e.id)).toEqual(["pe_ops"]);
     expect(db.rateLimits.write.count).toBe(7);
     expect(db.proofReceipts.map((r) => r.vkId)).toEqual(["ORGSUM"]);
+    expect(db.idempotency["POST:/api/payments:key_ops"]).toMatchObject({ bodyHash: "hash_ops", status: 201 });
   });
 });

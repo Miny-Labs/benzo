@@ -6,6 +6,7 @@
  * fail closed instead of serving local state as live data.
  */
 import "./loadEnv.js"; // FIRST: load .env so missing live env fails closed.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 import type {
@@ -319,6 +320,8 @@ async function settlePayroll(batch: PayrollBatch): Promise<void> {
 }
 
 const PORT = Number(process.env.CONSOLE_API_PORT ?? 8790);
+const rawBodies = new WeakMap<IncomingMessage, string>();
+const idempotencyScope = new AsyncLocalStorage<{ key: string; bodyHash: string }>();
 
 // ---------------------------------------------------------------- http utils
 function cors(res: ServerResponse): void {
@@ -330,12 +333,46 @@ function json(res: ServerResponse, code: number, body: unknown): void {
   cors(res);
   res.writeHead(code, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+  const idem = idempotencyScope.getStore();
+  if (idem && code < 500) {
+    db.idempotency ??= {};
+    db.idempotency[idem.key] = { bodyHash: idem.bodyHash, status: code, body, createdAt: now() };
+  }
 }
-async function readJson<T>(req: IncomingMessage): Promise<T> {
+async function rawBody(req: IncomingMessage): Promise<string> {
+  const cached = rawBodies.get(req);
+  if (cached !== undefined) return cached;
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   const raw = Buffer.concat(chunks).toString("utf8");
+  rawBodies.set(req, raw);
+  return raw;
+}
+async function readJson<T>(req: IncomingMessage): Promise<T> {
+  const raw = await rawBody(req);
   return (raw ? JSON.parse(raw) : {}) as T;
+}
+
+function idempotencyHeader(req: IncomingMessage): string | null {
+  const h = req.headers["idempotency-key"];
+  const v = Array.isArray(h) ? h[0] : h;
+  return v?.trim() || null;
+}
+
+async function runIdempotent(req: IncomingMessage, res: ServerResponse, path: string, fn: () => Promise<void>): Promise<void> {
+  const method = req.method ?? "GET";
+  const header = method === "GET" ? null : idempotencyHeader(req);
+  if (!header) return fn();
+  const raw = await rawBody(req);
+  const bodyHash = createHash("sha256").update(raw).digest("hex");
+  const key = `${method}:${path}:${header}`;
+  db.idempotency ??= {};
+  const existing = db.idempotency[key];
+  if (existing) {
+    if (existing.bodyHash !== bodyHash) return json(res, 409, { error: "Idempotency key was already used with a different request body." });
+    return json(res, existing.status, existing.body);
+  }
+  await idempotencyScope.run({ key, bodyHash }, fn);
 }
 
 // --------------------------------------------------------------- tiny router
@@ -1310,7 +1347,7 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
           const rl = rateLimit(effectiveUrl.pathname, req.method ?? "GET");
           if (!rl.ok) return json(res, 429, { error: "Too many requests. Please wait a moment and try again.", retryAfter: rl.retryAfter });
         }
-        await m.handler(req, res, m.params);
+        await runIdempotent(req, res, effectiveUrl.pathname, () => Promise.resolve(m.handler(req, res, m.params)));
       });
     });
   } catch (e) {
