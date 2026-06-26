@@ -140,6 +140,12 @@ export interface RecoveryBinding {
   lastSeenAt: string;
 }
 
+export interface RecoverySummary {
+  bound: boolean;
+  createdAt?: string;
+  lastSeenAt?: string;
+}
+
 export class RecoveryRequiredError extends Error {
   readonly code = "account_binding_changed";
   constructor(
@@ -455,6 +461,16 @@ function bindRecovery(value: Db, binding: AccountBinding | null): void {
   }
   value.recovery.subjectKey = binding.subjectKey;
   value.recovery.lastSeenAt = seenAt;
+}
+
+export function recoverySummary(): RecoverySummary {
+  const recovery = db.recovery;
+  if (!recovery) return { bound: false };
+  return {
+    bound: true,
+    createdAt: recovery.createdAt,
+    lastSeenAt: recovery.lastSeenAt,
+  };
 }
 
 export async function runWithConsoleTenant<T>(

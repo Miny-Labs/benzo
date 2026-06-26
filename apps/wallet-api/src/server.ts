@@ -46,6 +46,7 @@ import {
   appendWalletProofReceipt,
   db,
   nowSec,
+  recoverySummary,
   RecoveryRequiredError,
   runWithWalletTenant,
   tenantDataMissing,
@@ -228,7 +229,7 @@ route("GET", "/api/session", (_q, res) =>
 );
 
 route("GET", "/api/recovery/status", (_q, res) =>
-  json(res, 200, { status: "ok", recovery: db.recovery }),
+  json(res, 200, { status: "ok", recovery: recoverySummary() }),
 );
 
 route("GET", "/api/handle/available", async (_q, res, url) =>

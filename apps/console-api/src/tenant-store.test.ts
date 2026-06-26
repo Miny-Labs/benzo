@@ -132,7 +132,7 @@ test("hosted console fails closed when a tenant account binding changes", async 
   process.env.BENZO_TENANT_STORE_MEMORY = "1";
   process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
   process.env.BENZO_DISABLE_TENANT_LEGACY_DECRYPT = "1";
-  const { db, RecoveryRequiredError, runWithConsoleTenant } = await import("./store.js");
+  const { db, recoverySummary, RecoveryRequiredError, runWithConsoleTenant } = await import("./store.js");
 
   await runWithConsoleTenant("recovery-org", { email: "owner@example.com", name: "Owner" }, { accountFingerprint: "console_original", subjectKey: "recovery-org" }, async () => {
     db.org.name = "Recovery Org";
@@ -147,6 +147,9 @@ test("hosted console fails closed when a tenant account binding changes", async 
   await runWithConsoleTenant("recovery-org", null, { accountFingerprint: "console_original", subjectKey: "recovery-org" }, async () => {
     expect(db.org.name).toBe("Recovery Org");
     expect(db.recovery?.accountFingerprint).toBe("console_original");
+    expect(recoverySummary()).toMatchObject({ bound: true });
+    expect(recoverySummary()).not.toHaveProperty("accountFingerprint");
+    expect(recoverySummary()).not.toHaveProperty("subjectKey");
   });
 });
 

@@ -31,7 +31,7 @@ import { anchorPrivateAuditRoot, attestKyb, auditorGrantViewKey, computeTreasury
 import { verifyGoogleIdToken, googleConfigured } from "./google-oidc.js";
 import { accountBinding, authFromRequest, currentAuth, runWithAuth } from "./auth.js";
 import { matchPolicy, progress, recordApproval } from "./approvals.js";
-import { db, fmtUsd, id, now, parseRosterCsv, RecoveryRequiredError, runWithConsoleTenant, runWithConsoleTenantKey, tenantDataMissing, currentConsoleTenantKey, type OrgInvite } from "./store.js";
+import { db, fmtUsd, id, now, parseRosterCsv, recoverySummary, RecoveryRequiredError, runWithConsoleTenant, runWithConsoleTenantKey, tenantDataMissing, currentConsoleTenantKey, type OrgInvite } from "./store.js";
 import { lookupTenantRoute, registerTenantRoute } from "./tenantData.js";
 import { encodeBenzoLink } from "@benzo/links";
 import { auditPacketHash, buildAnchor, buildAuditPacket, createPrivateEvent, deriveEventKey, GENESIS_HASH, sha256Hex, verifyHashChain, type AuditPacket, type PrivateEventType } from "@benzo/private-events";
@@ -450,7 +450,7 @@ route("GET", "/api/session", (_req, res) => {
 });
 
 route("GET", "/api/recovery/status", (_req, res) =>
-  json(res, 200, { status: "ok", recovery: db.recovery }),
+  json(res, 200, { status: "ok", recovery: recoverySummary() }),
 );
 
 // ----------------------------------------------------------------- zkLogin / SSO

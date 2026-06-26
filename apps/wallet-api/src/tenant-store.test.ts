@@ -96,7 +96,7 @@ test("hosted wallet fails closed when a tenant account binding changes", async (
   process.env.BENZO_TENANT_STORE_MEMORY = "1";
   process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
   process.env.BENZO_DISABLE_TENANT_LEGACY_DECRYPT = "1";
-  const { db, RecoveryRequiredError, runWithWalletTenant } = await import("./store.js");
+  const { db, recoverySummary, RecoveryRequiredError, runWithWalletTenant } = await import("./store.js");
 
   await runWithWalletTenant("recovery-user", { name: "Recovery" }, { accountFingerprint: "wallet_original", subjectKey: "recovery-user" }, async () => {
     db.profile.handle = "@recovery";
@@ -111,6 +111,9 @@ test("hosted wallet fails closed when a tenant account binding changes", async (
   await runWithWalletTenant("recovery-user", null, { accountFingerprint: "wallet_original", subjectKey: "recovery-user" }, async () => {
     expect(db.profile.handle).toBe("@recovery");
     expect(db.recovery?.accountFingerprint).toBe("wallet_original");
+    expect(recoverySummary()).toMatchObject({ bound: true });
+    expect(recoverySummary()).not.toHaveProperty("accountFingerprint");
+    expect(recoverySummary()).not.toHaveProperty("subjectKey");
   });
 });
 

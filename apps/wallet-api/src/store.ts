@@ -114,6 +114,12 @@ export interface RecoveryBinding {
   lastSeenAt: number;
 }
 
+export interface RecoverySummary {
+  bound: boolean;
+  createdAt?: number;
+  lastSeenAt?: number;
+}
+
 export class RecoveryRequiredError extends Error {
   readonly code = "account_binding_changed";
   constructor(
@@ -302,6 +308,16 @@ function bindRecovery(value: WalletDb, binding: AccountBinding | null): void {
   }
   value.recovery.subjectKey = binding.subjectKey;
   value.recovery.lastSeenAt = seenAt;
+}
+
+export function recoverySummary(): RecoverySummary {
+  const recovery = db.recovery;
+  if (!recovery) return { bound: false };
+  return {
+    bound: true,
+    createdAt: recovery.createdAt,
+    lastSeenAt: recovery.lastSeenAt,
+  };
 }
 
 export async function runWithWalletTenant<T>(
