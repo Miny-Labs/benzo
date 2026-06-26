@@ -37,6 +37,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Lint
         run: pnpm lint
+      - name: Production environment guard
+        run: pnpm audit:prod-env
       - name: Check wallet proving artifact availability
         id: wallet_artifacts
         env:
