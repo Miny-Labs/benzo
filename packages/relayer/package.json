@@ -10,14 +10,17 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "serve": "node dist/server.js"
+    "serve": "node dist/server.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@benzo/core": "workspace:*",
+    "@neondatabase/serverless": "^1.1.0",
     "@stellar/stellar-sdk": "^15.1.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
   }
 }

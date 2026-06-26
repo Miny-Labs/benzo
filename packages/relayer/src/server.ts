@@ -14,19 +14,20 @@
  * Operational hardening (the proof already prevents value theft; these bound
  * *resource* abuse of the operator's own XLM/reserve budget):
  *   - Optional bearer auth (enforced iff RELAYER_AUTH_TOKEN is set).
- *   - In-process token-bucket rate limits (per IP, and per new-account on
- *     onboard) + a daily sponsored-onboard cap.
+ *   - Durable token-bucket rate limits (per IP, per new-account on onboard, and
+ *     global relay) + a daily sponsored-onboard cap.
  *   - CORS origin allowlist (BENZO_ALLOWED_ORIGINS).
  *   - Relayer recipient check: the relayer only subsidizes a transfer that pays
  *     ITS OWN address (else an unauthenticated caller could make it burn XLM
  *     relaying transfers that compensate a third party — the "unbounded
  *     subsidy" gap). The wallet pays no USDC fee today, so there is no fee floor.
- *   - HTTP idempotency keyed by the transfer's nullifiers: a resubmit returns
- *     the original txHash instead of a guaranteed-failing double-spend.
+ *   - Durable HTTP idempotency keyed by the transfer's nullifiers: a resubmit
+ *     returns the original txHash instead of a guaranteed-failing double-spend.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StellarCli, configFromEnv, prepareSponsoredOnboard, requireEnv } from "@benzo/core";
+import { createRelayerAbuseStore } from "./abuse-store.js";
 
 const PORT = Number(process.env.RELAYER_PORT ?? 8788);
 const RELAYER_SOURCE = process.env.RELAYER_SOURCE ?? "benzo-relayer";
@@ -60,57 +61,12 @@ const MAX_ONBOARDS_PER_DAY = Number(process.env.RELAYER_MAX_ONBOARDS_PER_DAY ?? 
 const IDEMPOTENCY_TTL_MS = 60 * 60 * 1000; // 1h
 
 const cli = new StellarCli(configFromEnv());
-
-// ---- token-bucket rate limiter (in-process, per key) ----
-interface Bucket {
-  tokens: number;
-  last: number;
-}
-const buckets = new Map<string, Bucket>();
-function allow(key: string, burst: number, perMin: number): boolean {
-  const now = Date.now();
-  const refillPerMs = perMin / 60_000;
-  const b = buckets.get(key) ?? { tokens: burst, last: now };
-  b.tokens = Math.min(burst, b.tokens + (now - b.last) * refillPerMs);
-  b.last = now;
-  if (b.tokens < 1) {
-    buckets.set(key, b);
-    return false;
-  }
-  b.tokens -= 1;
-  buckets.set(key, b);
-  return true;
-}
+const abuse = createRelayerAbuseStore();
 
 // ---- daily sponsored-onboard cap (UTC day) ----
-let onboardDay = "";
-let onboardCount = 0;
-function onboardWithinDailyCap(): boolean {
+async function onboardWithinDailyCap(): Promise<boolean> {
   const day = new Date().toISOString().slice(0, 10);
-  if (day !== onboardDay) {
-    onboardDay = day;
-    onboardCount = 0;
-  }
-  if (onboardCount >= MAX_ONBOARDS_PER_DAY) return false;
-  onboardCount += 1;
-  return true;
-}
-
-// ---- HTTP idempotency (keyed by the transfer's nullifiers) ----
-interface Cached {
-  code: number;
-  body: unknown;
-  at: number;
-}
-const idempotency = new Map<string, Cached>();
-function idemGet(key: string): Cached | undefined {
-  const c = idempotency.get(key);
-  if (!c) return undefined;
-  if (Date.now() - c.at > IDEMPOTENCY_TTL_MS) {
-    idempotency.delete(key);
-    return undefined;
-  }
-  return c;
+  return abuse.takeDaily(`onboard:${day}`, MAX_ONBOARDS_PER_DAY);
 }
 
 function clientIp(req: IncomingMessage): string {
@@ -186,12 +142,12 @@ const server = createServer(async (req, res) => {
         return send(res, origin, 400, { error: "newAccountPublic (string) required" });
       }
       if (
-        !allow(`onboard:ip:${ip}`, ONBOARD_BURST, ONBOARD_PER_MIN) ||
-        !allow(`onboard:acct:${newAccountPublic}`, ONBOARD_BURST, ONBOARD_PER_MIN)
+        !(await abuse.allow(`onboard:ip:${ip}`, ONBOARD_BURST, ONBOARD_PER_MIN)) ||
+        !(await abuse.allow(`onboard:acct:${newAccountPublic}`, ONBOARD_BURST, ONBOARD_PER_MIN))
       ) {
         return send(res, origin, 429, { error: "rate limit exceeded" });
       }
-      if (!onboardWithinDailyCap()) {
+      if (!(await onboardWithinDailyCap())) {
         return send(res, origin, 429, { error: "daily sponsored-onboard cap reached" });
       }
       const out = await prepareSponsoredOnboard({
@@ -209,8 +165,8 @@ const server = createServer(async (req, res) => {
       // Per-IP AND a global ceiling (the latter still bounds abuse if the per-IP
       // key is evaded, e.g. a spoofed XFF in default-open mode).
       if (
-        !allow(`relay:ip:${ip}`, RELAY_BURST, RELAY_PER_MIN) ||
-        !allow("relay:global", RELAY_GLOBAL_BURST, RELAY_GLOBAL_PER_MIN)
+        !(await abuse.allow(`relay:ip:${ip}`, RELAY_BURST, RELAY_PER_MIN)) ||
+        !(await abuse.allow("relay:global", RELAY_GLOBAL_BURST, RELAY_GLOBAL_PER_MIN))
       ) {
         return send(res, origin, 429, { error: "rate limit exceeded" });
       }
@@ -239,7 +195,7 @@ const server = createServer(async (req, res) => {
       const n1 = flag(args, "--nullifier1");
       const idemKey = n0 && n1 ? `${n0}:${n1}` : null;
       if (idemKey) {
-        const cached = idemGet(idemKey);
+        const cached = await abuse.idemGet(idemKey, IDEMPOTENCY_TTL_MS);
         if (cached) return send(res, origin, cached.code, cached.body);
       }
       const r = await cli.invoke({
@@ -249,7 +205,7 @@ const server = createServer(async (req, res) => {
         fnArgs: args,
       });
       const body = { result: r.result, txHash: r.txHash, raw: r.raw };
-      if (idemKey) idempotency.set(idemKey, { code: 200, body, at: Date.now() });
+      if (idemKey) await abuse.idemSet(idemKey, { code: 200, body, at: Date.now() });
       return send(res, origin, 200, body);
     }
 
@@ -261,6 +217,11 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.error(`[benzo-relayer] listening on :${PORT} (relayer source: ${RELAYER_SOURCE})`);
+  if (!abuse.durable) {
+    console.error(
+      "[benzo-relayer] WARNING: using RELAYER_STORE_MEMORY=1/dev memory abuse store. Set DATABASE_URL for durable rate limits and idempotency.",
+    );
+  }
   if (!AUTH_TOKEN) {
     console.error(
       "[benzo-relayer] WARNING: RELAYER_AUTH_TOKEN unset — endpoints are open (still rate-limited). Set it to require a bearer token.",
