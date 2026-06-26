@@ -66,6 +66,11 @@ jobs:
           if git grep -n 'benzo.console.localInvoices' -- apps/console/src ':!apps/console/src/screens/Invoices.test.tsx'; then
             echo "::error::invoice handoffs must persist through the encrypted hosted tenant store, not browser localStorage"; exit 1
           fi
+      - name: No client-side console workspace store
+        run: |
+          if git grep -nE 'localConsoleState|benzo\.console\.state\.encrypted|benzo\.console\.state\.key' -- apps/console/src; then
+            echo "::error::console workspace state must come from the encrypted hosted tenant store, not a browser fallback store"; exit 1
+          fi
       - name: Build wallet app with browser proving artifacts
         if: steps.wallet_artifacts.outputs.available == 'true'
         env:
