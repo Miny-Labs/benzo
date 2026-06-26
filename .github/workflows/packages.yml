@@ -54,6 +54,11 @@ jobs:
         run: |
           pnpm --filter @benzo/console typecheck
           pnpm --filter @benzo/wallet-app typecheck
+      - name: No client-side private audit store
+        run: |
+          if git grep -nE 'benzo\.console\.privateEvents|recordConsolePrivateEvent|clientAudit(Packet|OrgHash|PacketHash)' -- apps/console/src ':!apps/console/src/screens/AuditLog.test.tsx'; then
+            echo "::error::private audit packets must come from the encrypted hosted tenant store, not browser localStorage"; exit 1
+          fi
       - name: Build wallet app with browser proving artifacts
         if: steps.wallet_artifacts.outputs.available == 'true'
         env:

@@ -12,8 +12,6 @@ import { api, type PrivateAuditAnchorResponse, type PrivateAuditPacketResponse }
 import { explorerTxUrl, fmtUsd, formatAddress, formatDate, friendlyError } from "../lib/format";
 import { Page, Proving, Reveal, Stagger } from "../ui/motion";
 import { Button, Card, EmptyState, Pill, Skeleton, useToast } from "../ui/primitives";
-import { useConsole } from "../lib/store";
-import { clientAuditOrgHash, clientAuditPacket, clientAuditPacketHash } from "../lib/privateAudit";
 
 const sourceTone: Record<LedgerSourceType, "shielded" | "success" | "warning" | "danger" | "muted"> = {
   shield: "shielded",
@@ -34,7 +32,6 @@ function entryGross(e: LedgerEntry): string {
 
 export function AuditLog() {
   const toast = useToast();
-  const { session } = useConsole();
   const [entries, setEntries] = useState<LedgerEntry[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -82,7 +79,7 @@ export function AuditLog() {
     setLoadingPrivateAudit(true);
     setPrivateAuditError(null);
     try {
-      const r = await clientAuditPacket(session?.org.id ?? "org_acme");
+      const r = await api.privateAuditPacket();
       setPrivateAudit(r);
       setPrivateAnchor(null);
       toast({
@@ -101,12 +98,7 @@ export function AuditLog() {
     setAnchoringPrivateAudit(true);
     setPrivateAuditError(null);
     try {
-      const packetSource = privateAudit ?? await clientAuditPacket(session?.org.id ?? "org_acme");
-      const r = await api.anchorPrivateAuditRoot({
-        packet: packetSource.packet,
-        packetHash: await clientAuditPacketHash(packetSource.packet),
-        orgHash: await clientAuditOrgHash(packetSource.packet.orgId),
-      });
+      const r = await api.anchorPrivateAuditRoot(privateAudit ? { packet: privateAudit.packet } : undefined);
       setPrivateAudit(r);
       setPrivateAnchor(r);
       toast({

@@ -13,7 +13,6 @@ import { useConsole } from "../lib/store";
 import { fmtUsd, formatAddress } from "../lib/format";
 import { Page } from "../ui/motion";
 import { Button, Card, Input, PrivacyDisclosure, Select, useToast } from "../ui/primitives";
-import { recordConsolePrivateEvent } from "../lib/privateAudit";
 
 function toStroops(human: string): string {
   const [w, f = ""] = human.replace(/[$,]/g, "").trim().split(".");
@@ -23,7 +22,7 @@ function toStroops(human: string): string {
 export function Pay() {
   const nav = useNavigate();
   const toast = useToast();
-  const { accounts, counterparties, dashboard, refresh, session } = useConsole();
+  const { accounts, counterparties, dashboard, refresh } = useConsole();
   const live = dashboard?.live ?? false;
   const [step, setStep] = useState<"form" | "confirm">("form");
   const [fromAccountId, setFrom] = useState("");
@@ -47,14 +46,6 @@ export function Pay() {
         toCounterpartyId,
         amount: { amount: toStroops(amount), assetCode: "USDC" },
         memo: memo || undefined,
-      });
-      await recordConsolePrivateEvent({
-        orgId: session?.org.id ?? po.orgId,
-        type: "payment.submitted",
-        subjectId: po.id,
-        schema: "payment.order.v1",
-        payload: { payment: po, requestedAt: po.createdAt },
-        publicMeta: { status: po.status, kind: po.type, source: "console-ui" },
       });
       const settledOnChain = po.settlement?.onChain ?? false;
       const unpayable = !settledOnChain && po.status !== "needs_approval";
