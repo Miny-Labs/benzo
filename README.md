@@ -24,6 +24,69 @@ Network: Stellar testnet. Asset: Circle testnet USDC. Proof system: Groth16 over
 BN254. Hashing: Poseidon2 with parity guards across Circom, TypeScript, and
 Soroban host functions.
 
+## Product Conviction
+
+Stablecoins are already fast, global, and programmable. The missing piece for
+ordinary users and businesses is privacy that feels normal. Benzo is built around
+the idea that private money should not feel like a crypto tool. It should feel
+like a modern payments app, with handles, receipts, requests, invoices, payroll,
+and audit exports, while the cryptography runs underneath.
+
+The user experience is intentionally web2-like: sign in, see a balance, send,
+request, pay, approve, export. The protocol underneath keeps the parts that should
+be private out of public chain state, then lets the user or business prove the
+specific fact someone needs to know.
+
+That product line is the core bet:
+
+- people should be able to hold and send digital dollars without publishing a
+  permanent payment graph;
+- companies should be able to pay teams, vendors, and contractors without making
+  salaries and commercial relationships public;
+- auditors and counterparties should get verifiable evidence, not blind trust and
+  not full internal ledgers;
+- compliance should be provable at the edges without turning every transfer into
+  public surveillance data.
+
+## Product Surface
+
+Benzo ships two reference apps over the same shielded-USDC core.
+
+### Wallet
+
+The wallet is the consumer surface for private USDC.
+
+- Google or passkey onboarding
+- Device-bound account derivation without seed phrases in the UI
+- Private and public USDC balances
+- Add money from the testnet reserve into the private pool
+- Cash out from private balance back to the testnet reserve
+- Make public and make private
+- Private send to a `@handle`
+- Public send to any valid Stellar `G...` address
+- Deposit/import external USDC
+- Request links and invite links
+- Contacts, receipts, on-chain details, explorer links, and proof sharing
+- Platform passkey lock support where the device supports WebAuthn/passkeys
+
+### Console
+
+The console is the business surface for private stablecoin operations.
+
+- Google sign-in through the hosted console path
+- Treasury with private and public balances, receive QR, public send, make private,
+  reserve proofs, solvency proofs, and on-chain details
+- Contractors, CSV import, rate cards, payment history, and payroll runs
+- Payroll checks for policy, anonymous approval, computation, and funding
+- Invoices, single pay, pay all, and private netting
+- Grants and scoped auditor access
+- Private audit packets with encrypted events, hash chain, Merkle packet,
+  downloadable packet, and on-chain root anchor
+- Workspace navigation, command bar, notifications, and approvals
+
+The wallet and console are reference products, but they are not separate
+protocols. Both use the same contracts, proof system, note model, and SDK.
+
 ## Design Goals
 
 Benzo optimizes for regulated privacy rather than anonymity at all costs.
