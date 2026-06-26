@@ -68,6 +68,9 @@ function json(res: ServerResponse, code: number, body: unknown): void {
   cors(res);
   res.writeHead(code, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+  rememberIdempotency(code, body);
+}
+function rememberIdempotency(code: number, body: unknown): void {
   const idem = idempotencyScope.getStore();
   if (idem && code < 500) {
     db.idempotency ??= {};
@@ -97,7 +100,7 @@ function proverOf(url: URL, body?: { prover?: string }): ProverKind {
  *  other error is sanitized to generic copy so raw CLI/stack text never leaks. */
 function rampError(e: unknown, dir: "in" | "out"): { error: string; code: string } {
   if (e instanceof RampError) return { error: e.message, code: e.code };
-  return { error: dir === "in" ? "Couldn't add money right now. Your money is safe — please try again." : "Couldn't cash out right now. Your money is safe — please try again.", code: "busy" };
+  return { error: dir === "in" ? "Couldn't add money right now. Your money is safe. Please try again." : "Couldn't cash out right now. Your money is safe. Please try again.", code: "busy" };
 }
 /** HTTP status for a ramp failure: 409 for a known business condition, 503 for transient. */
 function rampStatus(e: unknown): number {
@@ -279,6 +282,7 @@ route("POST", "/api/send", async (req, res, url) => {
     try {
       const r = await send(to, body.amount, body.memo, prover, emit);
       recordSettledMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount });
+      rememberIdempotency(200, r);
       res.write(`event: done\ndata: ${JSON.stringify(r)}\n\n`);
     } catch (e) {
       const safe = rampError(e, "out");

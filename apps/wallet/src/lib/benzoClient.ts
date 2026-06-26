@@ -26,6 +26,7 @@ import {
 import { verifyBalanceProofOnChain } from "./chain";
 import { RPC_URL, NETWORK_PASSPHRASE, SIM_SOURCE, DEPLOYMENT, RELAYER_ADDRESS, TEE_CONFIG } from "./network";
 import { preferDeviceProving } from "./proverPolicy";
+import { prepareApiRequest } from "./api";
 
 function b64(b: Uint8Array): string {
   let s = "";
@@ -131,14 +132,19 @@ const addressFor = (name: string): string => (name === "relayer" ? RELAYER_ADDRE
 
 /** Hand a proven write (proof + public inputs, NEVER the witness) to the gas relay. */
 async function submitWrite(opts: { contractId: string; source: string; fnArgs: string[] }) {
-  const res = await fetch("/api/relay/submit", {
+  const prepared = prepareApiRequest("/relay/submit", {
     method: "POST",
-    headers: { "content-type": "application/json" },
     body: JSON.stringify({ contractId: opts.contractId, fnArgs: opts.fnArgs }),
   });
-  if (!res.ok) throw new Error(`relay ${res.status}: ${(await res.json().catch(() => ({}))).error ?? ""}`);
-  const j = (await res.json()) as { txHash?: string };
-  return { txHash: j.txHash, result: j.txHash, raw: j.txHash ?? "" };
+  let res: Response | undefined;
+  try {
+    res = await fetch(prepared.url, prepared.init);
+    if (!res.ok) throw new Error(`relay ${res.status}: ${(await res.json().catch(() => ({}))).error ?? ""}`);
+    const j = (await res.json()) as { txHash?: string };
+    return { txHash: j.txHash, result: j.txHash, raw: j.txHash ?? "" };
+  } finally {
+    if (res && res.status < 500) prepared.clearIdempotency?.();
+  }
 }
 
 let cached: BenzoClient | null | undefined;

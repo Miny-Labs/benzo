@@ -79,6 +79,7 @@ export function apiHref(path: string): string {
 
 const GOOGLE_TOKEN_KEY = "benzo.googleCredential";
 const GOOGLE_IDENTITY_KEY = "benzo.identityKey";
+const IDEMPOTENCY_PREFIX = "benzo.idempotency.wallet.v1:";
 
 function b64urlJson(seg: string): Record<string, unknown> | null {
   try {
@@ -123,27 +124,73 @@ export function clearGoogleCredential(): void {
   localStorage.removeItem(GOOGLE_IDENTITY_KEY);
 }
 
-function authHeaders(): Record<string, string> {
+export function authHeaders(): Record<string, string> {
   const token = localStorage.getItem(GOOGLE_TOKEN_KEY);
   return token ? { authorization: `Bearer ${token}` } : {};
 }
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiHref(path), {
-    ...init,
-    headers: { "content-type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
-  });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) detail = body.error;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(detail);
+function shortHash(input: string): string {
+  let h = 0x811c9dc5;
+  for (const ch of input) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193);
   }
-  return (await res.json()) as T;
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+function randomIdempotencyKey(): string {
+  const uuid = crypto.randomUUID?.();
+  if (uuid) return `idem_${uuid}`;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return `idem_${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function idempotencyKey(path: string, init?: RequestInit): { key: string; clear: () => void } | null {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return null;
+  const body = typeof init?.body === "string" ? init.body : "";
+  const storageKey = `${IDEMPOTENCY_PREFIX}${shortHash(`${method}:${path}:${body}`)}`;
+  let key = localStorage.getItem(storageKey);
+  if (!key) {
+    key = randomIdempotencyKey();
+    localStorage.setItem(storageKey, key);
+  }
+  return { key, clear: () => localStorage.removeItem(storageKey) };
+}
+
+export function prepareApiRequest(path: string, init?: RequestInit): { url: string; init: RequestInit; clearIdempotency?: () => void } {
+  const headers = new Headers(init?.headers);
+  headers.set("content-type", headers.get("content-type") ?? "application/json");
+  for (const [k, v] of Object.entries(authHeaders())) headers.set(k, v);
+  const idem = idempotencyKey(path, init);
+  if (idem) headers.set("Idempotency-Key", idem.key);
+  return {
+    url: apiHref(path),
+    init: { ...init, headers },
+    clearIdempotency: idem?.clear,
+  };
+}
+
+async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  const prepared = prepareApiRequest(path, init);
+  let res: Response | undefined;
+  try {
+    res = await fetch(prepared.url, prepared.init);
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { error?: string };
+        if (body.error) detail = body.error;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+    return (await res.json()) as T;
+  } finally {
+    if (res && res.status < 500) prepared.clearIdempotency?.();
+  }
 }
 
 export const api = {
@@ -177,15 +224,17 @@ export const api = {
     args: { to: string; amount: string; memo?: string; prover?: ProverKind },
     onPhase: (e: SendPhaseEvent) => void,
   ): Promise<SettleResult> => {
-    const res = await fetch("/api/send", {
+    const prepared = prepareApiRequest("/send", {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      headers: { accept: "text/event-stream" },
       body: JSON.stringify(args),
     });
+    const res = await fetch(prepared.url, prepared.init);
     const ctype = res.headers.get("content-type") ?? "";
     if (!ctype.includes("text/event-stream")) {
       // BFF declined to stream (or errored) → treat as a single JSON reply.
       const body = (await res.json()) as SettleResult & { error?: string };
+      if (res.status < 500) prepared.clearIdempotency?.();
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
       return body;
     }
@@ -212,6 +261,7 @@ export const api = {
       }
     }
     if (!final) throw new Error("send did not complete");
+    prepared.clearIdempotency?.();
     return final;
   },
   handleAvailable: (h: string) =>

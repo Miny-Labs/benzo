@@ -71,6 +71,11 @@ jobs:
           if git grep -nE 'localConsoleState|benzo\.console\.state\.encrypted|benzo\.console\.state\.key' -- apps/console/src; then
             echo "::error::console workspace state must come from the encrypted hosted tenant store, not a browser fallback store"; exit 1
           fi
+      - name: No direct hosted wallet money writes
+        run: |
+          if git grep -nE "fetch\(\s*['\"]/?api/(send|relay/submit)" -- apps/wallet/src; then
+            echo "::error::wallet money writes must go through the authenticated RPC gateway with idempotency"; exit 1
+          fi
       - name: Build wallet app with browser proving artifacts
         if: steps.wallet_artifacts.outputs.available == 'true'
         env:
