@@ -4,6 +4,7 @@
  * Balance and chain history still come from @benzo/core.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { loadTenantDocument, saveTenantDocument, tenantStorageMissing } from "./tenantData.js";
 export type Direction = "in" | "out";
 
@@ -53,6 +54,53 @@ export interface IdempotencyRecord {
   createdAt: number;
 }
 
+export interface WalletInvite {
+  localId: string;
+  amount: string;
+  note?: string;
+  link: string;
+  /** encrypted in the tenant document; needed by the sender to refund. */
+  secret: string;
+  createdAt: number;
+  expiresAt: number;
+  status: "pending" | "claimed" | "refunded" | "expired";
+}
+
+export type WalletLedgerSource =
+  | "onramp"
+  | "offramp"
+  | "import"
+  | "make_public"
+  | "send_public"
+  | "send_private"
+  | "invite_fund"
+  | "invite_claim"
+  | "invite_refund";
+
+export type WalletLedgerAccount = "private" | "public" | "ramp_reserve" | "external" | "claim_escrow";
+
+export interface WalletLedgerLine {
+  accountId: WalletLedgerAccount;
+  direction: "debit" | "credit";
+  amount: string;
+  assetCode: "USDC";
+}
+
+export interface WalletLedgerEntry {
+  id: string;
+  postedAt: number;
+  sourceType: WalletLedgerSource;
+  sourceId?: string;
+  status: "settled" | "failed";
+  txId?: string;
+  prover?: string;
+  requestedAmount?: string;
+  lines: WalletLedgerLine[];
+  errorCode?: string;
+  error?: string;
+  hash?: string;
+}
+
 export interface Profile {
   handle: string;
   name: string;
@@ -70,6 +118,8 @@ export interface WalletDb {
   profile: Profile;
   contacts: Contact[];
   activity: ActivityRow[];
+  invites: WalletInvite[];
+  ledger: WalletLedgerEntry[];
   rateLimits: Record<string, RateBucket>;
   proofReceipts: ProofReceipt[];
   idempotency: Record<string, IdempotencyRecord>;
@@ -80,6 +130,8 @@ export function seed(): WalletDb {
     profile: { handle: "@you", name: "You" },
     contacts: [],
     activity: [],
+    invites: [],
+    ledger: [],
     rateLimits: {},
     proofReceipts: [],
     idempotency: {},
@@ -116,6 +168,81 @@ export function tenantDataMissing(): string[] {
   return tenantStorageMissing();
 }
 
+function canonicalLedgerEntry(e: WalletLedgerEntry): string {
+  const { hash: _hash, ...rest } = e;
+  return JSON.stringify(rest);
+}
+
+function ledgerHash(prevHash: string | undefined, e: WalletLedgerEntry): string {
+  return createHash("sha256").update(`${prevHash ?? "GENESIS"}:${canonicalLedgerEntry(e)}`).digest("hex");
+}
+
+export function appendWalletLedger(entry: Omit<WalletLedgerEntry, "id" | "postedAt" | "hash"> & { id?: string; postedAt?: number }): WalletLedgerEntry {
+  db.ledger ??= [];
+  const next: WalletLedgerEntry = {
+    id: entry.id ?? id("wle"),
+    postedAt: entry.postedAt ?? nowSec(),
+    sourceType: entry.sourceType,
+    sourceId: entry.sourceId,
+    status: entry.status,
+    txId: entry.txId,
+    prover: entry.prover,
+    requestedAmount: entry.requestedAmount,
+    lines: entry.lines,
+    errorCode: entry.errorCode,
+    error: entry.error,
+  };
+  next.hash = ledgerHash(db.ledger[db.ledger.length - 1]?.hash, next);
+  db.ledger.push(next);
+  return next;
+}
+
+export function verifyWalletLedger(): { ok: boolean; length: number; brokenAt?: number } {
+  db.ledger ??= [];
+  let prev: string | undefined;
+  for (let i = 0; i < db.ledger.length; i++) {
+    if (db.ledger[i].hash !== ledgerHash(prev, db.ledger[i])) return { ok: false, length: db.ledger.length, brokenAt: i };
+    prev = db.ledger[i].hash;
+  }
+  return { ok: true, length: db.ledger.length };
+}
+
+export function walletLedgerBalances(): Record<WalletLedgerAccount, string> {
+  db.ledger ??= [];
+  const balances: Record<WalletLedgerAccount, bigint> = {
+    private: 0n,
+    public: 0n,
+    ramp_reserve: 0n,
+    external: 0n,
+    claim_escrow: 0n,
+  };
+  for (const entry of db.ledger) {
+    if (entry.status !== "settled") continue;
+    for (const line of entry.lines) {
+      const amount = BigInt(line.amount || "0");
+      balances[line.accountId] += line.direction === "credit" ? amount : -amount;
+    }
+  }
+  return {
+    private: balances.private.toString(),
+    public: balances.public.toString(),
+    ramp_reserve: balances.ramp_reserve.toString(),
+    external: balances.external.toString(),
+    claim_escrow: balances.claim_escrow.toString(),
+  };
+}
+
+function normalizeWalletDb(value: WalletDb): WalletDb {
+  value.contacts ??= [];
+  value.activity ??= [];
+  value.invites ??= [];
+  value.ledger ??= [];
+  value.rateLimits ??= {};
+  value.proofReceipts ??= [];
+  value.idempotency ??= {};
+  return value;
+}
+
 export async function runWithWalletTenant<T>(
   authKey: string | null,
   claims: { name?: string; email?: string } | null,
@@ -127,7 +254,7 @@ export async function runWithWalletTenant<T>(
   const fresh = seed();
   if (claims?.name) fresh.profile.name = claims.name;
   if (claims?.email && fresh.profile.name === "You") fresh.profile.name = claims.email.split("@")[0] || "You";
-  const ctx = { key: tenantKey, db: loaded ?? fresh };
+  const ctx = { key: tenantKey, db: normalizeWalletDb(loaded ?? fresh) };
   return tenantScope.run(ctx, async () => {
     try {
       return await fn();

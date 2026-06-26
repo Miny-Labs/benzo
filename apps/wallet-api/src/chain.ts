@@ -41,7 +41,7 @@ import {
   type ProverPort,
 } from "@benzo/core";
 import { encodeBenzoLink } from "@benzo/links";
-import { db, nowSec, type ActivityRow } from "./store.js";
+import { db, nowSec, type ActivityRow, type WalletInvite } from "./store.js";
 import { currentAuth } from "./auth.js";
 
 export type ProverKind = "local" | "tee";
@@ -761,7 +761,7 @@ export async function makePublic(amount: string, prover: ProverKind): Promise<Se
  *  balance via the SAC transfer (a real classic-equivalent USDC payment that
  *  credits the recipient's trustline). Validates the address, checks the liquid
  *  balance covers it, and maps a missing-trustline revert to friendly copy. */
-export async function sendPublic(toAddress: string, amount: string): Promise<{ txHash?: string; onChain: boolean }> {
+export async function sendPublic(toAddress: string, amount: string): Promise<{ txHash?: string; onChain: boolean; amount: string }> {
   const to = toAddress.trim();
   if (!/^G[A-Z2-7]{55}$/.test(to)) throw new RampError("balance", "That doesn't look like a valid wallet address.");
   const stroops = toStroops(amount);
@@ -780,7 +780,7 @@ export async function sendPublic(toAddress: string, amount: string): Promise<{ t
         send: true,
         fnArgs: ["transfer", "--from", from, "--to", to, "--amount", stroops.toString()],
       });
-      return { txHash: res.txHash, onChain: true };
+      return { txHash: res.txHash, onChain: true, amount: stroops.toString() };
     } catch (e) {
       // A missing/under-authorized trustline is the common cause of a SAC
       // transfer revert to an external account — surface it in plain English.
@@ -863,24 +863,17 @@ export async function createRequest(amount: string | undefined, memo: string | u
  */
 const INVITE_TTL = 7 * 86_400;
 
-interface EscrowEntry {
-  localId: string;
-  amount: string;
-  note?: string;
-  link: string;
-  secret: string; // base64url — retained so the sender can self-claim a refund
-  createdAt: number;
-  expiresAt: number;
-  status: "pending" | "claimed" | "refunded" | "expired";
-}
-const escrow = new Map<string, EscrowEntry>();
-
 const b64urlFromHex = (hex: string): string => Buffer.from(hex, "hex").toString("base64url");
 const bytesFromB64url = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, "base64url"));
 
+function tenantInvites(): WalletInvite[] {
+  db.invites ??= [];
+  return db.invites;
+}
+
 function sweepExpired(): void {
   const now = nowSec();
-  for (const e of escrow.values()) if (e.status === "pending" && now > e.expiresAt) e.status = "expired";
+  for (const e of tenantInvites()) if (e.status === "pending" && now > e.expiresAt) e.status = "expired";
 }
 
 /** Re-adopt the wallet account after a claim (which mutates the client's account). */
@@ -916,7 +909,7 @@ export async function createInvite(amount: string, note: string | undefined, onP
       "scheme",
     );
     const link = walletRouteLink(claimLink);
-    escrow.set(localId, { localId, amount: stroops.toString(), note, link, secret, createdAt: nowSec(), expiresAt, status: "pending" });
+    tenantInvites().push({ localId, amount: stroops.toString(), note, link, secret, createdAt: nowSec(), expiresAt, status: "pending" });
     onPhase?.({ phase: "submitting", txHash: r.sendTx });
     onPhase?.({ phase: "confirmed", txHash: r.sendTx, onChain: true });
     return { link, localId, claimAccountPub: r.recipient.spendPub.toString(16), amount: stroops.toString(), expiresAt, onChain: true };
@@ -974,8 +967,8 @@ export async function claimInvite(secret: string, localId?: string): Promise<{ a
         } else throw e;
       }
     }
-    const id = localId ?? [...escrow.values()].find((e) => e.secret === secret)?.localId;
-    if (id) escrow.get(id) && (escrow.get(id)!.status = "claimed");
+    const invite = localId ? tenantInvites().find((e) => e.localId === localId) : tenantInvites().find((e) => e.secret === secret);
+    if (invite) invite.status = "claimed";
     db.activity.unshift({
       id: `act_${Date.now()}`, type: "receive", name: "Claimed a link", note: "Money received",
       amount: r.amount, direction: "in", status: "settled", timestamp: nowSec(), tone: "accent",
@@ -986,9 +979,9 @@ export async function claimInvite(secret: string, localId?: string): Promise<{ a
 }
 
 export async function refundInvite(localId: string): Promise<{ amount: string; txHash?: string; onChain: boolean }> {
-  const e = escrow.get(localId);
+  const e = tenantInvites().find((x) => x.localId === localId);
   if (!e) throw new Error("invite not found");
-  if (e.status === "claimed") throw new Error("already claimed — can't refund");
+  if (e.status === "claimed") throw new Error("already claimed - can't refund");
   const c = getClient();
   if (c) {
     const r = await sweepClaim(e.secret);
@@ -998,9 +991,9 @@ export async function refundInvite(localId: string): Promise<{ amount: string; t
   throw new RampError("busy", "Live testnet client unavailable. Refund was not submitted.");
 }
 
-export function listInvites(): Array<Omit<EscrowEntry, "secret">> {
+export function listInvites(): Array<Omit<WalletInvite, "secret">> {
   sweepExpired();
-  return [...escrow.values()].sort((a, b) => b.createdAt - a.createdAt).map(({ secret: _s, ...rest }) => rest);
+  return [...tenantInvites()].sort((a, b) => b.createdAt - a.createdAt).map(({ secret: _s, ...rest }) => rest);
 }
 
 // ----------------------------------------------------------------- share proof

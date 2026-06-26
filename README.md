@@ -244,6 +244,7 @@ This section is intentionally blunt.
 | Hosted idempotency | Tenant-persistent `Idempotency-Key` records for write APIs |
 | Hosted rate limits | Tenant-persistent rate buckets, not process memory |
 | Proof receipts | Hosted APIs persist proof receipts with verifier/key metadata where the UI requests proof artifacts |
+| Wallet reserve accounting | Add money, cash out, import, make public, public/private sends, and invite settlement append hash-chained tenant ledger entries with derived balances and failed-attempt records |
 | Fiat/cash partner leg | Simulated testnet anchor leg. The USDC reserve moves on-chain; no real bank, MoneyGram, Stripe, or cash payout happens |
 | Connector data | CSV and sandbox connectors. Real integrations are env-keyed future work |
 | Mainnet | Not deployed |
@@ -259,13 +260,14 @@ Known limits:
   complete.
 - `FUNDS` is oracle-backed and should be read as proof of a signed balance claim,
   not pure note ownership.
-- Hosted storage is encrypted document-per-tenant storage, not a normalized
-  double-entry product ledger yet. That is enough for the public testnet app, but
-  mainnet should split reserve accounting, audit events, proof receipts, and
-  product objects into explicit ledgers with migration tooling.
-- Reserve accounting is still the on-chain testnet reserve plus tenant activity
-  records. Mainnet needs a formal reserve ledger, reconciliation jobs, and
-  settlement failure handling before any real fiat partner is connected.
+- Hosted storage is encrypted document-per-tenant storage. Wallet reserve
+  movements and console payments are hash-chained and auditable inside the
+  tenant document, but mainnet should still split reserve accounting, audit
+  events, proof receipts, and product objects into normalized tables with
+  migration tooling.
+- Reserve accounting now records the on-chain testnet reserve flow, derived
+  balances, and failed attempts. Mainnet still needs reconciliation jobs and
+  settlement failure operations before any real fiat partner is connected.
 - Account recovery is deterministic today: Google/passkey identity plus the
   deployed account salt derives the hosted account. If the Google account,
   passkey, or salt changes, recovery must be handled by an explicit migration or

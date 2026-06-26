@@ -31,6 +31,7 @@ import {
   liveStatus,
   proverInfo,
   send,
+  classifyRecipient,
   shareProof,
   exportAccountForDevice,
   relaySubmit,
@@ -38,7 +39,18 @@ import {
   type ProverKind,
   type SendPhase,
 } from "./chain.js";
-import { db, id, nowSec, runWithWalletTenant, tenantDataMissing } from "./store.js";
+import {
+  appendWalletLedger,
+  db,
+  id,
+  nowSec,
+  runWithWalletTenant,
+  tenantDataMissing,
+  verifyWalletLedger,
+  walletLedgerBalances,
+  type WalletLedgerLine,
+  type WalletLedgerSource,
+} from "./store.js";
 import { authFromRequest, runWithAuth } from "./auth.js";
 import { googleConfigured, verifyGoogleIdToken } from "./google-oidc.js";
 
@@ -49,7 +61,7 @@ const idempotencyScope = new AsyncLocalStorage<{ key: string; bodyHash: string }
 function cors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", process.env.WALLET_ALLOWED_ORIGIN ?? "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
+  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, idempotency-key");
 }
 function json(res: ServerResponse, code: number, body: unknown): void {
   cors(res);
@@ -90,6 +102,61 @@ function rampError(e: unknown, dir: "in" | "out"): { error: string; code: string
 function rampStatus(e: unknown): number {
   if (e instanceof RampError) return e.code === "limit" ? 400 : e.code === "busy" ? 503 : 409;
   return 503;
+}
+
+function ledgerError(e: unknown, dir: "in" | "out"): { error: string; code: string } {
+  return rampError(e, dir);
+}
+
+function usdcLine(accountId: WalletLedgerLine["accountId"], direction: WalletLedgerLine["direction"], amount: string): WalletLedgerLine {
+  return { accountId, direction, amount, assetCode: "USDC" };
+}
+
+function walletLedgerLines(sourceType: WalletLedgerSource, amount: string): WalletLedgerLine[] {
+  switch (sourceType) {
+    case "onramp":
+      return [usdcLine("ramp_reserve", "debit", amount), usdcLine("private", "credit", amount)];
+    case "offramp":
+      return [usdcLine("private", "debit", amount), usdcLine("ramp_reserve", "credit", amount)];
+    case "import":
+      return [usdcLine("public", "debit", amount), usdcLine("private", "credit", amount)];
+    case "make_public":
+      return [usdcLine("private", "debit", amount), usdcLine("public", "credit", amount)];
+    case "send_public":
+      return [usdcLine("public", "debit", amount), usdcLine("external", "credit", amount)];
+    case "send_private":
+      return [usdcLine("private", "debit", amount), usdcLine("external", "credit", amount)];
+    case "invite_fund":
+      return [usdcLine("private", "debit", amount), usdcLine("claim_escrow", "credit", amount)];
+    case "invite_claim":
+    case "invite_refund":
+      return [usdcLine("claim_escrow", "debit", amount), usdcLine("private", "credit", amount)];
+  }
+}
+
+function recordSettledMovement(sourceType: WalletLedgerSource, amount: string, opts: { txHash?: string; prover?: string; sourceId?: string; requestedAmount?: string } = {}) {
+  appendWalletLedger({
+    sourceType,
+    sourceId: opts.sourceId,
+    status: "settled",
+    txId: opts.txHash,
+    prover: opts.prover,
+    requestedAmount: opts.requestedAmount,
+    lines: walletLedgerLines(sourceType, amount),
+  });
+}
+
+function recordFailedMovement(sourceType: WalletLedgerSource, requestedAmount: string | undefined, e: unknown, dir: "in" | "out", sourceId?: string) {
+  const safe = ledgerError(e, dir);
+  appendWalletLedger({
+    sourceType,
+    sourceId,
+    status: "failed",
+    requestedAmount,
+    lines: [],
+    errorCode: safe.code,
+    error: safe.error,
+  });
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse, url: URL) => void | Promise<void>;
@@ -185,6 +252,8 @@ async function runIdempotent(req: IncomingMessage, res: ServerResponse, path: st
 route("GET", "/api/balance", async (_q, res) => json(res, 200, await getBalanceStroops()));
 route("GET", "/api/ramp/reserve", async (_q, res) => json(res, 200, await getRampReserve()));
 route("GET", "/api/history", async (_q, res) => json(res, 200, await getActivity()));
+route("GET", "/api/ledger", (_q, res) => json(res, 200, { entries: db.ledger ?? [], balances: walletLedgerBalances(), verify: verifyWalletLedger() }));
+route("GET", "/api/ledger/verify", (_q, res) => json(res, 200, verifyWalletLedger()));
 // Contacts are device-local in the wallet UI; the hosted API never provides
 // hosted people.
 route("GET", "/api/contacts", (_q, res) => json(res, 200, []));
@@ -204,14 +273,24 @@ route("POST", "/api/send", async (req, res, url) => {
     const emit = (e: SendPhase) => res.write(`event: phase\ndata: ${JSON.stringify(e)}\n\n`);
     try {
       const r = await send(to, body.amount, body.memo, prover, emit);
+      recordSettledMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount });
       res.write(`event: done\ndata: ${JSON.stringify(r)}\n\n`);
     } catch (e) {
-      res.write(`event: phase\ndata: ${JSON.stringify({ phase: "failed", error: String((e as Error).message) })}\n\n`);
+      const safe = rampError(e, "out");
+      recordFailedMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", body.amount, e, "out");
+      res.write(`event: phase\ndata: ${JSON.stringify({ phase: "failed", error: safe.error })}\n\n`);
     }
     res.end();
     return;
   }
-  json(res, 200, await send(to, body.amount, body.memo, prover));
+  try {
+    const r = await send(to, body.amount, body.memo, prover);
+    recordSettledMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount });
+    json(res, 200, r);
+  } catch (e) {
+    recordFailedMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", body.amount, e, "out");
+    json(res, rampStatus(e), rampError(e, "out"));
+  }
 });
 
 route("POST", "/api/request", async (req, res) => {
@@ -224,14 +303,24 @@ route("GET", "/api/invites", (_q, res) => json(res, 200, listInvites()));
 route("POST", "/api/invite", async (req, res) => {
   const body = await readJson<{ amount: string; note?: string }>(req);
   if (!body.amount) return json(res, 400, { error: "amount required" });
-  json(res, 201, await createInvite(body.amount, body.note));
+  try {
+    const r = await createInvite(body.amount, body.note);
+    recordSettledMovement("invite_fund", r.amount, { sourceId: r.localId, requestedAmount: body.amount });
+    json(res, 201, r);
+  } catch (e) {
+    recordFailedMovement("invite_fund", body.amount, e, "out");
+    json(res, rampStatus(e), rampError(e, "out"));
+  }
 });
 route("POST", "/api/invite/refund", async (req, res) => {
   const body = await readJson<{ localId: string }>(req);
   if (!body.localId) return json(res, 400, { error: "localId required" });
   try {
-    json(res, 200, await refundInvite(body.localId));
+    const r = await refundInvite(body.localId);
+    recordSettledMovement("invite_refund", r.amount, { txHash: r.txHash, sourceId: body.localId });
+    json(res, 200, r);
   } catch (e) {
+    recordFailedMovement("invite_refund", undefined, e, "in", body.localId);
     json(res, 400, { error: String((e as Error).message) });
   }
 });
@@ -239,8 +328,11 @@ route("POST", "/api/claim", async (req, res) => {
   const body = await readJson<{ secret: string; localId?: string }>(req);
   if (!body.secret) return json(res, 400, { error: "secret required" });
   try {
-    json(res, 200, await claimInvite(body.secret, body.localId));
+    const r = await claimInvite(body.secret, body.localId);
+    recordSettledMovement("invite_claim", r.amount, { txHash: r.txHash, sourceId: body.localId });
+    json(res, 200, r);
   } catch (e) {
+    recordFailedMovement("invite_claim", undefined, e, "in", body.localId);
     json(res, 400, { error: String((e as Error).message) });
   }
 });
@@ -249,8 +341,11 @@ route("POST", "/api/cash-out", async (req, res, url) => {
   const body = await readJson<{ amount: string; prover?: string }>(req);
   if (!body.amount) return json(res, 400, { error: "amount required" });
   try {
-    json(res, 200, await cashOut(body.amount, proverOf(url, body)));
+    const r = await cashOut(body.amount, proverOf(url, body));
+    recordSettledMovement("offramp", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount });
+    json(res, 200, r);
   } catch (e) {
+    recordFailedMovement("offramp", body.amount, e, "out");
     json(res, rampStatus(e), rampError(e, "out"));
   }
 });
@@ -259,8 +354,11 @@ route("POST", "/api/add-money", async (req, res, url) => {
   const body = await readJson<{ amount: string; prover?: string }>(req);
   if (!body.amount) return json(res, 400, { error: "amount required" });
   try {
-    json(res, 200, await addMoney(body.amount, proverOf(url, body)));
+    const r = await addMoney(body.amount, proverOf(url, body));
+    recordSettledMovement("onramp", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount });
+    json(res, 200, r);
   } catch (e) {
+    recordFailedMovement("onramp", body.amount, e, "in");
     json(res, rampStatus(e), rampError(e, "in"));
   }
 });
@@ -270,8 +368,11 @@ route("GET", "/api/deposit-address", async (_q, res) => json(res, 200, await get
 route("POST", "/api/import", async (req, res, url) => {
   const body = await readJson<{ amount?: string; prover?: string }>(req);
   try {
-    json(res, 200, await importDeposit(body.amount, proverOf(url, body)));
+    const r = await importDeposit(body.amount, proverOf(url, body));
+    recordSettledMovement("import", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount ?? "all" });
+    json(res, 200, r);
   } catch (e) {
+    recordFailedMovement("import", body.amount ?? "all", e, "in");
     json(res, rampStatus(e), rampError(e, "in"));
   }
 });
@@ -285,8 +386,11 @@ route("POST", "/api/make-public", async (req, res, url) => {
   const body = await readJson<{ amount: string; prover?: string }>(req);
   if (!body.amount) return json(res, 400, { error: "amount required" });
   try {
-    json(res, 200, await makePublic(body.amount, proverOf(url, body)));
+    const r = await makePublic(body.amount, proverOf(url, body));
+    recordSettledMovement("make_public", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount });
+    json(res, 200, r);
   } catch (e) {
+    recordFailedMovement("make_public", body.amount, e, "out");
     json(res, rampStatus(e), rampError(e, "out"));
   }
 });
@@ -294,8 +398,11 @@ route("POST", "/api/send-public", async (req, res) => {
   const body = await readJson<{ to: string; amount: string }>(req);
   if (!body.to || !body.amount) return json(res, 400, { error: "to and amount required" });
   try {
-    json(res, 200, await sendPublic(body.to, body.amount));
+    const r = await sendPublic(body.to, body.amount);
+    recordSettledMovement("send_public", r.amount, { txHash: r.txHash, requestedAmount: body.amount });
+    json(res, 200, r);
   } catch (e) {
+    recordFailedMovement("send_public", body.amount, e, "out");
     json(res, rampStatus(e), rampError(e, "out"));
   }
 });

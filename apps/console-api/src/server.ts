@@ -327,7 +327,7 @@ const idempotencyScope = new AsyncLocalStorage<{ key: string; bodyHash: string }
 function cors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", process.env.CONSOLE_ALLOWED_ORIGIN ?? "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
+  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, idempotency-key");
 }
 function json(res: ServerResponse, code: number, body: unknown): void {
   cors(res);

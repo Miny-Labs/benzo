@@ -57,6 +57,12 @@ test("reports unavailable live status when chain env is absent", async () => {
   await expect(res.json()).resolves.toMatchObject({ live: false, mode: "unavailable" });
 });
 
+test("allows browser idempotency headers", async () => {
+  const res = await request("/api/add-money", { method: "OPTIONS" });
+  expect(res.status).toBe(204);
+  expect(String(res.headers["access-control-allow-headers"])).toContain("idempotency-key");
+});
+
 test("fails closed for nested hosted wallet endpoints when user is not signed in", async () => {
   const res = await request(`/api/rpc?path=${encodeURIComponent("/handle/available?h=ab")}`);
   expect(res.status).toBe(401);

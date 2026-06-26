@@ -12,25 +12,63 @@ afterEach(() => {
   vi.resetModules();
 });
 
-test("hosted wallet UX state is encrypted and partitioned by auth key", async () => {
+test("hosted wallet UX, invites, and accounting state are encrypted and partitioned by auth key", async () => {
   process.env.VERCEL = "1";
   process.env.BENZO_TENANT_STORE_MEMORY = "1";
   process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
-  const { db, runWithWalletTenant } = await import("./store.js");
+  const { appendWalletLedger, db, runWithWalletTenant, verifyWalletLedger, walletLedgerBalances } = await import("./store.js");
 
   await runWithWalletTenant("alice", { name: "Alice" }, async () => {
     db.profile.handle = "@alice";
     db.contacts.push({ handle: "@bob", name: "Bob" });
+    db.invites.push({
+      localId: "inv_alice",
+      amount: "30000000",
+      note: "private invite",
+      link: "https://wallet.benzo.space/claim#alice",
+      secret: "encrypted-in-tenant-doc",
+      createdAt: 1,
+      expiresAt: 2,
+      status: "pending",
+    });
+    appendWalletLedger({
+      sourceType: "onramp",
+      status: "settled",
+      txId: "tx_onramp",
+      requestedAmount: "3",
+      lines: [
+        { accountId: "ramp_reserve", direction: "debit", amount: "30000000", assetCode: "USDC" },
+        { accountId: "private", direction: "credit", amount: "30000000", assetCode: "USDC" },
+      ],
+    });
+    appendWalletLedger({
+      sourceType: "offramp",
+      status: "failed",
+      requestedAmount: "100",
+      lines: [],
+      errorCode: "reserve",
+      error: "The cash reserve is topping up. Try again in a moment, or a smaller amount.",
+    });
+    expect(verifyWalletLedger()).toMatchObject({ ok: true, length: 2 });
+    expect(walletLedgerBalances()).toMatchObject({ private: "30000000", ramp_reserve: "-30000000" });
   });
 
   await runWithWalletTenant("bob", { name: "Bob" }, async () => {
     expect(db.profile.handle).toBe("@you");
     expect(db.contacts).toEqual([]);
+    expect(db.invites).toEqual([]);
+    expect(db.ledger).toEqual([]);
     db.profile.handle = "@bob";
   });
 
   await runWithWalletTenant("alice", null, async () => {
     expect(db.profile.handle).toBe("@alice");
     expect(db.contacts).toHaveLength(1);
+    expect(db.invites.map((i) => i.localId)).toEqual(["inv_alice"]);
+    expect(db.ledger.map((e) => e.sourceType)).toEqual(["onramp", "offramp"]);
+    expect(verifyWalletLedger()).toMatchObject({ ok: true, length: 2 });
+    expect(walletLedgerBalances()).toMatchObject({ private: "30000000", ramp_reserve: "-30000000" });
+    db.ledger[0].requestedAmount = "999";
+    expect(verifyWalletLedger()).toMatchObject({ ok: false, brokenAt: 0 });
   });
 });
