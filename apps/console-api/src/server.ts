@@ -1382,10 +1382,11 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
         recovery: {
           status: "required",
           reason: e.code,
-          storedAccountFingerprint: e.storedAccountFingerprint,
-          currentAccountFingerprint: e.currentAccountFingerprint,
         },
       });
+    }
+    if (process.env.VERCEL === "1") {
+      return json(res, 500, { error: "Server unavailable. Please try again.", live: false, mode: "unavailable" });
     }
     json(res, 500, { error: String((e as Error)?.message ?? e) });
   }
