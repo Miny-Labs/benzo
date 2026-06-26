@@ -188,6 +188,10 @@ export function tenantDataMissing(): string[] {
   return tenantStorageMissing();
 }
 
+function hostedTenantMode(): boolean {
+  return process.env.VERCEL === "1" || process.env.BENZO_HOSTED_TENANT_TEST === "1";
+}
+
 function canonicalLedgerEntry(e: WalletLedgerEntry): string {
   const { hash: _hash, ...rest } = e;
   return JSON.stringify(rest);
@@ -306,7 +310,7 @@ export async function runWithWalletTenant<T>(
   binding: AccountBinding | null,
   fn: () => Promise<T>,
 ): Promise<T> {
-  if (process.env.VERCEL !== "1" || !authKey) return fn();
+  if (!hostedTenantMode() || !authKey) return fn();
   const tenantKey = `wallet:${authKey}`;
   const loaded = await loadTenantDocument<WalletDb>("wallet", tenantKey);
   const fresh = seed();

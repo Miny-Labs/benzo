@@ -6,6 +6,9 @@ let schemaReady: Promise<void> | null = null;
 const memoryDocuments = new Map<string, string>();
 
 function useMemoryStore(): boolean {
+  if (process.env.VERCEL === "1" && process.env.BENZO_TENANT_STORE_MEMORY === "1") {
+    throw new Error("BENZO_TENANT_STORE_MEMORY is not allowed on Vercel hosted tenant storage");
+  }
   return process.env.BENZO_TENANT_STORE_MEMORY === "1";
 }
 
@@ -69,7 +72,8 @@ function decrypt<T>(ciphertext: string): T {
 
 export function tenantStorageMissing(): string[] {
   const missing: string[] = [];
-  if (process.env.VERCEL === "1" && !useMemoryStore()) {
+  if (process.env.VERCEL === "1") {
+    if (process.env.BENZO_TENANT_STORE_MEMORY === "1") missing.push("BENZO_TENANT_STORE_MEMORY");
     if (!process.env.DATABASE_URL) missing.push("DATABASE_URL");
     if (!process.env.BENZO_DATA_ENCRYPTION_SECRET) missing.push("BENZO_DATA_ENCRYPTION_SECRET");
   }

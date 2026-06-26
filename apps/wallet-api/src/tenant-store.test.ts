@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-const ENV_KEYS = ["VERCEL", "BENZO_TENANT_STORE_MEMORY", "BENZO_DATA_ENCRYPTION_SECRET"] as const;
+const ENV_KEYS = ["VERCEL", "BENZO_HOSTED_TENANT_TEST", "BENZO_TENANT_STORE_MEMORY", "BENZO_DATA_ENCRYPTION_SECRET"] as const;
 const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]));
 
 afterEach(() => {
@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 test("hosted wallet UX, invites, and accounting state are encrypted and partitioned by auth key", async () => {
-  process.env.VERCEL = "1";
+  process.env.BENZO_HOSTED_TENANT_TEST = "1";
   process.env.BENZO_TENANT_STORE_MEMORY = "1";
   process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
   const { appendWalletLedger, appendWalletProofReceipt, db, runWithWalletTenant, verifyWalletLedger, walletLedgerBalances } = await import("./store.js");
@@ -85,7 +85,7 @@ test("hosted wallet UX, invites, and accounting state are encrypted and partitio
 });
 
 test("hosted wallet fails closed when a tenant account binding changes", async () => {
-  process.env.VERCEL = "1";
+  process.env.BENZO_HOSTED_TENANT_TEST = "1";
   process.env.BENZO_TENANT_STORE_MEMORY = "1";
   process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
   const { db, RecoveryRequiredError, runWithWalletTenant } = await import("./store.js");
@@ -104,4 +104,14 @@ test("hosted wallet fails closed when a tenant account binding changes", async (
     expect(db.profile.handle).toBe("@recovery");
     expect(db.recovery?.accountFingerprint).toBe("wallet_original");
   });
+});
+
+test("hosted wallet refuses the in-memory tenant store on Vercel", async () => {
+  process.env.VERCEL = "1";
+  process.env.BENZO_TENANT_STORE_MEMORY = "1";
+  process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
+  const { loadTenantDocument, tenantStorageMissing } = await import("./tenantData.js");
+
+  expect(tenantStorageMissing()).toContain("BENZO_TENANT_STORE_MEMORY");
+  await expect(loadTenantDocument("wallet", "wallet:alice")).rejects.toThrow("BENZO_TENANT_STORE_MEMORY is not allowed");
 });
