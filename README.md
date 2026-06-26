@@ -76,8 +76,12 @@ Benzo combines three products into one working testnet system.
   transfer, unshield, org transfer, viewing keys, and relayed writes.
 - Browser proving for capable desktops.
 - Phala dstack / Intel TDX proving for mobile, weak devices, and the console path.
-- Serverless wallet and console APIs that fail closed when live chain config is
-  missing. No demo fallback is accepted in production.
+- Serverless wallet and console APIs that fail closed when live chain config,
+  encrypted storage, or auth config is missing. No demo fallback is accepted in
+  production.
+- Neon-backed encrypted tenant storage for hosted state. The database stores
+  ciphertext documents only; wallet state is keyed by auth identity, console
+  state is keyed by org identity, and new tenants start empty.
 - CI gates for packages, contracts, Poseidon2 parameter parity, stale deployment
   addresses, and real proving artifacts when available.
 
@@ -117,15 +121,29 @@ The public chain sees commitments, nullifiers, Merkle roots, verification key ID
 and successful proof checks. It does not see the private amount, recipient handle,
 invoice line, salary, approver comment, or business memo.
 
-The private records needed for a real business workflow are client-encrypted:
+The private records needed for a real business workflow are encrypted before
+they become hosted state:
 
-- Console events are stored as AES-GCM ciphertext envelopes in the browser.
-- Each envelope commits to the previous one.
-- The audit packet includes the ciphertext records, hash-chain head, Merkle root,
-  inclusion proofs, and linked on-chain proof/payment refs.
-- The console can anchor only the packet/root metadata to `audit_root`.
+- Hosted wallet and console APIs persist tenant documents in Neon as AES-GCM
+  ciphertext. The database row key identifies the tenant document, not the
+  contents inside it.
+- Wallet documents are scoped to the authenticated user. Console documents are
+  scoped to the authenticated org/workspace. A fresh Google or passkey account
+  starts with zero balance, empty contacts, empty activity, and no seeded console
+  objects.
+- Console private events are stored as encrypted envelopes. Each envelope
+  commits to the previous one, so the packet is tamper-evident.
+- Private audit packets include ciphertext records, hash-chain head, Merkle
+  root, inclusion proofs, and linked on-chain proof/payment refs.
+- The console anchors only packet/root metadata to `audit_root`.
 - A scoped auditor can receive the packet and verify integrity without the chain
   learning payroll or invoice details.
+
+Hosted operational state is tenant-persistent too: invites, onboarding,
+private-event envelopes, proof receipts, idempotency records, and rate-limit
+buckets survive serverless cold starts. Write endpoints accept `Idempotency-Key`;
+the same key and same body replay the original JSON result, while the same key
+with a different body fails with `409`.
 
 This is the product line Benzo is exploring: keep payment and business data
 private by default, but make selected facts provable when a counterparty,
@@ -222,6 +240,10 @@ This section is intentionally blunt.
 | Org M-of-N spend | Real money path through `pool.transfer_org` and `JSPLITORG` |
 | TEE proving | Live Phala dstack / Intel TDX endpoint, pinned by compose hash |
 | Wallet and console UI | Live Vercel apps connected to live APIs |
+| Hosted tenant storage | Neon-backed encrypted tenant documents, scoped per user or org |
+| Hosted idempotency | Tenant-persistent `Idempotency-Key` records for write APIs |
+| Hosted rate limits | Tenant-persistent rate buckets, not process memory |
+| Proof receipts | Hosted APIs persist proof receipts with verifier/key metadata where the UI requests proof artifacts |
 | Fiat/cash partner leg | Simulated testnet anchor leg. The USDC reserve moves on-chain; no real bank, MoneyGram, Stripe, or cash payout happens |
 | Connector data | CSV and sandbox connectors. Real integrations are env-keyed future work |
 | Mainnet | Not deployed |
@@ -237,9 +259,17 @@ Known limits:
   complete.
 - `FUNDS` is oracle-backed and should be read as proof of a signed balance claim,
   not pure note ownership.
-- Console read models are still sandbox projections. Private audit packets are
-  encrypted and anchorable; long-term product storage should move to durable
-  encrypted client/cloud state instead of serverless memory.
+- Hosted storage is encrypted document-per-tenant storage, not a normalized
+  double-entry product ledger yet. That is enough for the public testnet app, but
+  mainnet should split reserve accounting, audit events, proof receipts, and
+  product objects into explicit ledgers with migration tooling.
+- Reserve accounting is still the on-chain testnet reserve plus tenant activity
+  records. Mainnet needs a formal reserve ledger, reconciliation jobs, and
+  settlement failure handling before any real fiat partner is connected.
+- Account recovery is deterministic today: Google/passkey identity plus the
+  deployed account salt derives the hosted account. If the Google account,
+  passkey, or salt changes, recovery must be handled by an explicit migration or
+  support flow. That flow is not a self-serve product screen yet.
 
 ## Repository map
 
