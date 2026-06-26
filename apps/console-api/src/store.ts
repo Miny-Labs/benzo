@@ -121,16 +121,10 @@ export interface Db {
   onboarding: OnboardingDraft;
   privateEvents: PrivateEventEnvelope[];
   recovery: RecoveryBinding | null;
-  rateLimits: Record<string, RateBucket>;
   proofReceipts: ProofReceipt[];
   idempotency: Record<string, IdempotencyRecord>;
   /** the session member (owner) */
   sessionMemberId: string;
-}
-
-export interface RateBucket {
-  windowStart: number;
-  count: number;
 }
 
 export interface RecoveryBinding {
@@ -320,7 +314,6 @@ export function seed(): Db {
     onboarding: {},
     privateEvents: [],
     recovery: null,
-    rateLimits: {},
     proofReceipts: [],
     idempotency: {},
     sessionMemberId: owner.id,
@@ -388,7 +381,6 @@ export function freshHostedDb(authKey: string, claims?: { email?: string; name?:
     onboarding: {},
     privateEvents: [],
     recovery: null,
-    rateLimits: {},
     proofReceipts: [],
     idempotency: {},
     sessionMemberId: owner.id,
@@ -438,7 +430,6 @@ function normalizeConsoleDb(value: Db): Db {
   value.onboarding ??= {};
   value.privateEvents ??= [];
   value.recovery ??= null;
-  value.rateLimits ??= {};
   value.proofReceipts ??= [];
   value.idempotency ??= {};
   return value;

@@ -117,6 +117,23 @@ test("hosted wallet fails closed when a tenant account binding changes", async (
   });
 });
 
+test("hosted wallet request limits are tenant-scoped outside the product document", async () => {
+  process.env.BENZO_HOSTED_TENANT_TEST = "1";
+  process.env.BENZO_TENANT_STORE_MEMORY = "1";
+  process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
+  process.env.BENZO_DISABLE_TENANT_LEGACY_DECRYPT = "1";
+  const { takeTenantRateLimit } = await import("./tenantData.js");
+  const { db, runWithWalletTenant } = await import("./store.js");
+
+  await expect(takeTenantRateLimit("wallet", "wallet:alice", "write", 1, 1, 60)).resolves.toEqual({ ok: true });
+  await expect(takeTenantRateLimit("wallet", "wallet:alice", "write", 1, 1, 60)).resolves.toMatchObject({ ok: false });
+  await expect(takeTenantRateLimit("wallet", "wallet:bob", "write", 1, 1, 60)).resolves.toEqual({ ok: true });
+
+  await runWithWalletTenant("alice", { name: "Alice" }, { accountFingerprint: "wallet_alice", subjectKey: "alice" }, async () => {
+    expect("rateLimits" in db).toBe(false);
+  });
+});
+
 test("hosted wallet refuses the in-memory tenant store on Vercel", async () => {
   process.env.VERCEL = "1";
   process.env.BENZO_TENANT_STORE_MEMORY = "1";

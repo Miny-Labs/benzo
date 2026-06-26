@@ -97,7 +97,6 @@ test("hosted console persists operational state in the encrypted tenant document
       prevHash: "GENESIS",
       hash: "hash",
     });
-    db.rateLimits.write = { windowStart: Date.now(), count: 7 };
     db.proofReceipts.push({
       id: "prf_ops",
       action: "treasury.prove-total",
@@ -121,9 +120,25 @@ test("hosted console persists operational state in the encrypted tenant document
     expect(db.invites.map((i) => i.id)).toEqual(["invite_ops"]);
     expect(db.payrolls[0].lines[0].settlementHandle).toBe("@ops");
     expect(db.privateEvents.map((e) => e.id)).toEqual(["pe_ops"]);
-    expect(db.rateLimits.write.count).toBe(7);
     expect(db.proofReceipts.map((r) => r.vkId)).toEqual(["ORGSUM"]);
     expect(db.idempotency["POST:/api/payments:key_ops"]).toMatchObject({ bodyHash: "hash_ops", status: 201 });
+  });
+});
+
+test("hosted console request limits are tenant-scoped outside the product document", async () => {
+  process.env.BENZO_HOSTED_TENANT_TEST = "1";
+  process.env.BENZO_TENANT_STORE_MEMORY = "1";
+  process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
+  process.env.BENZO_DISABLE_TENANT_LEGACY_DECRYPT = "1";
+  const { takeTenantRateLimit } = await import("./tenantData.js");
+  const { db, runWithConsoleTenant } = await import("./store.js");
+
+  await expect(takeTenantRateLimit("console", "console:alice", "write", 1, 1, 60)).resolves.toEqual({ ok: true });
+  await expect(takeTenantRateLimit("console", "console:alice", "write", 1, 1, 60)).resolves.toMatchObject({ ok: false });
+  await expect(takeTenantRateLimit("console", "console:bob", "write", 1, 1, 60)).resolves.toEqual({ ok: true });
+
+  await runWithConsoleTenant("alice", { email: "alice@example.com", name: "Alice" }, { accountFingerprint: "console_alice", subjectKey: "alice" }, async () => {
+    expect("rateLimits" in db).toBe(false);
   });
 });
 

@@ -32,7 +32,7 @@ import { verifyGoogleIdToken, googleConfigured } from "./google-oidc.js";
 import { accountBinding, authFromRequest, currentAuth, runWithAuth } from "./auth.js";
 import { matchPolicy, progress, recordApproval } from "./approvals.js";
 import { db, fmtUsd, id, now, parseRosterCsv, recoverySummary, RecoveryRequiredError, runWithConsoleTenant, runWithConsoleTenantKey, tenantDataMissing, currentConsoleTenantKey, type OrgInvite } from "./store.js";
-import { lookupTenantRoute, registerTenantRoute } from "./tenantData.js";
+import { lookupTenantRoute, registerTenantRoute, takeTenantRateLimit } from "./tenantData.js";
 import { encodeBenzoLink } from "@benzo/links";
 import { auditPacketHash, buildAnchor, buildAuditPacket, createPrivateEvent, deriveEventKey, GENESIS_HASH, sha256Hex, verifyHashChain, type AuditPacket, type PrivateEventType } from "@benzo/private-events";
 
@@ -140,21 +140,32 @@ function recordProofReceiptParts(action: string, input: {
   });
 }
 
-function rateLimit(path: string, method: string): { ok: true } | { ok: false; retryAfter: number } {
+const localRateLimits = new Map<string, { windowStart: number; count: number }>();
+
+function takeLocalRateLimit(path: string, method: string): { ok: true } | { ok: false; retryAfter: number } {
   const write = method !== "GET";
   const key = write ? "write" : "read";
   const limit = write ? 50 : 240;
   const nowMs = Date.now();
-  db.rateLimits ??= {};
-  const bucket = db.rateLimits[key] ?? { windowStart: nowMs, count: 0 };
+  const bucket = localRateLimits.get(key) ?? { windowStart: nowMs, count: 0 };
   if (nowMs - bucket.windowStart >= 60_000) {
     bucket.windowStart = nowMs;
     bucket.count = 0;
   }
   bucket.count += path.includes("/settlements/") ? 3 : 1;
-  db.rateLimits[key] = bucket;
+  localRateLimits.set(key, bucket);
   if (bucket.count > limit) return { ok: false, retryAfter: Math.max(1, Math.ceil((60_000 - (nowMs - bucket.windowStart)) / 1000)) };
   return { ok: true };
+}
+
+async function rateLimit(path: string, method: string): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+  const write = method !== "GET";
+  const bucketName = write ? "write" : "read";
+  const limit = write ? 50 : 240;
+  const weight = path.includes("/settlements/") ? 3 : 1;
+  const tenantKey = currentConsoleTenantKey();
+  if (tenantKey) return takeTenantRateLimit("console", tenantKey, bucketName, weight, limit, 60);
+  return takeLocalRateLimit(path, method);
 }
 
 function counterpartyHandle(counterpartyId?: string): string | undefined {
@@ -1469,7 +1480,7 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
           });
         }
         if (effectiveUrl.pathname.startsWith("/api/") && !publicHosted) {
-          const rl = rateLimit(effectiveUrl.pathname, req.method ?? "GET");
+          const rl = await rateLimit(effectiveUrl.pathname, req.method ?? "GET");
           if (!rl.ok) return json(res, 429, { error: "Too many requests. Please wait a moment and try again.", retryAfter: rl.retryAfter });
         }
         const invoke = () => runIdempotent(req, res, effectiveUrl.pathname, () => Promise.resolve(m.handler(req, res, m.params)));

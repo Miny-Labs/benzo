@@ -44,6 +44,7 @@ import {
 import {
   appendWalletLedger,
   appendWalletProofReceipt,
+  currentWalletTenantKey,
   db,
   nowSec,
   recoverySummary,
@@ -57,10 +58,12 @@ import {
 } from "./store.js";
 import { accountBinding, authFromRequest, runWithAuth } from "./auth.js";
 import { googleConfigured, verifyGoogleIdToken } from "./google-oidc.js";
+import { takeTenantRateLimit } from "./tenantData.js";
 
 const PORT = Number(process.env.WALLET_API_PORT ?? 8791);
 const rawBodies = new WeakMap<IncomingMessage, string>();
 const idempotencyScope = new AsyncLocalStorage<{ key: string; bodyHash: string }>();
+const localRateLimits = new Map<string, { windowStart: number; count: number }>();
 
 function cors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", process.env.WALLET_ALLOWED_ORIGIN ?? "*");
@@ -254,21 +257,30 @@ function appLiveStatus() {
 route("GET", "/api/live", (_q, res) => json(res, 200, appLiveStatus()));
 route("GET", "/api/prover", (_q, res) => json(res, 200, { ...proverInfo(), live: isLive() }));
 
-function rateLimit(path: string, method: string): { ok: true } | { ok: false; retryAfter: number } {
+function takeLocalRateLimit(path: string, method: string): { ok: true } | { ok: false; retryAfter: number } {
   const write = method !== "GET";
   const key = write ? "write" : "read";
   const limit = write ? 40 : 180;
   const now = nowSec();
-  db.rateLimits ??= {};
-  const bucket = db.rateLimits[key] ?? { windowStart: now, count: 0 };
+  const bucket = localRateLimits.get(key) ?? { windowStart: now, count: 0 };
   if (now - bucket.windowStart >= 60) {
     bucket.windowStart = now;
     bucket.count = 0;
   }
   bucket.count += path.startsWith("/api/relay") ? 4 : 1;
-  db.rateLimits[key] = bucket;
+  localRateLimits.set(key, bucket);
   if (bucket.count > limit) return { ok: false, retryAfter: Math.max(1, 60 - (now - bucket.windowStart)) };
   return { ok: true };
+}
+
+async function rateLimit(path: string, method: string): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+  const write = method !== "GET";
+  const bucketName = write ? "write" : "read";
+  const limit = write ? 40 : 180;
+  const weight = path.startsWith("/api/relay") ? 4 : 1;
+  const tenantKey = currentWalletTenantKey();
+  if (tenantKey) return takeTenantRateLimit("wallet", tenantKey, bucketName, weight, limit, 60);
+  return takeLocalRateLimit(path, method);
 }
 
 function idempotencyHeader(req: IncomingMessage): string | null {
@@ -576,7 +588,7 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
           });
         }
         if (effectiveUrl.pathname.startsWith("/api/") && !publicHosted) {
-          const rl = rateLimit(effectiveUrl.pathname, req.method ?? "GET");
+          const rl = await rateLimit(effectiveUrl.pathname, req.method ?? "GET");
           if (!rl.ok) return json(res, 429, { error: "Too many requests. Please wait a moment and try again.", retryAfter: rl.retryAfter });
         }
         await runIdempotent(req, res, effectiveUrl.pathname, () => Promise.resolve(r.handler(req, res, effectiveUrl)));

@@ -31,11 +31,6 @@ export interface ActivityRow {
   unverified?: boolean;
 }
 
-export interface RateBucket {
-  windowStart: number;
-  count: number;
-}
-
 export interface ProofReceipt {
   id: string;
   action: string;
@@ -145,7 +140,6 @@ export interface WalletDb {
   invites: WalletInvite[];
   ledger: WalletLedgerEntry[];
   recovery: RecoveryBinding | null;
-  rateLimits: Record<string, RateBucket>;
   proofReceipts: ProofReceipt[];
   idempotency: Record<string, IdempotencyRecord>;
 }
@@ -158,7 +152,6 @@ export function seed(): WalletDb {
     invites: [],
     ledger: [],
     recovery: null,
-    rateLimits: {},
     proofReceipts: [],
     idempotency: {},
   };
@@ -192,6 +185,10 @@ export const db: WalletDb = new Proxy({} as WalletDb, {
 
 export function tenantDataMissing(): string[] {
   return tenantStorageMissing();
+}
+
+export function currentWalletTenantKey(): string | null {
+  return tenantScope.getStore()?.key ?? null;
 }
 
 function hostedTenantMode(): boolean {
@@ -285,7 +282,6 @@ function normalizeWalletDb(value: WalletDb): WalletDb {
   value.invites ??= [];
   value.ledger ??= [];
   value.recovery ??= null;
-  value.rateLimits ??= {};
   value.proofReceipts ??= [];
   value.idempotency ??= {};
   return value;

@@ -5,6 +5,7 @@ let sqlClient: NeonQueryFunction<false, false> | null | undefined;
 let schemaReady: Promise<void> | null = null;
 const memoryDocuments = new Map<string, string>();
 const memoryRoutes = new Map<string, { tenantKey: string; expiresAt?: number }>();
+const memoryRateLimits = new Map<string, { windowStart: number; count: number }>();
 
 function useMemoryStore(): boolean {
   if (process.env.VERCEL === "1" && process.env.BENZO_TENANT_STORE_MEMORY === "1") {
@@ -54,6 +55,17 @@ async function ensureSchema(): Promise<void> {
         expires_at bigint,
         created_at timestamptz not null default now(),
         primary key (app, route_type, route_hash)
+      )
+    `;
+    await db`
+      create table if not exists benzo_request_limits (
+        app text not null,
+        tenant_key text not null,
+        bucket text not null,
+        window_start bigint not null,
+        count integer not null,
+        updated_at timestamptz not null default now(),
+        primary key (app, tenant_key, bucket)
       )
     `;
   })();
@@ -198,4 +210,58 @@ export async function lookupTenantRoute(app: string, routeType: string, token: s
   const expiresAt = row.expires_at === null || row.expires_at === undefined ? null : Number(row.expires_at);
   if (expiresAt && expiresAt < nowSec) return null;
   return row.tenant_key;
+}
+
+function currentWindow(nowSec: number, windowSeconds: number): number {
+  return Math.floor(nowSec / windowSeconds) * windowSeconds;
+}
+
+function takeMemoryRateLimit(key: string, weight: number, limit: number, windowSeconds: number): { ok: true } | { ok: false; retryAfter: number } {
+  const now = Math.floor(Date.now() / 1000);
+  const windowStart = currentWindow(now, windowSeconds);
+  const bucket = memoryRateLimits.get(key) ?? { windowStart, count: 0 };
+  if (bucket.windowStart !== windowStart) {
+    bucket.windowStart = windowStart;
+    bucket.count = 0;
+  }
+  bucket.count += weight;
+  memoryRateLimits.set(key, bucket);
+  if (bucket.count > limit) return { ok: false, retryAfter: Math.max(1, windowSeconds - (now - windowStart)) };
+  return { ok: true };
+}
+
+export async function takeTenantRateLimit(
+  app: string,
+  tenantKey: string,
+  bucketName: string,
+  weight: number,
+  limit: number,
+  windowSeconds: number,
+): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+  const key = `${app}:${tenantKey}:${bucketName}`;
+  if (useMemoryStore()) return takeMemoryRateLimit(key, weight, limit, windowSeconds);
+  await ensureSchema();
+  const db = sql();
+  if (!db) return takeMemoryRateLimit(key, weight, limit, windowSeconds);
+  const now = Math.floor(Date.now() / 1000);
+  const windowStart = currentWindow(now, windowSeconds);
+  const rows = await db`
+    insert into benzo_request_limits (app, tenant_key, bucket, window_start, count, updated_at)
+    values (${app}, ${tenantKey}, ${bucketName}, ${windowStart}, ${weight}, now())
+    on conflict (app, tenant_key, bucket)
+    do update set
+      window_start = case
+        when benzo_request_limits.window_start = ${windowStart} then benzo_request_limits.window_start
+        else ${windowStart}
+      end,
+      count = case
+        when benzo_request_limits.window_start = ${windowStart} then benzo_request_limits.count + ${weight}
+        else ${weight}
+      end,
+      updated_at = now()
+    returning count
+  `;
+  const count = Number((rows[0] as { count?: number | string } | undefined)?.count ?? weight);
+  if (count > limit) return { ok: false, retryAfter: Math.max(1, windowSeconds - (now - windowStart)) };
+  return { ok: true };
 }

@@ -59,6 +59,7 @@ const invariantFiles = [
       "DATABASE_URL is required for hosted tenant storage",
       "BENZO_TENANT_STORE_MEMORY is not allowed on Vercel hosted tenant storage",
       "benzo:tenant-doc:v1:",
+      "benzo_request_limits",
     ],
   },
   {
@@ -70,6 +71,7 @@ const invariantFiles = [
       "benzo:tenant-doc:v1:",
       "benzo_tenant_routes",
       "benzo:tenant-route:v1:",
+      "benzo_request_limits",
     ],
   },
   {
