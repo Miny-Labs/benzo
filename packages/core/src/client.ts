@@ -116,7 +116,7 @@ export interface ProgressEvent {
 /** Async handle for a send: reports progress and resolves on settlement. */
 export class SendHandle {
   status: TxStatus = "pending";
-  result?: { txHash?: string; amount: bigint; recipient?: string; provingMs?: number; nullifier?: bigint };
+  result?: { txHash?: string; amount: bigint; recipient?: string; provingMs?: number; nullifier?: bigint; sorobanPublics?: string[] };
   error?: Error;
   private listeners: Array<(e: ProgressEvent) => void> = [];
   private resolveFn!: (r: SendHandle["result"]) => void;
@@ -762,7 +762,7 @@ export class BenzoClient {
     fromAddress: string; // public depositor G-address (must auth the SAC pull)
     fromSource: string; // CLI identity authorizing the deposit
     scope?: string; // disclosure scope to seal the MVK ciphertext under
-  }): Promise<{ txHash?: string; leafIndex: number; commitment: bigint; note: Note; provingMs: number }> {
+  }): Promise<{ txHash?: string; leafIndex: number; commitment: bigint; note: Note; provingMs: number; sorobanPublics: string[] }> {
     await this.sync();
     await this.assertDepositorCanFund(opts.fromAddress, opts.amount);
     const assetId = await this.assetId();
@@ -800,7 +800,7 @@ export class BenzoClient {
       status: "settled",
       txHash: res.txHash,
     });
-    return { txHash: res.txHash, leafIndex: res.leafIndex, commitment: res.commitment, note, provingMs: res.provingMs };
+    return { txHash: res.txHash, leafIndex: res.leafIndex, commitment: res.commitment, note, provingMs: res.provingMs, sorobanPublics: res.proof.sorobanPublics };
   }
 
   // -------------------------------------------------------------- send ----
@@ -891,7 +891,7 @@ export class BenzoClient {
         memo: opts.memo,
       });
       handle._emit({ op: "send", status: "settled", txHash: tr.txHash, provingMs: tr.provingMs });
-      handle._resolve({ txHash: tr.txHash, amount: opts.amount, recipient: opts.to.label, provingMs: tr.provingMs, nullifier: tr.nullifiers[0] });
+      handle._resolve({ txHash: tr.txHash, amount: opts.amount, recipient: opts.to.label, provingMs: tr.provingMs, nullifier: tr.nullifiers[0], sorobanPublics: tr.proof.sorobanPublics });
     } catch (e) {
       handle._emit({ op: "send", status: "failed", detail: (e as Error).message });
       handle._reject(e as Error);
@@ -933,7 +933,7 @@ export class BenzoClient {
     amount: bigint;
     toAddress: string;
     scope?: string; // disclosure scope to seal the change-note MVK ciphertext under
-  }): Promise<{ txHash?: string; nullifier: bigint; provingMs: number; consolidationTxs?: string[] }> {
+  }): Promise<{ txHash?: string; nullifier: bigint; provingMs: number; consolidationTxs?: string[]; sorobanPublics: string[] }> {
     await this.sync();
     const assetId = await this.assetId();
     const scope = opts.scope ?? DISCLOSURE_SCOPE;
@@ -1047,6 +1047,7 @@ export class BenzoClient {
       nullifier: wd.nullifier,
       provingMs: consolidationProvingMs + wd.provingMs,
       consolidationTxs: consolidationTxs.length ? consolidationTxs : undefined,
+      sorobanPublics: wd.proof.sorobanPublics,
     };
   }
 

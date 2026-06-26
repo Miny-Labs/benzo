@@ -154,7 +154,8 @@ function recordSettledMovement(sourceType: WalletLedgerSource, amount: string, o
 
 type WalletSettlementVk = "SHIELD" | "TRANSFER" | "UNSHIELD";
 
-function settlementPublicInputsRef(r: SettleResult): { source: "settlement-tx"; txHash: string | null } {
+function settlementPublicInputsRef(r: SettleResult): string[] | { source: "settlement-tx"; txHash: string | null } {
+  if (r.sorobanPublics?.length) return r.sorobanPublics;
   return {
     source: "settlement-tx",
     txHash: r.txHash ?? null,

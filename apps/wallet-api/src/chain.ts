@@ -409,6 +409,7 @@ export interface SettleResult {
   prover: ProverKind;
   amount: string;
   onChain: boolean;
+  sorobanPublics?: string[];
   error?: string;
 }
 
@@ -466,7 +467,7 @@ export async function send(
     onPhase?.({ phase: "submitting", provingMs: wd.provingMs, txHash: wd.txHash });
     await c.flush();
     onPhase?.({ phase: "confirmed", txHash: wd.txHash, provingMs: wd.provingMs, onChain: true });
-    return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true };
+    return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
   }
 
   // private shielded send to a @handle
@@ -478,7 +479,7 @@ export async function send(
   onPhase?.({ phase: "submitting", provingMs: r?.provingMs, txHash: r?.txHash });
   await c.flush();
   onPhase?.({ phase: "confirmed", txHash: r?.txHash, provingMs: r?.provingMs, onChain: true });
-  return { status: "settled", txHash: r?.txHash, provingMs: r?.provingMs, prover, amount: stroops.toString(), onChain: true };
+  return { status: "settled", txHash: r?.txHash, provingMs: r?.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: r?.sorobanPublics };
 }
 
 export async function sendToHandle(
@@ -495,7 +496,7 @@ export async function sendToHandle(
     const sh = await c.sendToHandle({ handle: handle.replace(/^@/, ""), amount: stroops, useRelayer: false });
     const r = await sh.settled();
     await c.flush();
-    return { status: "settled", txHash: r?.txHash, provingMs: r?.provingMs, prover, amount: stroops.toString(), onChain: true };
+    return { status: "settled", txHash: r?.txHash, provingMs: r?.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: r?.sorobanPublics };
   }
   throw new RampError("busy", "Live testnet client unavailable. No funds were moved.");
 }
@@ -623,7 +624,7 @@ export async function cashOut(amount: string, prover: ProverKind): Promise<Settl
     const wd = await c.unshield({ amount: stroops, toAddress: to });
     await c.flush();
     await rampCashOut(c, to, stroops);
-    return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true };
+    return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
   }
   throw new RampError("busy", "Live testnet client unavailable. No funds were moved.");
 }
@@ -645,7 +646,7 @@ export async function addMoney(amount: string, prover: ProverKind = "local"): Pr
       await rampCashIn(c, from, stroops);
       const sh = await c.shield({ amount: stroops, fromAddress: from, fromSource: TX_SOURCE });
       await c.flush();
-      return { status: "settled", txHash: sh.txHash, provingMs: sh.provingMs, prover, amount: stroops.toString(), onChain: true };
+      return { status: "settled", txHash: sh.txHash, provingMs: sh.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: sh.sorobanPublics };
     } catch (e) {
       // The shield's on-chain submit + proof verification happen BEFORE the SDK's
       // post-submit `assertSynced` full-tree check. On a long-lived deployment the
@@ -704,7 +705,7 @@ export async function importDeposit(amount: string | undefined, prover: ProverKi
   try {
     const sh = await c.shield({ amount: stroops, fromAddress: from, fromSource: TX_SOURCE });
     await c.flush();
-    return { status: "settled", txHash: sh.txHash, provingMs: sh.provingMs, prover, amount: stroops.toString(), onChain: true };
+    return { status: "settled", txHash: sh.txHash, provingMs: sh.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: sh.sorobanPublics };
   } catch (e) {
     if (/out of sync/.test((e as Error).message)) {
       await c.sync();
@@ -743,7 +744,7 @@ export async function makePublic(amount: string, prover: ProverKind): Promise<Se
     try {
       const wd = await c.unshield({ amount: stroops, toAddress: to });
       try { await c.flush(); } catch { /* local persistence is best-effort; the withdraw already settled on-chain */ }
-      return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true };
+      return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
     } catch (e) {
       // The withdraw can settle on-chain even if a follow-up sync/persist throws
       // (RPC retention). Treat a real Public-balance increase as success, not a

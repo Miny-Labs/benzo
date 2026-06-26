@@ -44,6 +44,7 @@ export interface SettleResult {
   prover: ProverKind;
   amount: string;
   onChain: boolean;
+  sorobanPublics?: string[];
   error?: string;
 }
 
