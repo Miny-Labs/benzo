@@ -133,6 +133,41 @@ describe("signAndSubmit", () => {
     expect(res.result).toBe(true);
   });
 
+  it("rebuilds and resubmits once when RPC rejects a non-executed stale sequence", async () => {
+    let sends = 0;
+    let rebuilds = 0;
+    const server: SubmitRpc = {
+      async sendTransaction() {
+        sends++;
+        if (sends === 1) {
+          return { status: "ERROR", hash: "", errorResult: { result: "txBadSeq" } };
+        }
+        return { status: "PENDING", hash: "fresh-seq" };
+      },
+      async getTransaction() {
+        return { status: "SUCCESS", returnValue: nativeToScVal(true) };
+      },
+    };
+
+    const res = await signAndSubmit({
+      server,
+      preparedXdr: prepared,
+      retryPreparedXdr: async () => {
+        rebuilds++;
+        return prepared;
+      },
+      signer,
+      networkPassphrase: NET,
+      badSeqRetryDelayMs: 0,
+      pollIntervalMs: 0,
+    });
+
+    expect(res.txHash).toBe("fresh-seq");
+    expect(res.result).toBe(true);
+    expect(sends).toBe(2);
+    expect(rebuilds).toBe(1);
+  });
+
   it("throws when send is rejected", async () => {
     const server: SubmitRpc = {
       async sendTransaction() {

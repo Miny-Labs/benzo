@@ -119,40 +119,50 @@ function nativeResult(retval?: xdr.ScVal): { result: unknown; raw: string } {
 /**
  * Sign an already-prepared (simulated + assembled) transaction with the port,
  * submit it, and poll to finality. The signer is the only thing that touches
- * key material; this function is pure transport. Submission runs exactly once
- * (a Soroban write is not idempotent — a blind retry could double-execute), so
- * only the *polling* is retried, never the send.
+ * key material; this function is pure transport. Submission normally runs
+ * exactly once (a Soroban write is not idempotent — a blind retry could
+ * double-execute). The only send retry allowed here is a freshly rebuilt tx
+ * after RPC returns `txBadSeq`, which means the rejected inner transaction did
+ * not execute.
  */
 export async function signAndSubmit(opts: {
   server: SubmitRpc;
   preparedXdr: string;
+  retryPreparedXdr?: () => Promise<string>;
   signer: TxSignerPort;
   networkPassphrase: string;
   feeBumpSigner?: TxSignerPort;
   feeBumpBaseFee?: string;
+  badSeqRetryDelayMs?: number;
   pollAttempts?: number;
   pollIntervalMs?: number;
 }): Promise<InvokeResult> {
-  const signedXdr = await opts.signer.signTransaction(opts.preparedXdr, {
-    networkPassphrase: opts.networkPassphrase,
-  });
-  const signed = TransactionBuilder.fromXDR(signedXdr, opts.networkPassphrase) as Transaction;
-  let tx: Transaction | FeeBumpTransaction = signed;
-  if (opts.feeBumpSigner) {
+  const buildSigned = async (preparedXdr: string): Promise<Transaction | FeeBumpTransaction> => {
+    const signedXdr = await opts.signer.signTransaction(preparedXdr, {
+      networkPassphrase: opts.networkPassphrase,
+    });
+    const signed = TransactionBuilder.fromXDR(signedXdr, opts.networkPassphrase) as Transaction;
+    if (!opts.feeBumpSigner) return signed;
     const feeSource = await opts.feeBumpSigner.publicKey();
-    tx = TransactionBuilder.buildFeeBumpTransaction(
+    const feeBump = TransactionBuilder.buildFeeBumpTransaction(
       feeSource,
       opts.feeBumpBaseFee ?? BASE_FEE,
       signed,
       opts.networkPassphrase,
     );
-    const feeBumpXdr = await opts.feeBumpSigner.signTransaction(tx.toXDR(), {
+    const feeBumpXdr = await opts.feeBumpSigner.signTransaction(feeBump.toXDR(), {
       networkPassphrase: opts.networkPassphrase,
     });
-    tx = TransactionBuilder.fromXDR(feeBumpXdr, opts.networkPassphrase) as FeeBumpTransaction;
-  }
+    return TransactionBuilder.fromXDR(feeBumpXdr, opts.networkPassphrase) as FeeBumpTransaction;
+  };
 
-  const sent = await opts.server.sendTransaction(tx);
+  let tx = await buildSigned(opts.preparedXdr);
+  let sent = await opts.server.sendTransaction(tx);
+  if (sent.status === "ERROR" && opts.retryPreparedXdr && isBadSequenceResult(sent.errorResult)) {
+    await sleep(opts.badSeqRetryDelayMs ?? 1000);
+    tx = await buildSigned(await opts.retryPreparedXdr());
+    sent = await opts.server.sendTransaction(tx);
+  }
   if (sent.status === "ERROR" || sent.status === "DUPLICATE" || sent.status === "TRY_AGAIN_LATER") {
     throw new Error(`sendTransaction ${sent.status}: ${JSON.stringify(sent.errorResult ?? {})}`);
   }
@@ -172,6 +182,10 @@ export async function signAndSubmit(opts: {
     await sleep(interval);
   }
   throw new Error(`transaction ${hash} not confirmed after ${attempts} polls`);
+}
+
+function isBadSequenceResult(result: unknown): boolean {
+  return /txBadSeq/.test(JSON.stringify(result ?? {}));
 }
 
 /**
@@ -226,16 +240,18 @@ export function makeClientSubmitWrite(deps: {
   addressFor: (name: string) => string;
 }): (opts: { contractId: string; source: string; fnArgs: string[] }) => Promise<InvokeResult> {
   return async ({ contractId, source, fnArgs }) => {
-    const preparedXdr = await buildInvokeTx({
+    const prepare = () => buildInvokeTx({
       server: deps.server,
       contractId,
       sourceAddress: deps.addressFor(source),
       fnArgs,
       networkPassphrase: deps.networkPassphrase,
     });
+    const preparedXdr = await prepare();
     return signAndSubmit({
       server: deps.server,
       preparedXdr,
+      retryPreparedXdr: prepare,
       signer: deps.signer,
       feeBumpSigner: deps.feeBumpSigner,
       feeBumpBaseFee: deps.feeBumpBaseFee,
