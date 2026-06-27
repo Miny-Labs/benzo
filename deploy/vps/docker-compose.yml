@@ -15,7 +15,7 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./deploy/vps/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - landing-static:/srv/landing:ro
       - wallet-static:/srv/wallet:ro
       - console-static:/srv/console:ro
@@ -24,7 +24,7 @@ services:
 
   landing-web:
     build:
-      context: .
+      context: ../..
       dockerfile: Dockerfile.static
       args:
         PACKAGE: "@benzo/landing"
@@ -37,7 +37,7 @@ services:
 
   wallet-web:
     build:
-      context: .
+      context: ../..
       dockerfile: Dockerfile.static
       args:
         PACKAGE: "@benzo/wallet-app"
@@ -50,7 +50,7 @@ services:
 
   console-web:
     build:
-      context: .
+      context: ../..
       dockerfile: Dockerfile.static
       args:
         PACKAGE: "@benzo/console"
@@ -63,7 +63,7 @@ services:
 
   wallet-api:
     build:
-      context: .
+      context: ../..
       dockerfile: Dockerfile.bff
       args:
         APP: wallet-api
@@ -82,7 +82,7 @@ services:
 
   console-api:
     build:
-      context: .
+      context: ../..
       dockerfile: Dockerfile.bff
       args:
         APP: console-api
