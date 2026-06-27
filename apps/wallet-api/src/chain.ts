@@ -867,6 +867,7 @@ export async function addMoney(amount: string, prover: ProverKind = "local"): Pr
       await waitForLiquidUsdc(c, from, stroops);
       const sh = await c.shield({ amount: stroops, fromAddress: from, fromSource: walletUserSource() });
       await c.flush();
+      await waitForShieldedBalanceIncrease(c, before, stroops);
       return { status: "settled", txHash: sh.txHash, provingMs: sh.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: sh.sorobanPublics };
     } catch (e) {
       console.error("[wallet-api] add-money failed", errorSummary(e));
@@ -933,6 +934,7 @@ export async function importDeposit(amount: string | undefined, prover: ProverKi
   try {
     const sh = await c.shield({ amount: stroops, fromAddress: from, fromSource: walletUserSource() });
     await c.flush();
+    await waitForShieldedBalanceIncrease(c, before, stroops);
     return { status: "settled", txHash: sh.txHash, provingMs: sh.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: sh.sorobanPublics };
   } catch (e) {
     if (/out of sync/.test((e as Error).message)) {

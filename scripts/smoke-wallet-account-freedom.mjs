@@ -110,6 +110,16 @@ async function recipientUsdc(horizon, address) {
   return balance?.balance ?? "0";
 }
 
+async function waitFor(label, fn, { attempts = 18, delayMs = 3000 } = {}) {
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    last = await fn();
+    if (last.ok) return last.value;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new Error(`${label} did not become true after ${attempts} attempts; last=${JSON.stringify(last)}`);
+}
+
 function assertEmptyFreshState({ privateBalance, publicBalance, history, contacts }) {
   if (privateBalance.stroops !== "0") throw new Error(`fresh private balance was ${privateBalance.stroops}`);
   if (publicBalance.stroops !== "0") throw new Error(`fresh public balance was ${publicBalance.stroops}`);
@@ -154,10 +164,10 @@ console.log(`[wallet-smoke] recipient initial USDC=${await recipientUsdc(horizon
 
 const add = await api("/add-money", { method: "POST", body: { amount, prover: "tee" }, idem: `add-${run}` });
 console.log(`[wallet-smoke] add-money tx=${add.txHash || "none"} ${explorer(add.txHash) || ""}`);
-const privateAfterAdd = await api("/balance");
-if (BigInt(privateAfterAdd.stroops) < 50_000_000n) {
-  throw new Error(`private balance too low after add: ${privateAfterAdd.stroops}`);
-}
+const privateAfterAdd = await waitFor("private balance after add", async () => {
+  const balance = await api("/balance");
+  return { ok: BigInt(balance.stroops) >= 50_000_000n, value: balance };
+});
 
 const deleteWhileFunded = await expectApiStatus("/account", 409, {
   method: "DELETE",
@@ -171,10 +181,10 @@ console.log(`[wallet-smoke] delete while funded refused blockers=${JSON.stringif
 
 const makePublic = await api("/make-public", { method: "POST", body: { amount, prover: "tee" }, idem: `make-public-${run}` });
 console.log(`[wallet-smoke] make-public tx=${makePublic.txHash || "none"} ${explorer(makePublic.txHash) || ""}`);
-const publicAfter = await api("/public-balance");
-if (BigInt(publicAfter.stroops) < 50_000_000n) {
-  throw new Error(`public balance too low after make-public: ${publicAfter.stroops}`);
-}
+const publicAfter = await waitFor("public balance after make-public", async () => {
+  const balance = await api("/public-balance");
+  return { ok: BigInt(balance.stroops) >= 50_000_000n, value: balance };
+});
 
 const sent = await api("/send-public", {
   method: "POST",
@@ -184,8 +194,14 @@ const sent = await api("/send-public", {
 console.log(`[wallet-smoke] send-public tx=${sent.txHash || "none"} ${explorer(sent.txHash) || ""}`);
 
 const finalPrivate = await api("/balance");
-const finalPublic = await api("/public-balance");
-const recipientFinal = await recipientUsdc(horizon, recipient.publicKey());
+const finalPublic = await waitFor("public balance after send-public", async () => {
+  const balance = await api("/public-balance");
+  return { ok: balance.stroops === "0", value: balance };
+});
+const recipientFinal = await waitFor("recipient USDC after send-public", async () => {
+  const balance = await recipientUsdc(horizon, recipient.publicKey());
+  return { ok: Number(balance) >= Number(amount) - 0.000001, value: balance };
+});
 console.log(`[wallet-smoke] final private=${finalPrivate.stroops} public=${finalPublic.stroops} recipient=${recipientFinal}`);
 if (finalPrivate.stroops !== "0") throw new Error(`private balance remained ${finalPrivate.stroops}`);
 if (finalPublic.stroops !== "0") throw new Error(`public balance remained ${finalPublic.stroops}`);
