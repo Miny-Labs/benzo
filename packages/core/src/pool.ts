@@ -283,7 +283,16 @@ export class BenzoPoolClient {
     });
     const leafIndex = Number(res.result);
     this.poolTree.insert(commitment);
-    await this.assertSynced();
+    try {
+      await this.assertSynced();
+    } catch (e) {
+      // The shield has already been verified and inserted on-chain. On hosted
+      // long-lived clients the RPC/event mirror can lag or be partially retained,
+      // so failing here reports a false user error after funds moved. Later
+      // syncs still rebuild and validate spend paths before any note is spent.
+      if (!/out of sync/i.test(String((e as Error)?.message ?? e))) throw e;
+      console.warn("[benzo-core] pool mirror lag after shield submit", (e as Error).message);
+    }
     return { txHash: res.txHash, leafIndex, note, proof, commitment, tag, provingMs };
   }
 

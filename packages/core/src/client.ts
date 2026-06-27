@@ -301,7 +301,7 @@ export class BenzoClient {
     // Pool + viewkey-anchor: resume the scanner from its persisted cursor so we
     // only fetch the delta; the durable snapshot keeps anything that has since
     // aged out of the RPC retention window.
-    const poolFrom = this.scanner.cursorLedger > 0 ? this.scanner.cursorLedger + 1 : 1;
+    const poolFrom = this.scanner.cursorLedger > 0 ? Math.max(1, this.scanner.cursorLedger - 100) : 1;
     await syncFromRpc(this.scanner, rpcUrl, [deployment.pool, deployment.viewkeyAnchor], poolFrom);
     await store.set(this.key("scan"), JSON.stringify(this.scanner.snapshot()));
     try {
@@ -318,7 +318,7 @@ export class BenzoClient {
     }
 
     // ASP allow-set: same incremental, persisted resume.
-    const aspFrom = this.aspCursor > 0 ? this.aspCursor + 1 : 1;
+    const aspFrom = this.aspCursor > 0 ? Math.max(1, this.aspCursor - 100) : 1;
     const asp = await fetchAspLeavesSince(rpcUrl, deployment.aspMembership, aspFrom, this.aspLeaves);
     this.aspLeaves = asp.leaves;
     this.aspCursor = asp.cursor;
@@ -327,7 +327,7 @@ export class BenzoClient {
       cursorLedger: this.aspCursor,
       leaves: this.aspLeaves.map(String),
     };
-    await store.set(this.key("asp"), JSON.stringify(aspSnap));
+    await store.set(this.globalKey("asp"), JSON.stringify(aspSnap));
     this.pool.aspRebuild(this.aspLeaves);
   }
 
@@ -343,10 +343,13 @@ export class BenzoClient {
     for (let attempt = 0; attempt < 12; attempt++) {
       await this.sync();
       const index = this.aspLeaves.findIndex((l) => l === leaf);
-      if (index >= 0) return index;
+      if (index >= 0) {
+        const onchainRoot = await this.pool.aspAllowRoot();
+        if (this.pool.aspTree.root() === onchainRoot) return index;
+      }
       await new Promise((resolve) => setTimeout(resolve, 500 + attempt * 250));
     }
-    throw new Error("ASP membership leaf is not visible on-chain yet");
+    throw new Error("ASP membership mirror is not synced to the on-chain root yet");
   }
 
   // ----------------------------------------------------- persistence ------
@@ -362,6 +365,10 @@ export class BenzoClient {
     return `benzo:${ns}:${kind}`;
   }
 
+  private globalKey(kind: string): string {
+    return `benzo:global:${kind}`;
+  }
+
   /** Load persisted scanner snapshot, ASP set, and journal once per account. */
   private async loadStateOnce(): Promise<void> {
     const { store, deployment } = this.opts;
@@ -370,7 +377,7 @@ export class BenzoClient {
     this.scanner = scanRaw
       ? NoteScanner.restore(deployment.treeLevels, JSON.parse(scanRaw) as ScannerSnapshot)
       : new NoteScanner(deployment.treeLevels, 1);
-    const aspRaw = await store.get(this.key("asp"));
+    const aspRaw = await store.get(this.globalKey("asp"));
     if (aspRaw) {
       const snap = JSON.parse(aspRaw) as AspSnapshot;
       this.aspLeaves = snap.leaves.map((s) => BigInt(s));

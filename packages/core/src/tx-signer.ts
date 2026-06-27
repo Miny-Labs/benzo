@@ -163,6 +163,10 @@ export async function signAndSubmit(opts: {
     tx = await buildSigned(await opts.retryPreparedXdr());
     sent = await opts.server.sendTransaction(tx);
   }
+  for (let i = 0; sent.status === "TRY_AGAIN_LATER" && i < 5; i++) {
+    await sleep(1_000 + i * 500);
+    sent = await opts.server.sendTransaction(tx);
+  }
   if (sent.status === "ERROR" || sent.status === "DUPLICATE" || sent.status === "TRY_AGAIN_LATER") {
     throw new Error(`sendTransaction ${sent.status}: ${JSON.stringify(sent.errorResult ?? {})}`);
   }
@@ -256,6 +260,7 @@ export function makeClientSubmitWrite(deps: {
       feeBumpSigner: deps.feeBumpSigner,
       feeBumpBaseFee: deps.feeBumpBaseFee,
       networkPassphrase: deps.networkPassphrase,
+      pollAttempts: 90,
     });
   };
 }

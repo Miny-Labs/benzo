@@ -196,7 +196,7 @@ function statePath(): string {
   const auth = currentAuth();
   if (hostedRuntime()) {
     if (!auth) throw new Error("Hosted wallet requires Google/passkey account auth");
-    return join(tmpdir(), `benzo-wallet-${auth.key}-${accountFingerprint(auth.account)}.json`);
+    return process.env.BENZO_WALLET_STATE || join(tmpdir(), "benzo-wallet-hosted-state.json");
   }
   return STATE;
 }
@@ -234,7 +234,7 @@ function chainClientForRuntime(): ChainClient {
     makeClientSubmitWrite({
       server,
       signer: signerFor(opts.source),
-      feeBumpSigner: opts.source === RELAY_SOURCE ? undefined : LocalKeypairSigner.fromSecret(relayerSecret),
+      feeBumpSigner: opts.source === HOSTED_USER_SOURCE ? LocalKeypairSigner.fromSecret(relayerSecret) : undefined,
       networkPassphrase: cfg.networkPassphrase,
       addressFor,
     })(opts);
@@ -818,6 +818,69 @@ async function rampCashOut(c: BenzoClient, from: string, stroops: bigint): Promi
   }
 }
 
+async function finishRampCashOut(c: BenzoClient, from: string, stroops: bigint): Promise<void> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      await waitForLiquidUsdc(c, from, stroops);
+      await rampCashOut(c, from, stroops);
+      return;
+    } catch (e) {
+      if (!(e instanceof RampError) || e.code !== "busy") throw e;
+      last = e;
+      console.warn("[wallet-api] ramp cash_out waiting for liquid balance", {
+        attempt: attempt + 1,
+        message: e.message,
+      });
+      await sleep(1_500 + attempt * 1_000);
+    }
+  }
+  throw last instanceof Error ? last : new RampError("busy", "Cash-out is still settling. Please try again.");
+}
+
+async function shieldLiquidUsdc(
+  c: BenzoClient,
+  from: string,
+  stroops: bigint,
+  before: bigint,
+  prover: ProverKind,
+): Promise<SettleResult> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      await waitForLiquidUsdc(c, from, stroops);
+      const sh = await c.shield({ amount: stroops, fromAddress: from, fromSource: walletUserSource() });
+      await c.flush();
+      const txHash = await waitForShieldedBalanceIncrease(c, before, stroops);
+      return {
+        status: "settled",
+        txHash: sh.txHash ?? txHash,
+        provingMs: sh.provingMs,
+        prover,
+        amount: stroops.toString(),
+        onChain: true,
+        sorobanPublics: sh.sorobanPublics,
+      };
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      if (/out of sync/i.test(msg)) {
+        const txHash = await waitForShieldedBalanceIncrease(c, before, stroops);
+        if (txHash !== undefined) {
+          return { status: "settled", txHash, prover, amount: stroops.toString(), onChain: true };
+        }
+      }
+      if (!/insufficient USDC|trustline|still settling|Error\(Contract, #13\)/i.test(msg)) throw e;
+      last = e;
+      console.warn("[wallet-api] shield waiting for liquid funded balance", {
+        attempt: attempt + 1,
+        message: msg,
+      });
+      await sleep(1_500 + attempt * 1_000);
+    }
+  }
+  throw last instanceof Error ? last : new RampError("busy", "USDC is still settling before shielding. Please try again.");
+}
+
 // ----------------------------------------------------------------- cash out
 
 // Reserve-modeled per-transaction caps (USD), enforced on-chain by the ramp
@@ -843,7 +906,7 @@ export async function cashOut(amount: string, prover: ProverKind): Promise<Settl
     try {
       const wd = await c.unshield({ amount: stroops, toAddress: to });
       await c.flush();
-      await rampCashOut(c, to, stroops);
+      await finishRampCashOut(c, to, stroops);
       return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
     } catch (e) {
       // The unshield submit can settle and make liquid USDC visible before the
@@ -851,10 +914,23 @@ export async function cashOut(amount: string, prover: ProverKind): Promise<Settl
       // off-ramp atomic from the user's point of view by finishing the reserve
       // cash_out leg instead of leaving public USDC stranded.
       if (/out of sync/.test((e as Error).message)) {
-        await waitForLiquidUsdc(c, to, stroops);
-        await rampCashOut(c, to, stroops);
+        await finishRampCashOut(c, to, stroops);
         await c.flush();
         return { status: "settled", prover, amount: stroops.toString(), onChain: true };
+      }
+      if (/resulting balance is not within the allowed range|Error\(Contract, #10\)/i.test(String((e as Error).message ?? e))) {
+        await finishRampCashOut(c, to, stroops);
+        await c.flush();
+        return { status: "settled", prover, amount: stroops.toString(), onChain: true };
+      }
+      if (/UnknownRoot|is_known_root].*false|Error\(Contract, #5\)/is.test(String((e as Error).message ?? e))) {
+        await sleep(2_000);
+        await c.sync();
+        await wireMvkRegistry(c);
+        const wd = await c.unshield({ amount: stroops, toAddress: to });
+        await c.flush();
+        await finishRampCashOut(c, to, stroops);
+        return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
       }
       throw e;
     }
@@ -878,11 +954,7 @@ export async function addMoney(amount: string, prover: ProverKind = "local"): Pr
       // address (the anchor's distribution account), then we shield it. Only the
       // fiat *charge* is simulated; every USDC movement here is real + on-chain.
       await rampCashIn(c, from, stroops);
-      await waitForLiquidUsdc(c, from, stroops);
-      const sh = await c.shield({ amount: stroops, fromAddress: from, fromSource: walletUserSource() });
-      await c.flush();
-      await waitForShieldedBalanceIncrease(c, before, stroops);
-      return { status: "settled", txHash: sh.txHash, provingMs: sh.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: sh.sorobanPublics };
+      return await shieldLiquidUsdc(c, from, stroops, before, prover);
     } catch (e) {
       console.error("[wallet-api] add-money failed", errorSummary(e));
       // The shield's on-chain submit + proof verification happen BEFORE the SDK's
@@ -951,6 +1023,7 @@ export async function importDeposit(amount: string | undefined, prover: ProverKi
     await waitForShieldedBalanceIncrease(c, before, stroops);
     return { status: "settled", txHash: sh.txHash, provingMs: sh.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: sh.sorobanPublics };
   } catch (e) {
+    console.error("[wallet-api] import-deposit failed", errorSummary(e));
     if (/out of sync/.test((e as Error).message)) {
       const txHash = await waitForShieldedBalanceIncrease(c, before, stroops);
       if (txHash !== undefined) return { status: "settled", txHash, prover, amount: stroops.toString(), onChain: true };
