@@ -460,7 +460,13 @@ route("POST", "/api/add-money", async (req, res, url) => {
 });
 
 // Direct deposit / import USDC from any external wallet (no ramp, no bank).
-route("GET", "/api/deposit-address", async (_q, res) => json(res, 200, await getDepositInfo()));
+route("GET", "/api/deposit-address", async (_q, res) => {
+  try {
+    json(res, 200, await getDepositInfo());
+  } catch {
+    json(res, 503, { error: "Couldn't load your deposit address yet. Please try again.", code: "deposit_unavailable" });
+  }
+});
 route("POST", "/api/import", async (req, res, url) => {
   const body = await readJson<{ amount?: string; prover?: string }>(req);
   try {
@@ -478,7 +484,13 @@ route("POST", "/api/import", async (req, res, url) => {
 // "Make public" (unshield pool → public) + "Send to a wallet" (public → any
 // external G-address). ("Make private" = POST /api/import; "Receive" = GET
 // /api/deposit-address — already defined above.)
-route("GET", "/api/public-balance", async (_q, res) => json(res, 200, await publicBalance()));
+route("GET", "/api/public-balance", async (_q, res) => {
+  try {
+    json(res, 200, await publicBalance());
+  } catch {
+    json(res, 503, { error: "Couldn't load your Public balance yet. Please try again.", code: "public_balance_unavailable" });
+  }
+});
 route("POST", "/api/make-public", async (req, res, url) => {
   const body = await readJson<{ amount: string; prover?: string }>(req);
   if (!body.amount) return json(res, 400, { error: "amount required" });

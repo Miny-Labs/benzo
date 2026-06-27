@@ -15,7 +15,9 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   BASE_FEE,
+  Asset,
   Contract,
+  Horizon,
   Keypair,
   TransactionBuilder,
   rpc,
@@ -36,6 +38,8 @@ import {
   makeClientSubmitWrite,
   mvkRegistryLeaf,
   scvalForWriteArg,
+  sponsoredOnboard,
+  sponsoredTrustlineOps,
   usdcToStroops,
   type ChainClient,
   type ProverPort,
@@ -280,6 +284,8 @@ export function proverInfo(): { available: ProverKind[]; tee: { endpoint: string
 }
 
 const TX_SOURCE = "benzo-deployer";
+const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
+const hostedProvisioning = new Map<string, Promise<void>>();
 
 /**
  * The wallet's public Stellar address (the on/off-ramp edge). The durable account
@@ -291,6 +297,82 @@ async function selfAddress(c: BenzoClient): Promise<string> {
   if (c.account.stellarAddress) return c.account.stellarAddress;
   if (process.env.VERCEL === "1") throw new Error("Hosted wallet account has no Stellar public-edge address");
   return c.account.stellarAddress ?? (await c.opts.cli.keyAddress(TX_SOURCE));
+}
+
+function usdcAsset(): { code: string; issuer: string } {
+  const [code, issuer] = String(deployment().usdcAsset ?? "USDC:").split(":");
+  if (!code || !issuer) throw new Error("USDC asset deployment is missing");
+  return { code, issuer };
+}
+
+function isMissingAccountError(e: unknown): boolean {
+  const maybe = e as { response?: { status?: number }; status?: number; message?: string };
+  return maybe.response?.status === 404 ||
+    maybe.status === 404 ||
+    /account.*not.*found|not.*found|404/i.test(String(maybe.message ?? e));
+}
+
+async function sponsoredTrustline(params: { accountSecret: string; sponsorSecret: string; asset: { code: string; issuer: string } }): Promise<void> {
+  const sponsor = Keypair.fromSecret(params.sponsorSecret);
+  const account = Keypair.fromSecret(params.accountSecret);
+  const server = new Horizon.Server(HORIZON_URL);
+  const sponsorAccount = await server.loadAccount(sponsor.publicKey());
+  const asset = new Asset(params.asset.code, params.asset.issuer);
+  const builder = new TransactionBuilder(sponsorAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: process.env.NETWORK_PASSPHRASE ?? "Test SDF Network ; September 2015",
+  });
+  for (const op of sponsoredTrustlineOps(
+    { sponsor: sponsor.publicKey(), account: account.publicKey(), asset: params.asset },
+    asset,
+  )) {
+    builder.addOperation(op);
+  }
+  const tx = builder.setTimeout(120).build();
+  tx.sign(sponsor, account);
+  await server.submitTransaction(tx);
+}
+
+async function ensureHostedPublicAccount(): Promise<void> {
+  if (process.env.VERCEL !== "1") return;
+  const auth = currentAuth();
+  if (!auth?.account.stellarSecret || !auth.account.stellarAddress) throw new Error("Hosted wallet account has no public-edge signer");
+  const accountSecret = auth.account.stellarSecret;
+  const accountAddress = auth.account.stellarAddress;
+  const cached = hostedProvisioning.get(auth.key);
+  if (cached) return cached;
+  const work = (async () => {
+    const sponsorSecret = process.env.RELAYER_SECRET;
+    if (!sponsorSecret) throw new Error("RELAYER_SECRET is required for hosted wallet onboarding");
+    const asset = usdcAsset();
+    const server = new Horizon.Server(HORIZON_URL);
+    try {
+      const account = await server.loadAccount(accountAddress);
+      const hasTrustline = account.balances.some((b) =>
+        "asset_code" in b &&
+        b.asset_code === asset.code &&
+        "asset_issuer" in b &&
+        b.asset_issuer === asset.issuer
+      );
+      if (!hasTrustline) await sponsoredTrustline({ accountSecret, sponsorSecret, asset });
+    } catch (e) {
+      if (!isMissingAccountError(e)) throw e;
+      await sponsoredOnboard({
+        horizonUrl: HORIZON_URL,
+        networkPassphrase: process.env.NETWORK_PASSPHRASE ?? "Test SDF Network ; September 2015",
+        sponsorSecret,
+        asset,
+        newAccountSecret: accountSecret,
+      });
+    }
+  })();
+  hostedProvisioning.set(auth.key, work);
+  try {
+    await work;
+  } catch (e) {
+    hostedProvisioning.delete(auth.key);
+    throw e;
+  }
 }
 
 /**
@@ -456,6 +538,7 @@ export async function send(
     throw new RampError("busy", "Live testnet client unavailable. No funds were moved.");
   }
 
+  await ensureHostedPublicAccount();
   await c.sync();
   await wireMvkRegistry(c);
   onPhase?.({ phase: "building" });
@@ -491,6 +574,7 @@ export async function sendToHandle(
   const stroops = toStroops(amount);
   const c = getClient(prover);
   if (c) {
+    await ensureHostedPublicAccount();
     await c.sync();
     await wireMvkRegistry(c);
     const sh = await c.sendToHandle({ handle: handle.replace(/^@/, ""), amount: stroops, useRelayer: false });
@@ -615,6 +699,7 @@ export async function cashOut(amount: string, prover: ProverKind): Promise<Settl
   }
   const c = getClient(prover);
   if (c) {
+    await ensureHostedPublicAccount();
     await c.sync();
     await wireMvkRegistry(c);
     // Unshield to the wallet's own public Stellar address (the off-ramp edge),
@@ -635,6 +720,7 @@ export async function addMoney(amount: string, prover: ProverKind = "local"): Pr
   const stroops = toStroops(amount);
   const c = getClient(prover);
   if (c) {
+    await ensureHostedPublicAccount();
     await c.sync();
     await wireMvkRegistry(c);
     const from = await selfAddress(c);
@@ -677,6 +763,7 @@ export async function getDepositInfo(): Promise<{ address: string; liquid: strin
   try {
     const c = getClient();
     if (!c) throw new Error("Live testnet client unavailable.");
+    await ensureHostedPublicAccount();
     const address = await selfAddress(c);
     const token = deployment().token as string;
     const liquid = String(await c.opts.cli.view(token, TX_SOURCE, ["balance", "--id", address]));
@@ -693,6 +780,7 @@ export async function importDeposit(amount: string | undefined, prover: ProverKi
   const stroops0 = amount ? toStroops(amount) : 0n;
   const c = getClient(prover);
   if (!c) throw new RampError("busy", "Live testnet client unavailable. No funds were moved.");
+  await ensureHostedPublicAccount();
   await c.sync();
   await wireMvkRegistry(c);
   const from = await selfAddress(c);
@@ -736,6 +824,7 @@ export async function makePublic(amount: string, prover: ProverKind): Promise<Se
   const stroops = toStroops(amount);
   const c = getClient(prover);
   if (c) {
+    await ensureHostedPublicAccount();
     await c.sync();
     await wireMvkRegistry(c);
     const to = await selfAddress(c);
@@ -771,6 +860,7 @@ export async function sendPublic(toAddress: string, amount: string): Promise<{ t
   const stroops = toStroops(amount);
   const c = getClient();
   if (c) {
+    await ensureHostedPublicAccount();
     const token = deployment().token as string;
     const from = await selfAddress(c);
     const liquid = BigInt(String(await c.opts.cli.view(token, TX_SOURCE, ["balance", "--id", from])));
@@ -831,6 +921,7 @@ export async function claimHandle(handle: string): Promise<{ handle: string; txH
   if (!/^[a-z0-9_.]{3,20}$/.test(h)) throw new Error("handle must be 3–20 chars: letters, numbers, dots, underscores");
   const c = getClient();
   if (c) {
+    await ensureHostedPublicAccount();
     await c.sync();
     const res = await c.registerHandle({ handle: h });
     db.profile.handle = h;
@@ -844,6 +935,7 @@ export async function claimHandle(handle: string): Promise<{ handle: string; txH
 export async function createRequest(amount: string | undefined, memo: string | undefined): Promise<{ link: string; id: string }> {
   const c = getClient();
   if (c) {
+    await ensureHostedPublicAccount();
     const r = await c.createRequest({
       to: db.profile.handle,
       amount: amount ? toStroops(amount) : undefined,
@@ -903,6 +995,7 @@ export async function createInvite(amount: string, note: string | undefined, onP
   const expiresAt = nowSec() + INVITE_TTL;
   const c = getClient();
   if (c) {
+    await ensureHostedPublicAccount();
     await c.sync();
     await wireMvkRegistry(c);
     onPhase?.({ phase: "building" });
@@ -927,6 +1020,7 @@ export async function createInvite(amount: string, note: string | undefined, onP
 async function sweepClaim(secret: string): Promise<{ amount: string; txHash?: string; onChain: boolean; sorobanPublics?: string[] }> {
   const c = getClient();
   if (!c) throw new RampError("busy", "Live testnet client unavailable. Claim was not submitted.");
+  await ensureHostedPublicAccount();
   const to = await selfAddress(c);
   const claimSecret = bytesFromB64url(secret);
   // Adopt the ephemeral claim account and register ITS MVK in the wired mirror
