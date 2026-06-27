@@ -31,14 +31,13 @@ RUN pnpm --filter "@benzo/${APP}..." build
 
 FROM base AS run
 ARG APP=wallet-api
-ENV NODE_ENV=production BENZO_ROOT=/repo
+ENV APP=${APP} NODE_ENV=production BENZO_ROOT=/repo
 WORKDIR /repo
 COPY --from=build /repo/node_modules ./node_modules
 COPY --from=build /repo/packages ./packages
 COPY --from=build /repo/apps ./apps
 # The on-chain deployment record + committed artifact manifest.
 COPY deployments ./deployments
-COPY circuits/build ./circuits/build
 # Secrets (DEPLOYER_SECRET, SOROBAN_RPC_URL, …) come from the runtime env, NEVER baked in.
 EXPOSE 8791 8790
 CMD ["sh", "-c", "node apps/${APP}/dist/server.js"]
