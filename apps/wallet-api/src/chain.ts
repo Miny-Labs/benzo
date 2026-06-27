@@ -1045,6 +1045,28 @@ export async function publicBalance(): Promise<{ stroops: string; address: strin
   return { stroops: info.liquid, address: info.address, asset: info.asset, issuer: info.issuer, live: true };
 }
 
+function makePublicRetryable(e: unknown): boolean {
+  const m = String((e as Error)?.message ?? e);
+  return /insufficient spendable balance|out of sync|unknown root|ASP membership|MvkRegistryMirror|still settling/i.test(m);
+}
+
+async function publicBalanceOf(c: BenzoClient, token: string, address: string): Promise<bigint> {
+  return BigInt(String(await c.opts.cli.view(token, walletUserSource(), ["balance", "--id", address])));
+}
+
+async function waitForPublicBalanceAtLeast(c: BenzoClient, token: string, address: string, target: bigint): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await c.sync();
+      if (await publicBalanceOf(c, token, address) >= target) return true;
+    } catch {
+      /* retry below */
+    }
+    await sleep(1000 + attempt * 350);
+  }
+  return false;
+}
+
 /** "Make public": unshield from the private pool to the wallet's OWN public
  *  address (mirrors cashOut WITHOUT the rampCashOut leg — the USDC lands liquid
  *  on the account instead of being absorbed by the reserve). Real unshield, real
@@ -1058,25 +1080,66 @@ export async function makePublic(amount: string, prover: ProverKind): Promise<Se
     await wireMvkRegistry(c);
     const to = await selfAddress(c);
     const token = deployment().token as string;
-    const liquidBefore = BigInt(String(await c.opts.cli.view(token, walletUserSource(), ["balance", "--id", to])));
-    try {
-      const wd = await c.unshield({ amount: stroops, toAddress: to });
-      try { await c.flush(); } catch { /* local persistence is best-effort; the withdraw already settled on-chain */ }
-      return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
-    } catch (e) {
+    const liquidBefore = await publicBalanceOf(c, token, to);
+    const target = liquidBefore + stroops;
+    let last: unknown;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        const wd = await c.unshield({ amount: stroops, toAddress: to });
+        try { await c.flush(); } catch { /* local persistence is best-effort; the withdraw already settled on-chain */ }
+        if (wd.txHash || await waitForPublicBalanceAtLeast(c, token, to, target)) {
+          return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
+        }
+        throw new Error("unshield returned without a tx hash or verified public-balance increase");
+      } catch (e) {
+        last = e;
+        // The withdraw can settle on-chain even if a follow-up sync/persist throws
+        // (RPC retention). Treat a real Public-balance increase as success, not a
+        // false error — otherwise the UI shows "failed" on money that actually moved.
+        try {
+          await c.sync();
+          const liquidAfter = await publicBalanceOf(c, token, to);
+          if (liquidAfter >= target) return { status: "settled", prover, amount: stroops.toString(), onChain: true };
+        } catch { /* fall through */ }
+        if (e instanceof RampError) throw e;
+        if (!makePublicRetryable(e) || attempt === 5) break;
+        await sleep(1800 + attempt * 700);
+      }
+    }
+    {
       // The withdraw can settle on-chain even if a follow-up sync/persist throws
       // (RPC retention). Treat a real Public-balance increase as success, not a
       // false error — otherwise the UI shows "failed" on money that actually moved.
       try {
         await c.sync();
-        const liquidAfter = BigInt(String(await c.opts.cli.view(token, walletUserSource(), ["balance", "--id", to])));
-        if (liquidAfter > liquidBefore) return { status: "settled", prover, amount: stroops.toString(), onChain: true };
+        const liquidAfter = await publicBalanceOf(c, token, to);
+        if (liquidAfter >= target) return { status: "settled", prover, amount: stroops.toString(), onChain: true };
       } catch { /* fall through */ }
-      if (e instanceof RampError) throw e;
+      if (last instanceof RampError) throw last;
       throw new RampError("busy", "Couldn't move USDC to your Public balance right now. Your money is safe — please try again.");
     }
   }
   throw new RampError("busy", "Live testnet client unavailable. No funds were moved.");
+}
+
+function isRecipientTrustlineError(e: unknown): boolean {
+  return /trustline|trust line|not authorized|#\d*\b.*balance|sac.*balance/i.test(String((e as Error)?.message ?? e));
+}
+
+async function externalHasUsdcTrustline(address: string): Promise<boolean> {
+  const asset = usdcAsset();
+  try {
+    const account = await new Horizon.Server(HORIZON_URL).loadAccount(address);
+    return account.balances.some((b) =>
+      "asset_code" in b &&
+      b.asset_code === asset.code &&
+      "asset_issuer" in b &&
+      b.asset_issuer === asset.issuer
+    );
+  } catch (e) {
+    if (isMissingAccountError(e)) return false;
+    throw e;
+  }
 }
 
 /** "Send to a wallet": pay any external Stellar G-address from the Public
@@ -1095,21 +1158,29 @@ export async function sendPublic(toAddress: string, amount: string): Promise<{ t
     const liquid = BigInt(String(await c.opts.cli.view(token, walletUserSource(), ["balance", "--id", from])));
     if (stroops > liquid) throw new RampError("balance", "That's more than your Public balance.");
     try {
-      // SAC transfer(from, to, amount) — `from` is the custodial public account
-      // (authorized by this wallet user's public-edge key); `to` is the external wallet.
-      const res = await c.opts.cli.invoke({
-        contractId: token,
-        source: walletUserSource(),
-        send: true,
-        fnArgs: ["transfer", "--from", from, "--to", to, "--amount", stroops.toString()],
-      });
-      return { txHash: res.txHash, onChain: true, amount: stroops.toString() };
-    } catch (e) {
-      // A missing/under-authorized trustline is the common cause of a SAC
-      // transfer revert to an external account — surface it in plain English.
-      if (/trustline|trust line|not authorized|#\d*\b.*balance|sac.*balance/i.test(String((e as Error)?.message ?? e))) {
-        throw new RampError("balance", "That wallet isn't set up to receive USDC yet.");
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+          // SAC transfer(from, to, amount) — `from` is the custodial public account
+          // (authorized by this wallet user's public-edge key); `to` is the external wallet.
+          const res = await c.opts.cli.invoke({
+            contractId: token,
+            source: walletUserSource(),
+            send: true,
+            fnArgs: ["transfer", "--from", from, "--to", to, "--amount", stroops.toString()],
+          });
+          return { txHash: res.txHash, onChain: true, amount: stroops.toString() };
+        } catch (e) {
+          if (!isRecipientTrustlineError(e)) throw e;
+          const hasTrustline = await externalHasUsdcTrustline(to);
+          if (!hasTrustline) throw new RampError("balance", "That wallet isn't set up to receive USDC yet.");
+          if (attempt === 5) {
+            throw new RampError("busy", "That wallet's USDC trustline is still settling. Please try again in a moment.");
+          }
+          await sleep(1500 + attempt * 750);
+        }
       }
+    } catch (e) {
+      if (e instanceof RampError) throw e;
       throw new RampError("busy", "Couldn't send right now. Your money is safe — please try again.");
     }
   }

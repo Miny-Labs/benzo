@@ -133,6 +133,7 @@ export async function signAndSubmit(opts: {
   networkPassphrase: string;
   feeBumpSigner?: TxSignerPort;
   feeBumpBaseFee?: string;
+  badSeqRetries?: number;
   badSeqRetryDelayMs?: number;
   pollAttempts?: number;
   pollIntervalMs?: number;
@@ -158,8 +159,9 @@ export async function signAndSubmit(opts: {
 
   let tx = await buildSigned(opts.preparedXdr);
   let sent = await opts.server.sendTransaction(tx);
-  if (sent.status === "ERROR" && opts.retryPreparedXdr && isBadSequenceResult(sent.errorResult)) {
-    await sleep(opts.badSeqRetryDelayMs ?? 1000);
+  const badSeqRetries = opts.badSeqRetries ?? 5;
+  for (let i = 0; sent.status === "ERROR" && opts.retryPreparedXdr && isBadSequenceResult(sent.errorResult) && i < badSeqRetries; i += 1) {
+    await sleep((opts.badSeqRetryDelayMs ?? 1000) + i * 500);
     tx = await buildSigned(await opts.retryPreparedXdr());
     sent = await opts.server.sendTransaction(tx);
   }
