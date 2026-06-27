@@ -331,6 +331,24 @@ export class BenzoClient {
     this.pool.aspRebuild(this.aspLeaves);
   }
 
+  /**
+   * A shield first inserts the depositor into the ASP allow-set, then builds a
+   * proof against that allow-tree. RPC/event indexing can lag the transaction,
+   * and other users can insert between our pre-sync and our proof. Re-sync the
+   * allow-set after the curator write and use the leaf index from the refreshed
+   * ordered event set, so the witness is built against the same root the chain
+   * will verify.
+   */
+  private async syncAspMembershipAndLocate(leaf: bigint): Promise<number> {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await this.sync();
+      const index = this.aspLeaves.findIndex((l) => l === leaf);
+      if (index >= 0) return index;
+      await new Promise((resolve) => setTimeout(resolve, 500 + attempt * 250));
+    }
+    throw new Error("ASP membership leaf is not visible on-chain yet");
+  }
+
   // ----------------------------------------------------- persistence ------
 
   private stateLoaded = false;
@@ -462,7 +480,7 @@ export class BenzoClient {
       send: true,
       fnArgs: ["insert_leaf", "--leaf", leaf.toString()],
     });
-    const aspLeafIndex = this.pool.aspMirrorInsert(leaf);
+    const aspLeafIndex = await this.syncAspMembershipAndLocate(leaf);
 
     const orgNote: Note = {
       amount: opts.amount,
@@ -779,7 +797,7 @@ export class BenzoClient {
       send: true,
       fnArgs: ["insert_leaf", "--leaf", leaf.toString()],
     });
-    const aspLeafIndex = this.pool.aspMirrorInsert(leaf);
+    const aspLeafIndex = await this.syncAspMembershipAndLocate(leaf);
 
     const note = newNote(opts.amount, this.account.spendPub, assetId);
     const plain = encodeNotePlain({ ...note });
