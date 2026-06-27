@@ -155,6 +155,7 @@ function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
     const init = () => {
       const g = window.google?.accounts?.id;
       if (!g || cancelled || !gbtn.current) return;
+      gbtn.current.innerHTML = "";
       g.initialize({
         client_id: clientId,
         callback: async (resp: { credential?: string }) => {
@@ -173,7 +174,14 @@ function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
           }
         },
       });
-      g.renderButton(gbtn.current, { theme: "outline", size: "large", width: 320, text: "continue_with" });
+      g.renderButton(gbtn.current, {
+        theme: "outline",
+        size: "large",
+        width: 320,
+        text: "continue_with",
+        shape: "pill",
+        logo_alignment: "left",
+      });
     };
     if (window.google?.accounts?.id) { init(); return () => { cancelled = true; }; }
     const s = document.createElement("script");
@@ -200,7 +208,9 @@ function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
           <Fingerprint size={18} /> {isWebAuthnAvailable() ? "Continue with passkey" : "Continue with this device"}
         </Button>
         {clientId ? (
-          <div ref={gbtn} className="flex justify-center" data-testid="auth-google" />
+          <div className="benzo-google-shell flex h-14 w-full items-center justify-center overflow-hidden rounded-full border border-hair bg-card shadow-[0_6px_18px_rgba(25,40,55,0.05)]">
+            <div ref={gbtn} className="benzo-google-button flex w-full justify-center" data-testid="auth-google" />
+          </div>
         ) : null}
         <p className="pt-1 text-center text-[12px] text-muted">
           No seed phrase. No passwords. Your wallet key is derived on this device.

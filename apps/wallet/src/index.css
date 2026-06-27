@@ -65,6 +65,16 @@ body {
 .no-scrollbar {
   scrollbar-width: none;
 }
+.benzo-google-button {
+  width: 100%;
+}
+.benzo-google-button > div {
+  width: 100% !important;
+}
+.benzo-google-button iframe {
+  width: 100% !important;
+  border-radius: 9999px !important;
+}
 @keyframes shimmer {
   100% {
     transform: translateX(100%);
