@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Activity, BadgeCheck, ChevronRight, Eye, EyeOff, KeyRound, Lock, ShieldCheck, Sparkles, Trash2, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useWallet } from "../lib/store";
-import { api, clearHostedAuthState, type RecoveryStatus } from "../lib/api";
+import { api, notifyAuthRequired, type RecoveryStatus } from "../lib/api";
 import { getChainStatus } from "../lib/chain";
 import { NETWORK_LABEL } from "../lib/network";
 import { getLockSettings, setLockSettings, lockCapable, requireUnlock } from "../lib/lock";
@@ -61,7 +61,7 @@ export function Profile() {
     setDeleteErr(null);
     try {
       await api.deleteAccount();
-      clearHostedAuthState();
+      notifyAuthRequired();
     } catch (e) {
       setDeleteErr((e as Error).message || "Account could not be deleted yet.");
     } finally {
