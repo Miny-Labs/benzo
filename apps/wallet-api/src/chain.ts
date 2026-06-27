@@ -284,6 +284,7 @@ export function getClient(prover: ProverKind = hostedRuntime() ? "tee" : "local"
       prover: buildProver(prover),
       rpcUrl: process.env.SOROBAN_RPC_URL,
       txSource: "benzo-deployer",
+      aspSource: hostedRuntime() ? operatorAdminSource() : "benzo-deployer",
       handleRegistry: d.handleRegistry as string,
       requestRegistry: d.requestRegistry as string,
       store: new FileKVStore(statePath()),

@@ -176,8 +176,10 @@ export interface BenzoClientOptions {
   /** proving backend: NodeProver (CLI/server) or WasmProver (browser, client-side) */
   prover: ProverPort;
   rpcUrl: string;
-  /** CLI identity that pays gas + ASP curation + read simulations */
+  /** CLI identity that pays gas + read simulations */
   txSource: string;
+  /** optional regulated-edge curator identity for ASP membership inserts */
+  aspSource?: string;
   /** optional gasless relay (relayer pays XLM, takes USDC fee) */
   relayer?: { source: string; address: string };
   /** optional anchor for cashIn/cashOut */
@@ -456,7 +458,7 @@ export class BenzoClient {
     const leaf = aspLeaf(depositorScalar, aspBlinding);
     await this.opts.cli.invoke({
       contractId: this.opts.deployment.aspMembership,
-      source: this.opts.txSource,
+      source: this.opts.aspSource ?? this.opts.txSource,
       send: true,
       fnArgs: ["insert_leaf", "--leaf", leaf.toString()],
     });
@@ -773,7 +775,7 @@ export class BenzoClient {
     const leaf = aspLeaf(depositorScalar, aspBlinding);
     await this.opts.cli.invoke({
       contractId: this.opts.deployment.aspMembership,
-      source: this.opts.txSource,
+      source: this.opts.aspSource ?? this.opts.txSource,
       send: true,
       fnArgs: ["insert_leaf", "--leaf", leaf.toString()],
     });
