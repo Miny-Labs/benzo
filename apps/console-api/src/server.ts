@@ -1496,9 +1496,10 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
       return json(res, 428, { error: "Idempotency-Key header is required for hosted console writes." });
     }
     await runWithAuth(auth, async () => {
+      const persistTenant = !["GET", "HEAD", "OPTIONS"].includes((req.method ?? "GET").toUpperCase());
       const runTenant = routeTenantKey
-        ? (fn: () => Promise<void>) => runWithConsoleTenantKey(routeTenantKey, fn)
-        : (fn: () => Promise<void>) => runWithConsoleTenant(auth?.key ?? null, auth?.claims ?? null, auth ? accountBinding(auth) : null, fn);
+        ? (fn: () => Promise<void>) => runWithConsoleTenantKey(routeTenantKey, fn, { persist: persistTenant })
+        : (fn: () => Promise<void>) => runWithConsoleTenant(auth?.key ?? null, auth?.claims ?? null, auth ? accountBinding(auth) : null, fn, { persist: persistTenant });
       await runTenant(async () => {
         if (effectiveUrl.pathname.startsWith("/api/") && !publicHosted && (!isLive() || tenantDataMissing().length > 0)) {
           return json(res, 503, {

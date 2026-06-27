@@ -489,23 +489,30 @@ export async function runWithConsoleTenant<T>(
   claims: { email?: string; name?: string } | null,
   binding: AccountBinding | null,
   fn: () => Promise<T>,
+  options: { persist?: boolean } = {},
 ): Promise<T> {
   if (!hostedTenantMode() || !authKey) return fn();
+  const persist = options.persist ?? true;
   const tenantKey = `console:${authKey}`;
   const loaded = await loadTenantDocument<Db>("console", tenantKey);
   const ctx = { key: tenantKey, db: normalizeConsoleDb(loaded ?? freshHostedDb(authKey, claims ?? undefined)) };
-  bindRecovery(ctx.db, binding);
+  if (persist) bindRecovery(ctx.db, binding);
   return tenantScope.run(ctx, async () => {
     try {
       return await fn();
     } finally {
-      await saveTenantDocument("console", tenantKey, ctx.db);
+      if (persist) await saveTenantDocument("console", tenantKey, ctx.db);
     }
   });
 }
 
-export async function runWithConsoleTenantKey<T>(tenantKey: string | null, fn: () => Promise<T>): Promise<T> {
+export async function runWithConsoleTenantKey<T>(
+  tenantKey: string | null,
+  fn: () => Promise<T>,
+  options: { persist?: boolean } = {},
+): Promise<T> {
   if (!hostedTenantMode() || !tenantKey) return fn();
+  const persist = options.persist ?? true;
   const loaded = await loadTenantDocument<Db>("console", tenantKey);
   if (!loaded) throw new Error("tenant not found");
   const ctx = { key: tenantKey, db: normalizeConsoleDb(loaded) };
@@ -513,7 +520,7 @@ export async function runWithConsoleTenantKey<T>(tenantKey: string | null, fn: (
     try {
       return await fn();
     } finally {
-      await saveTenantDocument("console", tenantKey, ctx.db);
+      if (persist) await saveTenantDocument("console", tenantKey, ctx.db);
     }
   });
 }

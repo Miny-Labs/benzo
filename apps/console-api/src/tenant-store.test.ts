@@ -125,6 +125,37 @@ test("hosted console persists operational state in the encrypted tenant document
   });
 });
 
+test("hosted console read-only tenant runs cannot clobber persisted writes", async () => {
+  process.env.BENZO_HOSTED_TENANT_TEST = "1";
+  process.env.BENZO_TENANT_STORE_MEMORY = "1";
+  process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
+  process.env.BENZO_DISABLE_TENANT_LEGACY_DECRYPT = "1";
+  const { db, runWithConsoleTenant } = await import("./store.js");
+
+  await runWithConsoleTenant("race", { email: "race@example.com", name: "Race" }, { accountFingerprint: "console_race", subjectKey: "race" }, async () => {
+    db.org.name = "Race Org";
+    db.counterparties.push({
+      id: "cp_original",
+      orgId: db.org.id,
+      name: "Original Contractor",
+      type: "contractor",
+      status: "pending_screening",
+      externalAccounts: [],
+      createdAt: new Date().toISOString(),
+    });
+  });
+
+  await runWithConsoleTenant("race", null, { accountFingerprint: "console_race", subjectKey: "race" }, async () => {
+    db.org.name = "Stale Read Snapshot";
+    db.counterparties.length = 0;
+  }, { persist: false });
+
+  await runWithConsoleTenant("race", null, { accountFingerprint: "console_race", subjectKey: "race" }, async () => {
+    expect(db.org.name).toBe("Race Org");
+    expect(db.counterparties.map((c) => c.id)).toEqual(["cp_original"]);
+  });
+});
+
 test("hosted console request limits are tenant-scoped outside the product document", async () => {
   process.env.BENZO_HOSTED_TENANT_TEST = "1";
   process.env.BENZO_TENANT_STORE_MEMORY = "1";
