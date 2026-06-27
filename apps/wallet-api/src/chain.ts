@@ -53,6 +53,10 @@ export type ProverKind = "local" | "tee";
 
 const ROOT = process.env.BENZO_ROOT || process.cwd();
 const DEPLOYMENT_URL = new URL("../../../deployments/testnet.json", import.meta.url);
+const TX_SOURCE = "benzo-deployer";
+const RELAY_SOURCE = "benzo-relayer";
+const OPERATOR_ADMIN_SOURCE = "benzo-operator-admin";
+const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 // The consumer wallet's OWN shielded identity + note-discovery state — kept
 // SEPARATE from the business console (a wallet user is a different account; the
 // two products never share an identity). App-specific env vars so a generic
@@ -77,6 +81,18 @@ function walletWebOrigin(): string {
 
 function walletRouteLink(link: string): string {
   return `${walletWebOrigin()}/claim#${encodeURIComponent(link)}`;
+}
+
+function operatorAdminSecret(): string | null {
+  return process.env.BENZO_OPERATOR_ADMIN_SECRET
+    ?? process.env.BENZO_RAMP_ADMIN_SECRET
+    ?? process.env.RAMP_ADMIN_SECRET
+    ?? process.env.DEPLOYER_SECRET
+    ?? null;
+}
+
+function operatorAdminSource(): string {
+  return hostedRuntime() ? OPERATOR_ADMIN_SOURCE : TX_SOURCE;
 }
 
 /** Durable note-discovery + journal store (atomic-write JSON file). */
@@ -180,13 +196,26 @@ function chainClientForRuntime(): ChainClient {
   if (!userSecret || !userAddress) throw new Error("Hosted wallet account has no Stellar public-edge signer");
   const relayerSecret = process.env.RELAYER_SECRET;
   if (!relayerSecret) throw new Error("RELAYER_SECRET is required for hosted wallet relay signing");
+  const adminSecret = operatorAdminSecret();
   const relayerAddress = Keypair.fromSecret(relayerSecret).publicKey();
+  const adminAddress = adminSecret ? Keypair.fromSecret(adminSecret).publicKey() : "";
   const server = new rpc.Server(cfg.rpcUrl, { allowHttp: cfg.rpcUrl.startsWith("http://") });
-  const signerFor = (source: string) =>
-    source === RELAY_SOURCE
-      ? LocalKeypairSigner.fromSecret(relayerSecret)
-      : LocalKeypairSigner.fromSecret(userSecret);
-  const addressFor = (source: string) => source === RELAY_SOURCE ? relayerAddress : userAddress;
+  const signerFor = (source: string) => {
+    if (source === RELAY_SOURCE) return LocalKeypairSigner.fromSecret(relayerSecret);
+    if (source === OPERATOR_ADMIN_SOURCE) {
+      if (!adminSecret) throw new Error("BENZO_OPERATOR_ADMIN_SECRET is required for admin-gated wallet operations");
+      return LocalKeypairSigner.fromSecret(adminSecret);
+    }
+    return LocalKeypairSigner.fromSecret(userSecret);
+  };
+  const addressFor = (source: string) => {
+    if (source === RELAY_SOURCE) return relayerAddress;
+    if (source === OPERATOR_ADMIN_SOURCE) {
+      if (!adminAddress) throw new Error("BENZO_OPERATOR_ADMIN_SECRET is required for admin-gated wallet operations");
+      return adminAddress;
+    }
+    return userAddress;
+  };
   const submitWrite = async (opts: { contractId: string; source: string; fnArgs: string[] }) =>
     makeClientSubmitWrite({
       server,
@@ -269,6 +298,7 @@ export function liveStatus(): { live: boolean; mode: "live" | "unavailable"; mis
     if (!process.env.GOOGLE_CLIENT_ID) missing.push("GOOGLE_CLIENT_ID");
     if (!process.env.BENZO_ACCOUNT_SALT && !process.env.BENZO_AUTH_SALT) missing.push("BENZO_ACCOUNT_SALT");
     if (!process.env.RELAYER_SECRET) missing.push("RELAYER_SECRET");
+    if (!operatorAdminSecret()) missing.push("BENZO_OPERATOR_ADMIN_SECRET");
   } else if (!process.env.DEPLOYER_SECRET) {
     missing.push("DEPLOYER_SECRET");
   }
@@ -284,8 +314,6 @@ export function proverInfo(): { available: ProverKind[]; tee: { endpoint: string
   return { available: tee ? ["local", "tee"] : ["local"], tee };
 }
 
-const TX_SOURCE = "benzo-deployer";
-const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 const hostedProvisioning = new Map<string, Promise<void>>();
 
 /**
@@ -397,7 +425,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<void> {
     // not yet registered — register our MVK on-chain, then refetch.
     await c.opts.cli.invoke({
       contractId: registry,
-      source: TX_SOURCE,
+      source: operatorAdminSource(),
       send: true,
       fnArgs: ["register_mvk", "--mvk_pub", myMvk.toString(), "--key_meta", "0"],
     });
@@ -660,7 +688,7 @@ async function rampCashIn(c: BenzoClient, to: string, stroops: bigint): Promise<
   try {
     await c.opts.cli.invoke({
       contractId: ramp,
-      source: TX_SOURCE,
+      source: operatorAdminSource(),
       send: true,
       fnArgs: ["cash_in", "--to", to, "--amount", stroops.toString(), "--reference", rampRef()],
     });
@@ -1154,7 +1182,6 @@ const RELAY_ALLOWED_FNS = new Set(["transfer"]);
 // The relay submits with its OWN funded operator key (not the deployer) — per-role
 // operator separation so relay gas-fee txns can't collide (TxBadSeq) with deployer
 // ops, and the deployer key isn't exposed to the relay's submit surface.
-const RELAY_SOURCE = "benzo-relayer";
 let relayWindowStart = 0;
 let relayWindowCount = 0;
 export async function relaySubmit(contractId: string, fnArgs: string[]): Promise<{ txHash?: string }> {
