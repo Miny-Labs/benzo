@@ -767,8 +767,15 @@ export async function getDepositInfo(): Promise<{ address: string; liquid: strin
     await ensureHostedPublicAccount();
     const address = await selfAddress(c);
     const token = deployment().token as string;
-    const liquid = String(await c.opts.cli.view(token, TX_SOURCE, ["balance", "--id", address]));
     const [asset, issuer] = String(deployment().usdcAsset ?? "USDC:").split(":");
+    let liquid = "0";
+    try {
+      liquid = String(await c.opts.cli.view(token, TX_SOURCE, ["balance", "--id", address]));
+    } catch (e) {
+      // A newly sponsored account can have no SAC balance entry until the first
+      // USDC lands. The deposit address is still valid; liquid USDC is 0.
+      console.warn("[wallet-api] public balance unavailable; treating as zero", e instanceof Error ? e.message : e);
+    }
     return { address, liquid, asset: asset || "USDC", issuer: issuer || "", live: true };
   } catch (e) {
     throw new Error((e as Error).message || "Live deposit address unavailable.");
