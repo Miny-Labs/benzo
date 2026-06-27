@@ -1,0 +1,36 @@
+{
+	email {$ACME_EMAIL}
+}
+
+benzo.space {
+	root * /srv/landing
+	try_files {path} /index.html
+	file_server
+	encode zstd gzip
+}
+
+www.benzo.space {
+	redir https://benzo.space{uri} permanent
+}
+
+wallet.benzo.space {
+	handle /api/* {
+		reverse_proxy wallet-api:8791
+	}
+
+	root * /srv/wallet
+	try_files {path} /index.html
+	file_server
+	encode zstd gzip
+}
+
+console.benzo.space {
+	handle /api/* {
+		reverse_proxy console-api:8790
+	}
+
+	root * /srv/console
+	try_files {path} /index.html
+	file_server
+	encode zstd gzip
+}

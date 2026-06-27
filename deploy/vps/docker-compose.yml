@@ -1,0 +1,107 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - landing-web
+      - wallet-web
+      - console-web
+      - wallet-api
+      - console-api
+    env_file:
+      - /opt/benzo/.env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/vps/Caddyfile:/etc/caddy/Caddyfile:ro
+      - landing-static:/srv/landing:ro
+      - wallet-static:/srv/wallet:ro
+      - console-static:/srv/console:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  landing-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.static
+      args:
+        PACKAGE: "@benzo/landing"
+        APP_DIR: apps/landing
+        VITE_WALLET_URL: "https://wallet.benzo.space"
+        VITE_CONSOLE_URL: "https://console.benzo.space"
+    command: sh -c "cp -a /srv/. /out/ && tail -f /dev/null"
+    volumes:
+      - landing-static:/out
+
+  wallet-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.static
+      args:
+        PACKAGE: "@benzo/wallet-app"
+        APP_DIR: apps/wallet
+        VITE_CONSOLE_ORIGIN: "https://console.benzo.space"
+        VITE_GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
+    command: sh -c "cp -a /srv/. /out/ && tail -f /dev/null"
+    volumes:
+      - wallet-static:/out
+
+  console-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.static
+      args:
+        PACKAGE: "@benzo/console"
+        APP_DIR: apps/console
+        VITE_BENZO_PROVER_ENDPOINT: "${BENZO_PROVER_ENDPOINT}"
+        VITE_BENZO_PROVER_MEASUREMENT: "${BENZO_PROVER_MEASUREMENT}"
+    command: sh -c "cp -a /srv/. /out/ && tail -f /dev/null"
+    volumes:
+      - console-static:/out
+
+  wallet-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.bff
+      args:
+        APP: wallet-api
+    restart: unless-stopped
+    env_file:
+      - /opt/benzo/.env
+    environment:
+      BENZO_HOSTED_RUNTIME: "1"
+      BENZO_ROOT: /repo
+      WALLET_API_PORT: "8791"
+      WALLET_ALLOWED_ORIGIN: "https://wallet.benzo.space"
+      BENZO_WALLET_ORIGIN: "https://wallet.benzo.space"
+      BENZO_CONSOLE_ORIGIN: "https://console.benzo.space"
+    expose:
+      - "8791"
+
+  console-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.bff
+      args:
+        APP: console-api
+    restart: unless-stopped
+    env_file:
+      - /opt/benzo/.env
+    environment:
+      BENZO_HOSTED_RUNTIME: "1"
+      BENZO_ROOT: /repo
+      CONSOLE_API_PORT: "8790"
+      CONSOLE_ALLOWED_ORIGIN: "https://console.benzo.space"
+      BENZO_WALLET_ORIGIN: "https://wallet.benzo.space"
+      BENZO_CONSOLE_ORIGIN: "https://console.benzo.space"
+    expose:
+      - "8790"
+
+volumes:
+  landing-static:
+  wallet-static:
+  console-static:
+  caddy_data:
+  caddy_config:

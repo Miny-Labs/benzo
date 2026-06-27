@@ -6,7 +6,7 @@
  */
 import "./loadEnv.js"; // FIRST: load .env so missing live env fails closed.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   addMoney,
@@ -56,9 +56,10 @@ import {
   type WalletLedgerLine,
   type WalletLedgerSource,
 } from "./store.js";
-import { accountBinding, authFromRequest, runWithAuth } from "./auth.js";
+import { accountBinding, authFromRequest, createTestAuthToken, runWithAuth } from "./auth.js";
 import { googleConfigured, verifyGoogleIdToken } from "./google-oidc.js";
 import { takeTenantRateLimit } from "./tenantData.js";
+import { hostedRuntime, serverlessRuntime } from "./runtime.js";
 
 const PORT = Number(process.env.WALLET_API_PORT ?? 8791);
 const rawBodies = new WeakMap<IncomingMessage, string>();
@@ -68,7 +69,7 @@ const localRateLimits = new Map<string, { windowStart: number; count: number }>(
 function cors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", process.env.WALLET_ALLOWED_ORIGIN ?? "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, idempotency-key");
+  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, idempotency-key, x-benzo-test-secret");
 }
 function json(res: ServerResponse, code: number, body: unknown): void {
   cors(res);
@@ -98,7 +99,7 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 }
 /** Read `prover` from query or body; Vercel can only prove via the attested TEE. */
 function proverOf(url: URL, body?: { prover?: string }): ProverKind {
-  const p = (url.searchParams.get("prover") || body?.prover || (process.env.VERCEL === "1" ? "tee" : "local")).toLowerCase();
+  const p = (url.searchParams.get("prover") || body?.prover || (hostedRuntime() ? "tee" : "local")).toLowerCase();
   return p === "tee" ? "tee" : "local";
 }
 
@@ -227,6 +228,33 @@ route("POST", "/api/auth/google", async (req, res) => {
   }
 });
 
+function providedTestSecret(req: IncomingMessage, body: { secret?: string }): string {
+  const h = req.headers["x-benzo-test-secret"];
+  return (Array.isArray(h) ? h[0] : h) || body.secret || "";
+}
+
+function secretMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+route("POST", "/api/auth/test", async (req, res) => {
+  const expected = hostedRuntime() ? process.env.BENZO_TEST_AUTH_SECRET : undefined;
+  if (!expected) return json(res, 404, { error: "not found" });
+  const body = await readJson<{ secret?: string; subject?: string; email?: string; name?: string; ttlSeconds?: number }>(req);
+  if (!secretMatches(providedTestSecret(req, body), expected)) {
+    return json(res, 401, { error: "test auth unavailable" });
+  }
+  const token = createTestAuthToken({
+    subject: body.subject,
+    email: body.email,
+    name: body.name,
+    ttlSeconds: body.ttlSeconds,
+  });
+  json(res, 200, { token, tokenType: "Bearer", expiresIn: Math.max(60, Math.min(body.ttlSeconds ?? 900, 3600)) });
+});
+
 route("GET", "/api/session", (_q, res) =>
   json(res, 200, { profile: db.profile, handle: db.profile.handle, kycTier: getKycTier(), ...liveStatus(), prover: proverInfo() }),
 );
@@ -290,11 +318,11 @@ function idempotencyHeader(req: IncomingMessage): string | null {
 }
 
 function requiresIdempotency(method: string, path: string): boolean {
-  if (process.env.VERCEL !== "1") return false;
+  if (!hostedRuntime()) return false;
   if (!path.startsWith("/api/")) return false;
   const m = method.toUpperCase();
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
-  return path !== "/api/auth/google";
+  return path !== "/api/auth/google" && path !== "/api/auth/test";
 }
 
 async function runIdempotent(req: IncomingMessage, res: ServerResponse, path: string, fn: () => Promise<void>): Promise<void> {
@@ -576,9 +604,10 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
       effectiveUrl.pathname === "/api/live" ||
       effectiveUrl.pathname === "/api/prover" ||
       effectiveUrl.pathname === "/api/auth/config" ||
-      effectiveUrl.pathname === "/api/auth/google";
+      effectiveUrl.pathname === "/api/auth/google" ||
+      effectiveUrl.pathname === "/api/auth/test";
     let auth: Awaited<ReturnType<typeof authFromRequest>> = null;
-    if (process.env.VERCEL === "1") {
+    if (hostedRuntime()) {
       try {
         auth = await authFromRequest(req);
       } catch (e) {
@@ -625,7 +654,7 @@ export default handle;
 
 const server = createServer(handle);
 
-if (process.env.VERCEL !== "1") server.listen(PORT, () => {
+if (!serverlessRuntime()) server.listen(PORT, () => {
   const s = liveStatus();
   console.error(`[benzo-wallet-api] listening on :${PORT}`);
   if (s.live) {

@@ -6,6 +6,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { AccountBinding } from "./auth.js";
+import { hostedRuntime } from "./runtime.js";
 import { loadTenantDocument, saveTenantDocument, tenantStorageMissing } from "./tenantData.js";
 export type Direction = "in" | "out";
 
@@ -195,7 +196,7 @@ export function currentWalletTenantKey(): string | null {
 }
 
 function hostedTenantMode(): boolean {
-  return process.env.VERCEL === "1" || process.env.BENZO_HOSTED_TENANT_TEST === "1";
+  return hostedRuntime() || process.env.BENZO_HOSTED_TENANT_TEST === "1";
 }
 
 function canonicalLedgerEntry(e: WalletLedgerEntry): string {

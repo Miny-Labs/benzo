@@ -7,6 +7,8 @@ let handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 beforeAll(async () => {
   process.env.VERCEL = "1";
   process.env.BENZO_PRIVATE_EVENT_SECRET = "console-api-test-private-event-secret";
+  process.env.BENZO_ACCOUNT_SALT = "console-server-test-salt";
+  process.env.BENZO_TEST_AUTH_SECRET = "console-server-test-secret";
   ({ handle } = await import("./server.js"));
 });
 
@@ -90,4 +92,20 @@ test("fails closed for console writes when live client is unavailable", async ()
     mode: "unavailable",
     error: "Sign in with Google to unlock this console.",
   });
+});
+
+test("mints secret-gated console test auth for backend smoke tests", async () => {
+  const minted = await request("/api/auth/test", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-benzo-test-secret": "console-server-test-secret" },
+    body: JSON.stringify({ subject: "smoke-console", email: "smoke-console@benzo.local" }),
+  });
+  expect(minted.status).toBe(200);
+  const body = await minted.json() as { token: string };
+  expect(body.token).toMatch(/^benzo-test-v1\./);
+
+  const protectedRes = await request(`/api/rpc?path=${encodeURIComponent("/session")}`, {
+    headers: { authorization: `Bearer ${body.token}` },
+  });
+  expect(protectedRes.status).not.toBe(401);
 });

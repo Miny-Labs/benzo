@@ -34,6 +34,7 @@ import {
 import { Keypair, rpc } from "@stellar/stellar-sdk";
 import { db, id, now, usd } from "./store.js";
 import { currentAuth } from "./auth.js";
+import { hostedRuntime } from "./runtime.js";
 
 const ROOT = process.env.BENZO_ROOT || process.cwd();
 const DEPLOYMENT_URL = new URL("../../../deployments/testnet.json", import.meta.url);
@@ -74,7 +75,7 @@ const clients = new Map<string, BenzoClient>();
 
 function clientCacheKey(): string {
   const auth = currentAuth();
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (!auth) throw new Error("Hosted console requires Google account auth");
     return auth.key;
   }
@@ -83,7 +84,7 @@ function clientCacheKey(): string {
 
 function statePath(): string {
   const auth = currentAuth();
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (!auth) throw new Error("Hosted console requires Google account auth");
     return join(tmpdir(), `benzo-console-${auth.key}.json`);
   }
@@ -92,7 +93,7 @@ function statePath(): string {
 
 function chainClientForRuntime(): ChainClient {
   const cfg = configFromEnv();
-  if (process.env.VERCEL !== "1") return new StellarCli(cfg);
+  if (!hostedRuntime()) return new StellarCli(cfg);
   const auth = currentAuth();
   const orgSecret = auth?.account.stellarSecret;
   const orgAddress = auth?.account.stellarAddress;
@@ -128,7 +129,7 @@ export function getClient(relayer = false): BenzoClient | null {
     const existing = clients.get(key);
     if (existing) return existing;
     if (!process.env.SOROBAN_RPC_URL) return null;
-    if (process.env.VERCEL !== "1" && !process.env.DEPLOYER_SECRET) return null;
+    if (!hostedRuntime() && !process.env.DEPLOYER_SECRET) return null;
     let dep: Record<string, any>;
     try {
       dep = JSON.parse(readFileSync(DEPLOYMENT_URL, "utf8"));
@@ -168,7 +169,7 @@ export function getClient(relayer = false): BenzoClient | null {
       requestRegistry: dep.requestRegistry,
       store: new FileKVStore(statePath()),
     });
-    const account = process.env.VERCEL === "1"
+    const account = hostedRuntime()
       ? currentAuth()?.account
       : createOrLoadAccountFile(WALLET, { label: "console", stellarSecret: process.env.DEPLOYER_SECRET }).account;
     if (!account) throw new Error("Hosted console requires an auth-bound org account");
@@ -193,7 +194,7 @@ export function isLive(): boolean {
  */
 async function selfAddress(c: BenzoClient): Promise<string> {
   if (c.account.stellarAddress) return c.account.stellarAddress;
-  if (process.env.VERCEL === "1") throw new Error("Hosted console account has no Stellar public-edge address");
+  if (hostedRuntime()) throw new Error("Hosted console account has no Stellar public-edge address");
   return c.account.stellarAddress ?? (await c.opts.cli.keyAddress(TX_SOURCE));
 }
 
@@ -340,7 +341,7 @@ export async function registerOwnerMvk(): Promise<{ onChain: boolean; txHash?: s
 // authenticated Google account key so separate orgs never collide on-chain.
 function kybOrgId(): string {
   const auth = currentAuth();
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (!auth) throw new Error("Hosted console requires Google account auth");
     const n = BigInt(`0x${auth.key.slice(0, 16)}`) & ((1n << 63n) - 1n);
     return (n === 0n ? 1n : n).toString();
@@ -551,7 +552,7 @@ export async function payOne(handle: string | undefined, amount: string): Promis
 export function liveStatus(): { live: boolean; mode: "live" | "unavailable"; missing: string[] } {
   const missing: string[] = [];
   if (!process.env.SOROBAN_RPC_URL) missing.push("SOROBAN_RPC_URL");
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (!process.env.GOOGLE_CLIENT_ID) missing.push("GOOGLE_CLIENT_ID");
     if (!process.env.BENZO_ACCOUNT_SALT && !process.env.BENZO_AUTH_SALT) missing.push("BENZO_ACCOUNT_SALT");
     if (!process.env.RELAYER_SECRET) missing.push("RELAYER_SECRET");
@@ -559,7 +560,7 @@ export function liveStatus(): { live: boolean; mode: "live" | "unavailable"; mis
   } else if (!process.env.DEPLOYER_SECRET) {
     missing.push("DEPLOYER_SECRET");
   }
-  const canProbeClient = process.env.VERCEL !== "1" || currentAuth() !== null;
+  const canProbeClient = !hostedRuntime() || currentAuth() !== null;
   const live = missing.length === 0 && (canProbeClient ? getClient() !== null : true);
   return { live, mode: live ? "live" : "unavailable", missing };
 }

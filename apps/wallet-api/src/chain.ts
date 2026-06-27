@@ -47,6 +47,7 @@ import {
 import { encodeBenzoLink } from "@benzo/links";
 import { db, nowSec, type ActivityRow, type WalletInvite } from "./store.js";
 import { currentAuth } from "./auth.js";
+import { hostedRuntime } from "./runtime.js";
 
 export type ProverKind = "local" | "tee";
 
@@ -134,8 +135,8 @@ function buildProver(kind: ProverKind): ProverPort {
     if (!cfg) throw new Error("no TEE configured in deployments/testnet.json");
     return makeTeeProver({ endpoint: cfg.endpoint, measurement: cfg.measurement });
   }
-  if (process.env.VERCEL === "1") {
-    throw new Error("serverless local proving is disabled; use browser local proving or the attested TEE");
+  if (hostedRuntime()) {
+    throw new Error("hosted local proving is disabled; use browser local proving or the attested TEE");
   }
   return new NodeProver();
 }
@@ -143,7 +144,7 @@ function buildProver(kind: ProverKind): ProverPort {
 const clients = new Map<string, BenzoClient>();
 
 function loadWalletAccount() {
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     const auth = currentAuth();
     if (!auth) throw new Error("Hosted wallet requires Google/passkey account auth");
     return auth.account;
@@ -154,7 +155,7 @@ function loadWalletAccount() {
 
 function clientCacheKey(prover: ProverKind): string {
   const auth = currentAuth();
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (!auth) throw new Error("Hosted wallet requires Google/passkey account auth");
     return `${auth.key}:${prover}`;
   }
@@ -163,7 +164,7 @@ function clientCacheKey(prover: ProverKind): string {
 
 function statePath(): string {
   const auth = currentAuth();
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (!auth) throw new Error("Hosted wallet requires Google/passkey account auth");
     return join(tmpdir(), `benzo-wallet-${auth.key}.json`);
   }
@@ -172,7 +173,7 @@ function statePath(): string {
 
 function chainClientForRuntime(): ChainClient {
   const cfg = configFromEnv();
-  if (process.env.VERCEL !== "1") return new StellarCli(cfg);
+  if (!hostedRuntime()) return new StellarCli(cfg);
   const auth = currentAuth();
   const userSecret = auth?.account.stellarSecret;
   const userAddress = auth?.account.stellarAddress;
@@ -207,7 +208,7 @@ function chainClientForRuntime(): ChainClient {
  * sequentially (never concurrently on the same wallet/state), so a single cached
  * client is safe.
  */
-export function getClient(prover: ProverKind = process.env.VERCEL === "1" ? "tee" : "local"): BenzoClient | null {
+export function getClient(prover: ProverKind = hostedRuntime() ? "tee" : "local"): BenzoClient | null {
   try {
     const key = clientCacheKey(prover);
     const existing = clients.get(key);
@@ -215,7 +216,7 @@ export function getClient(prover: ProverKind = process.env.VERCEL === "1" ? "tee
     if (!process.env.SOROBAN_RPC_URL) {
       return null;
     }
-    if (process.env.VERCEL !== "1" && !process.env.DEPLOYER_SECRET) {
+    if (!hostedRuntime() && !process.env.DEPLOYER_SECRET) {
       return null;
     }
     const d = deployment();
@@ -264,14 +265,14 @@ export function isLive(): boolean {
 export function liveStatus(): { live: boolean; mode: "live" | "unavailable"; missing: string[] } {
   const missing: string[] = [];
   if (!process.env.SOROBAN_RPC_URL) missing.push("SOROBAN_RPC_URL");
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (!process.env.GOOGLE_CLIENT_ID) missing.push("GOOGLE_CLIENT_ID");
     if (!process.env.BENZO_ACCOUNT_SALT && !process.env.BENZO_AUTH_SALT) missing.push("BENZO_ACCOUNT_SALT");
     if (!process.env.RELAYER_SECRET) missing.push("RELAYER_SECRET");
   } else if (!process.env.DEPLOYER_SECRET) {
     missing.push("DEPLOYER_SECRET");
   }
-  const canProbeClient = process.env.VERCEL !== "1" || currentAuth() !== null;
+  const canProbeClient = !hostedRuntime() || currentAuth() !== null;
   const live = missing.length === 0 && (canProbeClient ? isLive() : true);
   return { live, mode: live ? "live" : "unavailable", missing };
 }
@@ -279,7 +280,7 @@ export function liveStatus(): { live: boolean; mode: "live" | "unavailable"; mis
 /** Which proving backends are reachable + the attested-TEE coordinates. */
 export function proverInfo(): { available: ProverKind[]; tee: { endpoint: string; measurement: string } | null } {
   const tee = teeConfig();
-  if (process.env.VERCEL === "1") return { available: tee ? ["tee"] : [], tee };
+  if (hostedRuntime()) return { available: tee ? ["tee"] : [], tee };
   return { available: tee ? ["local", "tee"] : ["local"], tee };
 }
 
@@ -295,7 +296,7 @@ const hostedProvisioning = new Map<string, Promise<void>>();
  */
 async function selfAddress(c: BenzoClient): Promise<string> {
   if (c.account.stellarAddress) return c.account.stellarAddress;
-  if (process.env.VERCEL === "1") throw new Error("Hosted wallet account has no Stellar public-edge address");
+  if (hostedRuntime()) throw new Error("Hosted wallet account has no Stellar public-edge address");
   return c.account.stellarAddress ?? (await c.opts.cli.keyAddress(TX_SOURCE));
 }
 
@@ -334,7 +335,7 @@ async function sponsoredTrustline(params: { accountSecret: string; sponsorSecret
 }
 
 async function ensureHostedPublicAccount(): Promise<void> {
-  if (process.env.VERCEL !== "1") return;
+  if (!hostedRuntime()) return;
   const auth = currentAuth();
   if (!auth?.account.stellarSecret || !auth.account.stellarAddress) throw new Error("Hosted wallet account has no public-edge signer");
   const accountSecret = auth.account.stellarSecret;
@@ -1159,7 +1160,7 @@ export async function relaySubmit(contractId: string, fnArgs: string[]): Promise
   const now = nowSec();
   if (now - relayWindowStart >= 60) { relayWindowStart = now; relayWindowCount = 0; }
   if (++relayWindowCount > 30) throw new Error("relay: rate limited");
-  if (process.env.VERCEL === "1") return relaySubmitWithSdk(contractId, fnArgs);
+  if (hostedRuntime()) return relaySubmitWithSdk(contractId, fnArgs);
   const c = getClient();
   if (!c) throw new Error("relay: not live");
   const res = await c.opts.cli.invoke({ contractId, source: RELAY_SOURCE, send: true, fnArgs });
@@ -1212,7 +1213,7 @@ function buildWriteCall(fnArgs: string[]): { method: string; scArgs: xdr.ScVal[]
 export function exportAccountForDevice(): { spendSk: string; viewSecret: string; mvkSecret: string } | null {
   if (process.env.BENZO_DEV_EXPORT !== "1") return null;
   if ((process.env.STELLAR_NETWORK ?? "testnet") !== "testnet") return null; // never on mainnet
-  if (process.env.VERCEL === "1") return null; // never export wallet material from hosted deployments
+  if (hostedRuntime()) return null; // never export wallet material from hosted deployments
   const c = getClient();
   if (!c) return null;
   const a = c.account;

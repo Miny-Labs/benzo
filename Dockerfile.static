@@ -1,0 +1,39 @@
+# Build one of the static Vite frontends and serve it with Caddy.
+#
+# Example:
+#   docker build -f Dockerfile.static \
+#     --build-arg PACKAGE=@benzo/wallet-app \
+#     --build-arg APP_DIR=apps/wallet \
+#     -t benzo-wallet-web .
+FROM node:20-bookworm-slim AS build
+RUN corepack enable
+WORKDIR /repo
+
+ARG PACKAGE
+ARG APP_DIR
+ARG VITE_WALLET_URL
+ARG VITE_CONSOLE_URL
+ARG VITE_CONSOLE_ORIGIN
+ARG VITE_GOOGLE_CLIENT_ID
+ARG VITE_BENZO_PROVER_ENDPOINT
+ARG VITE_BENZO_PROVER_MEASUREMENT
+
+ENV VITE_WALLET_URL=$VITE_WALLET_URL \
+    VITE_CONSOLE_URL=$VITE_CONSOLE_URL \
+    VITE_CONSOLE_ORIGIN=$VITE_CONSOLE_ORIGIN \
+    VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID \
+    VITE_BENZO_PROVER_ENDPOINT=$VITE_BENZO_PROVER_ENDPOINT \
+    VITE_BENZO_PROVER_MEASUREMENT=$VITE_BENZO_PROVER_MEASUREMENT
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY packages ./packages
+COPY apps ./apps
+COPY scripts ./scripts
+COPY deployments ./deployments
+COPY circuits/build ./circuits/build
+RUN pnpm install --frozen-lockfile=false
+RUN pnpm --filter "$PACKAGE" build
+
+FROM alpine:3.20
+ARG APP_DIR
+COPY --from=build /repo/${APP_DIR}/dist /srv

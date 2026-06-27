@@ -8,7 +8,7 @@
 import "./loadEnv.js"; // FIRST: load .env so missing live env fails closed.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type {
   ApproveRequest,
   ConnectIntegrationRequest,
@@ -29,10 +29,11 @@ import type {
 import { ROLE_PERMISSIONS } from "@benzo/types";
 import { anchorPrivateAuditRoot, attestKyb, auditorGrantViewKey, computeTreasury, fundTreasury, getKybStatus, isLive, liveStatus, payOne, payableBalance, proveAnonymousApproval, proveBalance, proveFunded, proveKybCredential, proveLineCap, proveLineInnocence, proveNetting, proveRunComputation, proveSolvency, proveTotal, proveTotalAttestation, registerOwnerMvk, submitShieldedTransfer, treasuryPublicBalance, treasuryReceiveInfo, treasurySendPublic, type OnChainRef } from "./chain.js";
 import { verifyGoogleIdToken, googleConfigured } from "./google-oidc.js";
-import { accountBinding, authFromRequest, currentAuth, runWithAuth } from "./auth.js";
+import { accountBinding, authFromRequest, createTestAuthToken, currentAuth, runWithAuth } from "./auth.js";
 import { matchPolicy, progress, recordApproval } from "./approvals.js";
 import { db, fmtUsd, id, now, parseRosterCsv, recoverySummary, RecoveryRequiredError, runWithConsoleTenant, runWithConsoleTenantKey, tenantDataMissing, currentConsoleTenantKey, type OrgInvite } from "./store.js";
 import { lookupTenantRoute, registerTenantRoute, takeTenantRateLimit } from "./tenantData.js";
+import { hostedRuntime, serverlessRuntime } from "./runtime.js";
 import { encodeBenzoLink } from "@benzo/links";
 import { auditPacketHash, buildAnchor, buildAuditPacket, createPrivateEvent, deriveEventKey, GENESIS_HASH, sha256Hex, verifyHashChain, type AuditPacket, type PrivateEventType } from "@benzo/private-events";
 
@@ -54,13 +55,13 @@ function applyCounterpartyHandle(cp: Counterparty, handle: string): string {
 function privateEventSecret(): string {
   const secret = process.env.BENZO_PRIVATE_EVENT_SECRET;
   if (secret) return secret;
-  if (process.env.VERCEL === "1") throw new Error("BENZO_PRIVATE_EVENT_SECRET is required for hosted private-event encryption");
+  if (hostedRuntime()) throw new Error("BENZO_PRIVATE_EVENT_SECRET is required for hosted private-event encryption");
   return process.env.DEPLOYER_SECRET || "benzo-local-dev-private-event-key";
 }
 
 function privateAuditOrgId(): string {
   const auth = currentAuth();
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (!auth) throw new Error("Hosted console requires Google account auth");
     return `org-${auth.key}`;
   }
@@ -340,7 +341,7 @@ const inviteRouteScope = new AsyncLocalStorage<{ token: string }>();
 function cors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", process.env.CONSOLE_ALLOWED_ORIGIN ?? "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, idempotency-key, x-benzo-org-invite-token");
+  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, idempotency-key, x-benzo-org-invite-token, x-benzo-test-secret");
 }
 function json(res: ServerResponse, code: number, body: unknown): void {
   cors(res);
@@ -377,11 +378,11 @@ function idempotencyHeader(req: IncomingMessage): string | null {
 }
 
 function requiresIdempotency(method: string, path: string): boolean {
-  if (process.env.VERCEL !== "1") return false;
+  if (!hostedRuntime()) return false;
   if (!path.startsWith("/api/")) return false;
   const m = method.toUpperCase();
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
-  return path !== "/api/auth/google";
+  return path !== "/api/auth/google" && path !== "/api/auth/test";
 }
 
 async function inviteRouteToken(req: IncomingMessage, path: string): Promise<string | null> {
@@ -485,6 +486,33 @@ route("POST", "/api/auth/google", async (req, res) => {
   } catch (e) {
     json(res, 401, { verified: false, error: (e as Error).message });
   }
+});
+
+function providedTestSecret(req: IncomingMessage, body: { secret?: string }): string {
+  const h = req.headers["x-benzo-test-secret"];
+  return (Array.isArray(h) ? h[0] : h) || body.secret || "";
+}
+
+function secretMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+route("POST", "/api/auth/test", async (req, res) => {
+  const expected = hostedRuntime() ? process.env.BENZO_TEST_AUTH_SECRET : undefined;
+  if (!expected) return json(res, 404, { error: "not found" });
+  const body = await readJson<{ secret?: string; subject?: string; email?: string; name?: string; ttlSeconds?: number }>(req);
+  if (!secretMatches(providedTestSecret(req, body), expected)) {
+    return json(res, 401, { error: "test auth unavailable" });
+  }
+  const token = createTestAuthToken({
+    subject: body.subject,
+    email: body.email,
+    name: body.name,
+    ttlSeconds: body.ttlSeconds,
+  });
+  json(res, 200, { token, tokenType: "Bearer", expiresIn: Math.max(60, Math.min(body.ttlSeconds ?? 900, 3600)) });
 });
 
 // ---------------------------------------------------------------- onboarding (P0-B1)
@@ -1438,10 +1466,10 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   try {
     const m = match(req.method ?? "GET", effectiveUrl.pathname);
     if (!m) return json(res, 404, { error: "not found" });
-    const routeToken = process.env.VERCEL === "1" ? await inviteRouteToken(req, effectiveUrl.pathname) : null;
+    const routeToken = hostedRuntime() ? await inviteRouteToken(req, effectiveUrl.pathname) : null;
     const routeTenantKey = routeToken ? await lookupTenantRoute("console", "invite", routeToken) : null;
     if (
-      process.env.VERCEL === "1" &&
+      hostedRuntime() &&
       (effectiveUrl.pathname === "/api/invites/accept" || (effectiveUrl.pathname === "/api/invoices" && routeToken)) &&
       !routeTenantKey
     ) {
@@ -1451,9 +1479,10 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
       effectiveUrl.pathname === "/api/live" ||
       effectiveUrl.pathname === "/api/auth/config" ||
       effectiveUrl.pathname === "/api/auth/google" ||
+      effectiveUrl.pathname === "/api/auth/test" ||
       Boolean(routeTenantKey);
     let auth: Awaited<ReturnType<typeof authFromRequest>> = null;
-    if (process.env.VERCEL === "1") {
+    if (hostedRuntime()) {
       try {
         auth = await authFromRequest(req);
       } catch (e) {
@@ -1505,7 +1534,7 @@ export default handle;
 
 sealSeedLedger(); // bring pre-existing ledger entries into the audit chain as genesis
 const server = createServer(handle);
-if (process.env.VERCEL !== "1") server.listen(PORT, () => {
+if (!serverlessRuntime()) server.listen(PORT, () => {
   const s = liveStatus();
   console.error(`[benzo-console-api] listening on :${PORT}`);
   if (s.live) {

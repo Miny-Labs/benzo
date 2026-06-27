@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+import { hostedRuntime } from "./runtime.js";
 
 let sqlClient: NeonQueryFunction<false, false> | null | undefined;
 let schemaReady: Promise<void> | null = null;
@@ -7,15 +8,15 @@ const memoryDocuments = new Map<string, string>();
 const memoryRateLimits = new Map<string, { windowStart: number; count: number }>();
 
 function useMemoryStore(): boolean {
-  if (process.env.VERCEL === "1" && process.env.BENZO_TENANT_STORE_MEMORY === "1") {
-    throw new Error("BENZO_TENANT_STORE_MEMORY is not allowed on Vercel hosted tenant storage");
+  if (hostedRuntime() && process.env.BENZO_TENANT_STORE_MEMORY === "1") {
+    throw new Error("BENZO_TENANT_STORE_MEMORY is not allowed for hosted tenant storage");
   }
   return process.env.BENZO_TENANT_STORE_MEMORY === "1";
 }
 
 function encryptionSecret(): string | null {
   const secret = process.env.BENZO_DATA_ENCRYPTION_SECRET;
-  if (!secret && process.env.VERCEL === "1") throw new Error("BENZO_DATA_ENCRYPTION_SECRET is required for hosted tenant storage");
+  if (!secret && hostedRuntime()) throw new Error("BENZO_DATA_ENCRYPTION_SECRET is required for hosted tenant storage");
   return secret || null;
 }
 
@@ -23,7 +24,7 @@ function sql(): NeonQueryFunction<false, false> | null {
   if (sqlClient !== undefined) return sqlClient;
   const url = process.env.DATABASE_URL;
   if (!url) {
-    if (process.env.VERCEL === "1") throw new Error("DATABASE_URL is required for hosted tenant storage");
+    if (hostedRuntime()) throw new Error("DATABASE_URL is required for hosted tenant storage");
     sqlClient = null;
     return null;
   }
@@ -111,7 +112,7 @@ function decrypt<T>(app: string, tenantKey: string, ciphertext: string): T {
 
 export function tenantStorageMissing(): string[] {
   const missing: string[] = [];
-  if (process.env.VERCEL === "1") {
+  if (hostedRuntime()) {
     if (process.env.BENZO_TENANT_STORE_MEMORY === "1") missing.push("BENZO_TENANT_STORE_MEMORY");
     if (!process.env.DATABASE_URL) missing.push("DATABASE_URL");
     if (!process.env.BENZO_DATA_ENCRYPTION_SECRET) missing.push("BENZO_DATA_ENCRYPTION_SECRET");
