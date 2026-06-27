@@ -143,4 +143,39 @@ describe("wallet API idempotency", () => {
     expect(onAuthRequired).toHaveBeenCalledOnce();
     window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
   });
+
+  it("does not let an old unauthenticated 401 wipe a fresh Google sign-in", async () => {
+    let resolveFetch: ((r: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockReturnValue(new Promise<Response>((resolve) => { resolveFetch = resolve; }));
+    vi.stubGlobal("fetch", fetchMock);
+    const onAuthRequired = vi.fn();
+    window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+
+    const pending = api.session().catch((e: Error) => e.message);
+    localStorage.setItem("benzo.googleCredential", "fresh.jwt");
+    resolveFetch?.(jsonResponse({ error: "Sign in with Google to unlock this wallet." }, 401));
+
+    await expect(pending).resolves.toContain("Sign in with Google");
+    expect(localStorage.getItem("benzo.googleCredential")).toBe("fresh.jwt");
+    expect(onAuthRequired).not.toHaveBeenCalled();
+    window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+  });
+
+  it("does not let a stale-token 401 wipe a newer Google sign-in", async () => {
+    localStorage.setItem("benzo.googleCredential", "old.jwt");
+    let resolveFetch: ((r: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockReturnValue(new Promise<Response>((resolve) => { resolveFetch = resolve; }));
+    vi.stubGlobal("fetch", fetchMock);
+    const onAuthRequired = vi.fn();
+    window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+
+    const pending = api.session().catch((e: Error) => e.message);
+    localStorage.setItem("benzo.googleCredential", "new.jwt");
+    resolveFetch?.(jsonResponse({ error: "id token expired" }, 401));
+
+    await expect(pending).resolves.toContain("id token expired");
+    expect(localStorage.getItem("benzo.googleCredential")).toBe("new.jwt");
+    expect(onAuthRequired).not.toHaveBeenCalled();
+    window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+  });
 });

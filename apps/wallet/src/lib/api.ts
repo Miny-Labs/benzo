@@ -106,6 +106,7 @@ const GOOGLE_TOKEN_KEY = "benzo.googleCredential";
 const GOOGLE_IDENTITY_KEY = "benzo.identityKey";
 const IDEMPOTENCY_PREFIX = "benzo.idempotency.wallet.v1:";
 export const AUTH_REQUIRED_EVENT = "benzo:auth-required";
+export const AUTH_CHANGED_EVENT = "benzo:auth-changed";
 
 function b64urlJson(seg: string): Record<string, unknown> | null {
   try {
@@ -143,16 +144,20 @@ export function storeGoogleCredential(credential: string): void {
   }
   localStorage.setItem(GOOGLE_IDENTITY_KEY, nextIdentity);
   localStorage.setItem(GOOGLE_TOKEN_KEY, credential);
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }
 
 export function clearGoogleCredential(): void {
   localStorage.removeItem(GOOGLE_TOKEN_KEY);
   localStorage.removeItem(GOOGLE_IDENTITY_KEY);
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }
 
 export function clearHostedAuthState(): void {
-  clearGoogleCredential();
+  localStorage.removeItem(GOOGLE_TOKEN_KEY);
+  localStorage.removeItem(GOOGLE_IDENTITY_KEY);
   localStorage.removeItem("benzo.onboarded");
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }
 
 export function notifyAuthRequired(): void {
@@ -163,6 +168,10 @@ export function notifyAuthRequired(): void {
 export function authHeaders(): Record<string, string> {
   const token = localStorage.getItem(GOOGLE_TOKEN_KEY);
   return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+export function currentGoogleCredential(): string | null {
+  return localStorage.getItem(GOOGLE_TOKEN_KEY);
 }
 
 function shortHash(input: string): string {
@@ -195,16 +204,18 @@ function idempotencyKey(path: string, init?: RequestInit): { key: string; clear:
   return { key, clear: () => localStorage.removeItem(storageKey) };
 }
 
-export function prepareApiRequest(path: string, init?: RequestInit): { url: string; init: RequestInit; clearIdempotency?: () => void } {
+export function prepareApiRequest(path: string, init?: RequestInit): { url: string; init: RequestInit; clearIdempotency?: () => void; authToken: string | null } {
   const headers = new Headers(init?.headers);
   headers.set("content-type", headers.get("content-type") ?? "application/json");
-  for (const [k, v] of Object.entries(authHeaders())) headers.set(k, v);
+  const authToken = currentGoogleCredential();
+  if (authToken) headers.set("authorization", `Bearer ${authToken}`);
   const idem = idempotencyKey(path, init);
   if (idem) headers.set("Idempotency-Key", idem.key);
   return {
     url: apiHref(path),
     init: { ...init, headers },
     clearIdempotency: idem?.clear,
+    authToken,
   };
 }
 
@@ -221,7 +232,12 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
       } catch {
         /* ignore */
       }
-      if (res.status === 401 && path !== "/auth/google") notifyAuthRequired();
+      if (
+        res.status === 401 &&
+        path !== "/auth/google" &&
+        prepared.authToken &&
+        currentGoogleCredential() === prepared.authToken
+      ) notifyAuthRequired();
       throw new Error(detail);
     }
     return (await res.json()) as T;

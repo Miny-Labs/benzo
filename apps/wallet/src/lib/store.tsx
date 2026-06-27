@@ -4,7 +4,7 @@
  * so the UI always reflects real on-chain state after a settle.
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, type ActivityRow, type Balance, type Contact, type Session } from "./api";
+import { api, AUTH_CHANGED_EVENT, currentGoogleCredential, type ActivityRow, type Balance, type Contact, type Session } from "./api";
 import { readShieldedBalanceClientSide } from "./benzoClient";
 
 /** The "Public" balance: plain liquid USDC on the account (send to / receive from any wallet). */
@@ -48,6 +48,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<boolean>(() => localStorage.getItem("benzo.hidden") === "1");
   const [deviceVerified, setDeviceVerified] = useState(false);
+  const [authenticated, setAuthenticated] = useState(() => !!currentGoogleCredential());
 
   const toggleHidden = useCallback(() => {
     setHidden((h) => {
@@ -87,6 +88,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    if (!authenticated) {
+      setSession(null);
+      setBalance(null);
+      setPublicBalance(null);
+      setHistory([]);
+      setContacts([]);
+      setError(null);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+        if (retry) clearTimeout(retry);
+      };
+    }
     // First load; if the balance lost a race with a cold-starting backend, retry once.
     void refresh().then((ok) => {
       if (!ok && !cancelled) retry = setTimeout(() => void refresh(), 1500);
@@ -112,7 +126,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (retry) clearTimeout(retry);
       clearInterval(interval);
     };
-  }, [refresh, refreshBalance]);
+  }, [authenticated, refresh, refreshBalance]);
+
+  useEffect(() => {
+    const onAuthChanged = () => setAuthenticated(!!currentGoogleCredential());
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
+  }, []);
 
   return (
     <Ctx.Provider value={{ session, balance, publicBalance, history, contacts, loading, error, hidden, toggleHidden, deviceVerified, refresh, refreshBalance }}>
