@@ -57,7 +57,7 @@ const invariantFiles = [
     contains: [
       "BENZO_DATA_ENCRYPTION_SECRET is required for hosted tenant storage",
       "DATABASE_URL is required for hosted tenant storage",
-      "BENZO_TENANT_STORE_MEMORY is not allowed on Vercel hosted tenant storage",
+      "BENZO_TENANT_STORE_MEMORY is not allowed for hosted tenant storage",
       "benzo:tenant-doc:v1:",
       "benzo_request_limits",
     ],
@@ -67,7 +67,7 @@ const invariantFiles = [
     contains: [
       "BENZO_DATA_ENCRYPTION_SECRET is required for hosted tenant storage",
       "DATABASE_URL is required for hosted tenant storage",
-      "BENZO_TENANT_STORE_MEMORY is not allowed on Vercel hosted tenant storage",
+      "BENZO_TENANT_STORE_MEMORY is not allowed for hosted tenant storage",
       "benzo:tenant-doc:v1:",
       "benzo_tenant_routes",
       "benzo:tenant-route:v1:",
@@ -102,7 +102,7 @@ const invariantFiles = [
   {
     file: "apps/wallet-api/src/chain.ts",
     contains: [
-      "if (process.env.VERCEL === \"1\") return null; // never export wallet material from hosted deployments",
+      "if (hostedRuntime()) return null; // never export wallet material from hosted deployments",
     ],
   },
 ];
