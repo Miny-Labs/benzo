@@ -126,13 +126,13 @@ export function Grants() {
       : undefined;
   const attHasProofInputs = !!att?.sorobanPublics?.length;
   const attIsEmptyPeriod = !!att && !att.onChain && !attHasProofInputs && Number(att.total ?? "0") === 0;
-  const attTone = att.onChain ? "success" : attIsEmptyPeriod ? "neutral" : "danger";
-  const attClass = att.onChain
+  const attTone = att?.onChain ? "success" : attIsEmptyPeriod ? "neutral" : "danger";
+  const attClass = att?.onChain
     ? "border-success/30 bg-success/8"
     : attIsEmptyPeriod
       ? "border-border bg-surface/70"
       : "border-danger/30 bg-danger/8";
-  const attTextClass = att.onChain ? "text-[#1d7a52]" : attIsEmptyPeriod ? "text-fg" : "text-[#b4232a]";
+  const attTextClass = att?.onChain ? "text-[#1d7a52]" : attIsEmptyPeriod ? "text-fg" : "text-[#b4232a]";
 
   return (
     <Page>
