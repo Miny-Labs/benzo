@@ -124,6 +124,15 @@ export function Grants() {
           publics: (att.sorobanPublics ?? []).map((v, i) => ({ k: i === 0 ? "Total (committed)" : `public[${i}]`, v })),
         }
       : undefined;
+  const attHasProofInputs = !!att?.sorobanPublics?.length;
+  const attIsEmptyPeriod = !!att && !att.onChain && !attHasProofInputs && Number(att.total ?? "0") === 0;
+  const attTone = att.onChain ? "success" : attIsEmptyPeriod ? "neutral" : "danger";
+  const attClass = att.onChain
+    ? "border-success/30 bg-success/8"
+    : attIsEmptyPeriod
+      ? "border-border bg-surface/70"
+      : "border-danger/30 bg-danger/8";
+  const attTextClass = att.onChain ? "text-[#1d7a52]" : attIsEmptyPeriod ? "text-fg" : "text-[#b4232a]";
 
   return (
     <Page>
@@ -160,12 +169,16 @@ export function Grants() {
           )}
         </div>
         {att?.live ? (
-          <Reveal tone={att.onChain ? "success" : "danger"} className={`mt-4 rounded-lg border px-4 py-3 ${att.onChain ? "border-success/30 bg-success/8" : "border-danger/30 bg-danger/8"}`} data-testid="period-total-result">
-            <div className={`flex items-center gap-1.5 text-[13px] font-semibold ${att.onChain ? "text-[#1d7a52]" : "text-[#b4232a]"}`}>
+          <Reveal tone={attTone} className={`mt-4 rounded-lg border px-4 py-3 ${attClass}`} data-testid="period-total-result">
+            <div className={`flex items-center gap-1.5 text-[13px] font-semibold ${attTextClass}`}>
               <ShieldCheck size={14} /> {att.period}: {fmtUsd(att.total ?? "0")}
             </div>
             <div className="mt-1 text-[12px] text-muted">
-              {att.onChain ? "The network verified this total against the ORGSUM proof - proven, not asserted." : "The total was not verified on-chain."} No single salary is revealed.
+              {att.onChain
+                ? "The network verified this total against the ORGSUM proof. No single salary is revealed."
+                : attIsEmptyPeriod
+                  ? "No private payroll notes exist for this period yet, so there is nothing to prove on-chain."
+                  : "The total was not verified on-chain. No single salary is revealed."}
             </div>
             <div className="mt-3 flex items-center gap-3">
               <Button variant="outline" onClick={downloadAttestation} data-testid="download-attestation">
