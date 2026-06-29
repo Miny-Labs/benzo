@@ -925,10 +925,10 @@ async function registerInviteRoute(inv: OrgInvite): Promise<void> {
   await registerTenantRoute("console", "invite", inv.token, tenantKey, inv.expiresAt);
 }
 
-function upsertContractor(name: string, handle?: string): Counterparty {
-  let cp = db.counterparties.find((c) => c.name.toLowerCase() === name.toLowerCase());
+function upsertInviteCounterparty(kind: "contractor" | "customer", name: string, handle?: string): Counterparty {
+  let cp = db.counterparties.find((c) => c.name.toLowerCase() === name.toLowerCase() && c.type === kind);
   if (!cp) {
-    cp = { id: id("cp"), orgId: db.org.id, name, type: "contractor", status: "pending_screening", externalAccounts: [], createdAt: now() };
+    cp = { id: id("cp"), orgId: db.org.id, name, type: kind, status: "pending_screening", externalAccounts: [], createdAt: now() };
     db.counterparties.push(cp);
   }
   if (handle) applyCounterpartyHandle(cp, handle);
@@ -942,7 +942,7 @@ route("POST", "/api/invites", async (req, res) => {
   if (!checked.ok) return json(res, 400, { error: checked.error });
   const { kind, name, email, handle, role } = checked.value;
   let counterpartyId: string | undefined;
-  if (kind === "contractor" || kind === "customer") counterpartyId = upsertContractor(name!, handle).id;
+  if (kind === "contractor" || kind === "customer") counterpartyId = upsertInviteCounterparty(kind, name!, handle).id;
   if (kind === "member") {
     db.members.push({ id: id("mem"), orgId: db.org.id, email: email!, role: role as Member["role"], status: "invited", createdAt: now() });
   }
@@ -959,7 +959,7 @@ route("POST", "/api/invites/bulk", async (req, res) => {
   const { rows, errors } = parseRosterCsv(body.csv);
   const created: OrgInvite[] = [];
   for (const r of rows) {
-    const cp = upsertContractor(r.name, r.handle);
+    const cp = upsertInviteCounterparty("contractor", r.name, r.handle);
     if (r.rate && BigInt(r.rate) > 0n) {
       cp.payRate = { amount: r.rate, assetCode: "USDC" };
       cp.payCadence = "monthly";
