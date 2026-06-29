@@ -1620,7 +1620,6 @@ export async function claimHandle(handle: string): Promise<{ handle: string; txH
   const c = getClient();
   if (c) {
     await ensureHostedPublicAccount();
-    await c.sync();
     let res: { txHash?: string } | null = null;
     for (let attempt = 0; attempt < 8; attempt++) {
       try {

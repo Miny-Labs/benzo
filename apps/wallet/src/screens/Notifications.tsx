@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo } from "react";
 import { ArrowDownLeft, ArrowUpRight, Landmark } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useWallet } from "../lib/store";
 import { deriveNotifications, markAllRead, type Notif } from "../lib/notifications";
 import { Screen, Stagger } from "../ui/motion";
@@ -53,10 +54,12 @@ export function Notifications() {
 }
 
 function NotifRow({ n, when }: { n: Notif; when: string }) {
+  const nav = useNavigate();
   const Icon = n.kind === "in" ? ArrowDownLeft : n.kind === "out" ? ArrowUpRight : Landmark;
   const tone = n.kind === "in" ? "bg-pos/12 text-pos" : "bg-accent/10 text-accent";
   return (
-    <Card className="flex items-center gap-3 p-3.5" data-testid="notif-row">
+    <button type="button" onClick={() => nav(`/activity/${n.id}`)} className="block w-full text-left" data-testid="notif-row">
+      <Card className="flex items-center gap-3 p-3.5">
       <div className={`flex h-10 w-10 items-center justify-center rounded-full ${tone}`}>
         <Icon size={18} />
       </div>
@@ -69,6 +72,7 @@ function NotifRow({ n, when }: { n: Notif; when: string }) {
         <span className="text-[11.5px] text-muted">{when}</span>
         {!n.read ? <span className="h-2 w-2 rounded-full bg-accent" data-testid="notif-unread" /> : null}
       </div>
-    </Card>
+      </Card>
+    </button>
   );
 }
