@@ -134,7 +134,7 @@ function AuthShell({ onAuthed }: { onAuthed: () => void }) {
         <p className="mt-1.5 text-[13.5px] text-muted">Run payroll and pay vendors on-chain. Amounts and recipients stay confidential by default.</p>
         <div className="mt-6 space-y-2.5">
           {hasStoredCredential ? (
-            <Button className="w-full" variant="secondary" size="md" loading={busy === "stored"} onClick={withStoredCredential} data-testid="auth-stored">
+            <Button className="w-full" variant="outline" size="md" loading={busy === "stored"} onClick={withStoredCredential} data-testid="auth-stored">
               Continue with signed-in account
             </Button>
           ) : null}

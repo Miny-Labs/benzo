@@ -55,7 +55,7 @@ export function Treasury() {
   const [fundAmt, setFundAmt] = useState("0.20");
   const [busyFund, setBusyFund] = useState(false);
   const [confirmFund, setConfirmFund] = useState(false);
-  const [fundResult, setFundResult] = useState<{ onChain: boolean; txHash?: string } | null>(null);
+  const [fundResult, setFundResult] = useState<{ onChain: boolean; txHash?: string; error?: string } | null>(null);
 
   async function fund() {
     setBusyFund(true);
@@ -67,6 +67,7 @@ export function Treasury() {
         toast({ title: `Made private · ${fundAmt} USDC`, tone: "success" });
         await Promise.all([refresh(), loadPublic()]);
       } else {
+        setFundResult({ onChain: false, error: r.error ?? "Couldn't move to Private on-chain" });
         toast({ title: r.error ?? "Couldn't move to Private on-chain", tone: "danger" });
       }
     } catch (e) {
@@ -87,7 +88,7 @@ export function Treasury() {
   const [sendResult, setSendResult] = useState<{ onChain: boolean; txHash?: string; error?: string } | null>(null);
   const addrLooksValid = /^G[A-Z2-7]{55}$/.test(sendTo.trim());
 
-  async function sendPublic() {
+  async function sendPublic(): Promise<boolean> {
     setBusySend(true);
     setSendResult(null);
     try {
@@ -98,12 +99,16 @@ export function Treasury() {
         setSendTo("");
         setSendAmt("");
         await loadPublic();
+        return true;
       } else {
         setSendResult({ onChain: false, error: r.error });
         toast({ title: r.error ?? "Couldn't send", tone: "danger" });
+        return false;
       }
     } catch (e) {
       toast({ title: friendlyError(e), tone: "danger" });
+      setSendResult({ onChain: false, error: friendlyError(e) });
+      return false;
     } finally {
       setBusySend(false);
     }
@@ -250,7 +255,16 @@ export function Treasury() {
                 Move USDC from Public into the private pool. It lands as an M-of-N org note - dual-controlled the moment it arrives.
               </p>
               <div className="mt-4">
-                <Input label="Amount (USDC)" inputMode="decimal" value={fundAmt} onChange={(e) => setFundAmt(e.target.value.replace(/[^0-9.]/g, ""))} data-testid="fund-amount" />
+                <Input
+                  label="Amount (USDC)"
+                  inputMode="decimal"
+                  value={fundAmt}
+                  onChange={(e) => {
+                    setFundResult(null);
+                    setFundAmt(e.target.value.replace(/[^0-9.]/g, ""));
+                  }}
+                  data-testid="fund-amount"
+                />
               </div>
               {busyFund ? (
                 <Proving className="mt-4" steps={["Moving USDC into the private pool", `Settling on the Stellar ${NETWORK_LABEL} network`]} />
@@ -258,15 +272,27 @@ export function Treasury() {
                 <Button className="mt-4 w-full" onClick={() => setConfirmFund(true)} disabled={!(Number(fundAmt) > 0)} data-testid="fund-treasury">Make private</Button>
               )}
               {fundResult ? (
-                <Reveal tone="success" className="mt-4 rounded-lg border border-success/30 bg-success/8 px-4 py-3" data-testid="fund-result">
-                  <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[#1d7a52]">
-                    <ShieldCheck size={14} /> Moved to Private on-chain
-                  </div>
-                  {fundResult.txHash ? (
-                    <a href={explorerTxUrl(fundResult.txHash)} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline">
-                      View on explorer <ArrowUpRight size={12} />
-                    </a>
-                  ) : null}
+                <Reveal
+                  tone={fundResult.onChain ? "success" : "danger"}
+                  className={`mt-4 rounded-lg border px-4 py-3 ${fundResult.onChain ? "border-success/30 bg-success/8" : "border-danger/30 bg-danger/8"}`}
+                  data-testid="fund-result"
+                >
+                  {fundResult.onChain ? (
+                    <>
+                      <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[#1d7a52]">
+                        <ShieldCheck size={14} /> Moved to Private on-chain
+                      </div>
+                      {fundResult.txHash ? (
+                        <a href={explorerTxUrl(fundResult.txHash)} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline">
+                          View on explorer <ArrowUpRight size={12} />
+                        </a>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[#b4232a]">
+                      <ShieldCheck size={14} /> {fundResult.error ?? "Move to Private failed on-chain"}
+                    </div>
+                  )}
                 </Reveal>
               ) : null}
             </Card>
@@ -410,10 +436,14 @@ export function Treasury() {
           <p className="text-sm text-muted">
             This moves <b>real USDC</b> on the Stellar {NETWORK_LABEL} network from your Public balance into the private pool - a dual-controlled M-of-N org note. It settles on-chain and <b>can't be undone</b> from here.
           </p>
+          <p className="text-[12.5px] leading-relaxed text-muted">
+            Proof location: TEE. The Console prover creates the shield proof outside the browser before the on-chain settlement is accepted.
+          </p>
           <div className="space-y-2 rounded-xl bg-canvas p-4 text-[14px]">
             <div className="flex justify-between"><span className="text-muted">Amount</span><span className="font-display tnum font-semibold">{fmtUsd(toStroops(fundAmt))}</span></div>
             <div className="flex justify-between"><span className="text-muted">From</span><span className="font-semibold">Public</span></div>
             <div className="flex justify-between"><span className="text-muted">Into</span><span className="font-semibold">Private (M-of-N note)</span></div>
+            <div className="flex justify-between"><span className="text-muted">Proof location</span><span className="font-semibold">TEE</span></div>
           </div>
         </div>
       </Modal>
@@ -429,7 +459,11 @@ export function Treasury() {
             <Button
               loading={busySend}
               disabled={!addrLooksValid || !(Number(sendAmt) > 0)}
-              onClick={() => { void sendPublic().then(() => { if (!sendResult?.error) setConfirmSend(false); }); }}
+              onClick={() => {
+                void sendPublic().then((ok) => {
+                  if (ok) setConfirmSend(false);
+                });
+              }}
               data-testid="send-wallet-confirm"
             >
               <Send size={15} /> Send {Number(sendAmt) > 0 ? fmtUsd(toStroops(sendAmt)) : "USDC"}
@@ -443,7 +477,10 @@ export function Treasury() {
             placeholder="G…"
             spellCheck={false}
             value={sendTo}
-            onChange={(e) => setSendTo(e.target.value.trim())}
+            onChange={(e) => {
+              setSendResult(null);
+              setSendTo(e.target.value.trim());
+            }}
             error={sendTo.length > 0 && !addrLooksValid ? "That doesn't look like a valid wallet address." : undefined}
             data-testid="send-wallet-to"
           />
@@ -452,7 +489,10 @@ export function Treasury() {
             inputMode="decimal"
             placeholder="0.00"
             value={sendAmt}
-            onChange={(e) => setSendAmt(e.target.value.replace(/[^0-9.]/g, ""))}
+            onChange={(e) => {
+              setSendResult(null);
+              setSendAmt(e.target.value.replace(/[^0-9.]/g, ""));
+            }}
             data-testid="send-wallet-amount"
           />
           <div className="rounded-lg border border-warning/30 bg-warning/8 px-4 py-3 text-[12.5px] leading-relaxed text-[#7a5a12]">
