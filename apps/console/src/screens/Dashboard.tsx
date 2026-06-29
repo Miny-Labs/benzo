@@ -154,7 +154,7 @@ export function Dashboard() {
               <Skeleton className="mt-2 h-10 w-48" />
             ) : (
               <div className="font-display tnum mt-2 text-[40px] leading-none" data-testid="treasury-total">
-                {fmtUsd(String(Math.round(animatedTotal * 1e7)))}
+                {masked ? "••••••" : fmtUsd(String(Math.round(animatedTotal * 1e7)))}
               </div>
             )}
             <div className="mt-2 text-[12.5px] text-muted">Across all accounts · private by default</div>
