@@ -22,6 +22,8 @@ export function Payroll() {
   // settle privately, so the approver sees it BEFORE an irreversible run, not after.
   const unpayableCount = (b: PayrollBatch) =>
     b.lines.filter((l) => !counterparties.find((c) => c.id === l.counterpartyId)?.paymentAddress?.shielded).length;
+  const hasFailedLines = (b: PayrollBatch) => b.lines.some((l) => l.status === "failed");
+  const visiblePayrolls = [...payrolls].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   const [busy, setBusy] = useState<string | null>(null);
   const [funding, setFunding] = useState<string | null>(null);
   const [policing, setPolicing] = useState<string | null>(null);
@@ -210,7 +212,7 @@ export function Payroll() {
         <EmptyState title="No payroll runs yet" hint="Connect your HR system or import a CSV to schedule a run." />
       ) : (
         <Stagger className="space-y-4">
-          {payrolls.map((b, i) => {
+          {visiblePayrolls.map((b, i) => {
             const proofRefs = refs[b.id];
             const proving =
               funding === b.id ? { steps: ["Reading the run total", "Proving the treasury covers it", "Verifying ORGBAL on-chain"] }
@@ -265,7 +267,11 @@ export function Payroll() {
                         {b.status === "needs_approval" && approvedCount(b) > 0 ? (
                           <span className="text-[11px] font-semibold text-[#9a6b12]">{approvedCount(b)} approved · needs more</span>
                         ) : null}
-                        <StatusPill status={b.status} />
+                        {b.status === "processing" && hasFailedLines(b) ? (
+                          <Pill tone="danger">failed payouts</Pill>
+                        ) : (
+                          <StatusPill status={b.status} />
+                        )}
                       </div>
                     </div>
                     {b.status === "needs_approval" || b.status === "approved" || b.status === "processing" ? (
@@ -297,6 +303,11 @@ export function Payroll() {
                     <Button variant="outline" loading={funding === b.id} onClick={() => checkFunded(b)} data-testid="check-funded">
                       <ShieldCheck size={15} /> Check funded
                     </Button>
+                    {b.status === "processing" && hasFailedLines(b) ? (
+                      <span className="text-[12px] font-semibold text-danger" data-testid="payroll-failed-note">
+                        This run did not settle. Fix the failed line, then retry.
+                      </span>
+                    ) : null}
                   </div>
                 ) : null}
 
