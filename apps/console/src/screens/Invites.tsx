@@ -30,6 +30,8 @@ export function Invites() {
   const [role, setRole] = useState("approver");
   const [csv, setCsv] = useState("");
   const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [bulkResult, setBulkResult] = useState<{ created: number; errors: Array<{ line: number; error: string }> } | null>(null);
   // Confirm gate + busy flag for revoking a sent invite link.
   const [confirmRevoke, setConfirmRevoke] = useState<OrgInvite | null>(null);
   const [revoking, setRevoking] = useState(false);
@@ -41,7 +43,25 @@ export function Invites() {
 
   const rows = invites?.filter((i) => i.kind === tab) ?? null;
 
+  function validateOne(): string | null {
+    if (tab === "member") {
+      if (!email.trim()) return "Enter the team member's email before creating an invite.";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return "Enter a valid email address.";
+      if (!role.trim()) return "Choose a role for this team member.";
+      return null;
+    }
+    if (!name.trim()) return `Enter the ${tab}'s name before creating an invite.`;
+    if (handle.trim() && !/^@?[a-z0-9_.]{3,20}$/i.test(handle.trim())) return "Enter a valid handle, like @grace.";
+    return null;
+  }
+
   async function createOne() {
+    const validationError = validateOne();
+    if (validationError) {
+      setFormError(validationError);
+      return;
+    }
+    setFormError(null);
     setBusy(true);
     try {
       const created = await api.createInvite({ kind: tab, name: name || undefined, email: email || undefined, role: tab === "member" ? role : undefined, handle: handle || undefined });
@@ -49,6 +69,7 @@ export function Invites() {
       setName("");
       setEmail("");
       setHandle("");
+      setFormError(null);
       await load();
       toast({ title: "Invite link created", tone: "success" });
     } catch (e) {
@@ -60,12 +81,19 @@ export function Invites() {
 
   async function bulk() {
     setBusy(true);
+    setBulkResult(null);
     try {
       const r = await api.bulkInvite(csv);
       setInvites((prev) => (prev ? [...r.invites, ...prev.filter((i) => !r.invites.some((inv) => inv.id === i.id))] : r.invites));
-      setCsv("");
+      setBulkResult({ created: r.created, errors: r.errors });
+      if (r.errors.length === 0) setCsv("");
       await load();
-      toast({ title: `${r.created} contractor invite${r.created === 1 ? "" : "s"} created`, tone: "success" });
+      toast({
+        title: r.errors.length
+          ? `${r.created} created, ${r.errors.length} row${r.errors.length === 1 ? "" : "s"} need fixing`
+          : `${r.created} contractor invite${r.created === 1 ? "" : "s"} created`,
+        tone: r.errors.length ? "warning" : "success",
+      });
     } catch (e) {
       toast({ title: friendlyError(e), tone: "danger" });
     } finally {
@@ -126,6 +154,7 @@ export function Invites() {
                 </Select>
               ) : null}
             </div>
+            {formError ? <p className="mt-3 text-[13px] font-medium text-danger" data-testid="invite-form-error">{formError}</p> : null}
             <Button className="mt-4" onClick={createOne} loading={busy} data-testid="invite-create">
               <Send size={15} /> Create {tab} invite
             </Button>
@@ -137,6 +166,26 @@ export function Invites() {
                 <Button variant="outline" className="mt-3" onClick={bulk} loading={busy} disabled={!csv.trim()} data-testid="invite-bulk">
                   <Upload size={15} /> Import & invite
                 </Button>
+                {bulkResult ? (
+                  <div
+                    className={`mt-3 rounded-lg border px-3 py-2 text-[13px] ${
+                      bulkResult.errors.length ? "border-warning/30 bg-warning/10 text-warning" : "border-success/30 bg-success/10 text-success"
+                    }`}
+                    data-testid="invite-bulk-result"
+                  >
+                    <div className="font-semibold">
+                      {bulkResult.created} invite{bulkResult.created === 1 ? "" : "s"} created
+                      {bulkResult.errors.length ? `, ${bulkResult.errors.length} row${bulkResult.errors.length === 1 ? "" : "s"} need fixing` : ""}
+                    </div>
+                    {bulkResult.errors.length ? (
+                      <ul className="mt-1 list-disc pl-5">
+                        {bulkResult.errors.map((err) => (
+                          <li key={`${err.line}-${err.error}`}>Line {err.line}: {err.error}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </Card>

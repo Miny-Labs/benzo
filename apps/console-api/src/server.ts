@@ -31,6 +31,7 @@ import { anchorPrivateAuditRoot, attestKyb, auditorGrantViewKey, computeTreasury
 import { verifyGoogleIdToken, googleConfigured } from "./google-oidc.js";
 import { accountBinding, authFromRequest, createTestAuthToken, currentAuth, runWithAuth } from "./auth.js";
 import { matchPolicy, progress, recordApproval } from "./approvals.js";
+import { validateInviteInput } from "./inviteValidation.js";
 import { activateAcceptedMemberInvite, db, fmtUsd, id, now, parseRosterCsv, recoverySummary, RecoveryRequiredError, runWithConsoleTenant, runWithConsoleTenantKey, tenantDataMissing, currentConsoleTenantKey, type OrgInvite } from "./store.js";
 import { lookupTenantRoute, registerTenantRoute, takeTenantRateLimit } from "./tenantData.js";
 import { hostedRuntime, serverlessRuntime } from "./runtime.js";
@@ -937,13 +938,15 @@ function upsertContractor(name: string, handle?: string): Counterparty {
 route("GET", "/api/invites", (_req, res) => json(res, 200, db.invites));
 route("POST", "/api/invites", async (req, res) => {
   const body = await readJson<{ kind?: OrgInvite["kind"]; name?: string; email?: string; role?: string; handle?: string }>(req);
-  const kind = body.kind ?? "member";
+  const checked = validateInviteInput(body);
+  if (!checked.ok) return json(res, 400, { error: checked.error });
+  const { kind, name, email, handle, role } = checked.value;
   let counterpartyId: string | undefined;
-  if (kind === "contractor" || kind === "customer") counterpartyId = upsertContractor(body.name ?? body.email ?? "New contractor", body.handle).id;
-  if (kind === "member" && body.email) {
-    db.members.push({ id: id("mem"), orgId: db.org.id, email: body.email, role: (body.role as Member["role"]) ?? "approver", status: "invited", createdAt: now() });
+  if (kind === "contractor" || kind === "customer") counterpartyId = upsertContractor(name!, handle).id;
+  if (kind === "member") {
+    db.members.push({ id: id("mem"), orgId: db.org.id, email: email!, role: role as Member["role"], status: "invited", createdAt: now() });
   }
-  const inv = makeInvite(kind, { name: body.name, email: body.email, role: body.role, counterpartyId });
+  const inv = makeInvite(kind, { name, email, role, counterpartyId });
   db.invites.push(inv);
   await registerInviteRoute(inv);
   appendPrivateEvent("invite.created", inv.id, "invite.v1", { invite: inv, createdAt: inv.createdAt }, { status: inv.status, kind: inv.kind, source: "invites" });

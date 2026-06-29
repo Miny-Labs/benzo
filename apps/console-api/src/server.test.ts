@@ -53,6 +53,17 @@ async function request(path: string, init: { method?: string; headers?: Record<s
   };
 }
 
+async function mintTestToken(subject: string) {
+  const minted = await request("/api/auth/test", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-benzo-test-secret": "console-server-test-secret" },
+    body: JSON.stringify({ subject, email: `${subject}@benzo.local` }),
+  });
+  expect(minted.status).toBe(200);
+  const body = await minted.json() as { token: string };
+  return body.token;
+}
+
 test("reports unavailable live status when chain env is absent", async () => {
   const res = await request("/api/live");
   expect(res.status).toBe(200);
@@ -95,17 +106,11 @@ test("fails closed for console writes when live client is unavailable", async ()
 });
 
 test("mints secret-gated console test auth for backend smoke tests", async () => {
-  const minted = await request("/api/auth/test", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-benzo-test-secret": "console-server-test-secret" },
-    body: JSON.stringify({ subject: "smoke-console", email: "smoke-console@benzo.local" }),
-  });
-  expect(minted.status).toBe(200);
-  const body = await minted.json() as { token: string };
-  expect(body.token).toMatch(/^benzo-test-v1\./);
+  const token = await mintTestToken("smoke-console");
+  expect(token).toMatch(/^benzo-test-v1\./);
 
   const protectedRes = await request(`/api/rpc?path=${encodeURIComponent("/session")}`, {
-    headers: { authorization: `Bearer ${body.token}` },
+    headers: { authorization: `Bearer ${token}` },
   });
   expect(protectedRes.status).not.toBe(401);
 });
