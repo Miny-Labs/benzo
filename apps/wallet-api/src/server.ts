@@ -15,8 +15,11 @@ import {
   claimInvite,
   createInvite,
   createRequest,
+  cancelMoneyRequest,
   listInvites,
   refundInvite,
+  getMoneyRequestStatus,
+  reconcileMoneyRequest,
   getActivity,
   getBalanceStroops,
   getRampReserve,
@@ -408,7 +411,7 @@ route("DELETE", "/api/account", async (_q, res) => {
 route("GET", "/api/contacts", (_q, res) => json(res, 200, []));
 
 route("POST", "/api/send", async (req, res, url) => {
-  const body = await readJson<{ to?: string; handle?: string; amount: string; memo?: string; prover?: string }>(req);
+  const body = await readJson<{ to?: string; handle?: string; amount: string; memo?: string; prover?: string; requestId?: string }>(req);
   const to = body.to ?? body.handle; // `handle` kept for back-compat
   if (!to || !body.amount) return json(res, 400, { error: "to and amount required" });
   const prover = proverOf(url, body);
@@ -421,22 +424,29 @@ route("POST", "/api/send", async (req, res, url) => {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     const emit = (e: SendPhase) => res.write(`event: phase\ndata: ${JSON.stringify(e)}\n\n`);
     try {
-      const r = await send(to, body.amount, body.memo, prover, emit);
-      recordSettledMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount });
+      const r = await send(to, body.amount, body.memo, prover, body.requestId, emit);
+      recordSettledMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", r.amount, { txHash: r.txHash, prover: r.prover, sourceId: body.requestId, requestedAmount: body.amount });
       recordSettlementProof(classifyRecipient(to) === "address" ? "wallet.send-public-from-private" : "wallet.send-private", classifyRecipient(to) === "address" ? "UNSHIELD" : "TRANSFER", r);
       rememberIdempotency(200, r);
       res.write(`event: done\ndata: ${JSON.stringify(r)}\n\n`);
     } catch (e) {
+      logRouteError("send stream", e);
       const safe = rampError(e, "out");
       recordFailedMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", body.amount, e, "out");
+      const amount =
+        Number.isFinite(Number(body.amount)) && Number(body.amount) > 0
+          ? String(BigInt(Math.round(Number(body.amount) * 10_000_000)))
+          : "0";
+      const failed: SettleResult = { status: "failed", prover, amount, onChain: false, error: safe.error };
       res.write(`event: phase\ndata: ${JSON.stringify({ phase: "failed", error: safe.error })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify(failed)}\n\n`);
     }
     res.end();
     return;
   }
   try {
-    const r = await send(to, body.amount, body.memo, prover);
-    recordSettledMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", r.amount, { txHash: r.txHash, prover: r.prover, requestedAmount: body.amount });
+    const r = await send(to, body.amount, body.memo, prover, body.requestId);
+    recordSettledMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", r.amount, { txHash: r.txHash, prover: r.prover, sourceId: body.requestId, requestedAmount: body.amount });
     recordSettlementProof(classifyRecipient(to) === "address" ? "wallet.send-public-from-private" : "wallet.send-private", classifyRecipient(to) === "address" ? "UNSHIELD" : "TRANSFER", r);
     json(res, 200, r);
   } catch (e) {
@@ -448,6 +458,34 @@ route("POST", "/api/send", async (req, res, url) => {
 route("POST", "/api/request", async (req, res) => {
   const body = await readJson<{ amount?: string; memo?: string }>(req);
   json(res, 200, await createRequest(body.amount, body.memo));
+});
+
+route("GET", "/api/request/status", async (_req, res, url) => {
+  const id = url.searchParams.get("id")?.trim();
+  if (!id) return json(res, 400, { error: "request id required" });
+  json(res, 200, await getMoneyRequestStatus(id));
+});
+
+route("POST", "/api/request/reconcile", async (req, res) => {
+  const body = await readJson<{ id?: string }>(req);
+  if (!body.id) return json(res, 400, { error: "request id required" });
+  try {
+    json(res, 200, await reconcileMoneyRequest(body.id));
+  } catch (e) {
+    logRouteError("request reconcile", e);
+    json(res, 503, { error: "Couldn't verify this request payment yet. Please try again." });
+  }
+});
+
+route("POST", "/api/request/cancel", async (req, res) => {
+  const body = await readJson<{ id?: string }>(req);
+  if (!body.id) return json(res, 400, { error: "request id required" });
+  try {
+    json(res, 200, await cancelMoneyRequest(body.id));
+  } catch (e) {
+    logRouteError("request cancel", e);
+    json(res, 503, { error: (e as Error).message || "Couldn't cancel the request. Please try again." });
+  }
 });
 
 // external invite / claim (send to / claim from someone with no account)
@@ -468,6 +506,7 @@ route("POST", "/api/invite", async (req, res) => {
     });
     json(res, 201, r);
   } catch (e) {
+    logRouteError("invite fund", e);
     recordFailedMovement("invite_fund", body.amount, e, "out");
     json(res, rampStatus(e), rampError(e, "out"));
   }
@@ -480,7 +519,7 @@ route("POST", "/api/invite/refund", async (req, res) => {
     recordSettledMovement("invite_refund", r.amount, { txHash: r.txHash, sourceId: body.localId });
     appendWalletProofReceipt({
       action: "wallet.invite-refund",
-      vkId: "UNSHIELD",
+      vkId: "SHIELD",
       verified: r.onChain,
       verifier: walletVerifierId(),
       txHash: r.txHash,
@@ -493,10 +532,10 @@ route("POST", "/api/invite/refund", async (req, res) => {
   }
 });
 route("POST", "/api/claim", async (req, res) => {
-  const body = await readJson<{ secret: string; localId?: string }>(req);
+  const body = await readJson<{ secret: string; localId?: string; amount?: string }>(req);
   if (!body.secret) return json(res, 400, { error: "secret required" });
   try {
-    const r = await claimInvite(body.secret, body.localId);
+    const r = await claimInvite(body.secret, body.localId, body.amount);
     recordSettledMovement("invite_claim", r.amount, { txHash: r.txHash, sourceId: body.localId });
     appendWalletProofReceipt({
       action: "wallet.invite-claim",
@@ -676,6 +715,7 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
     if (requiresIdempotency(req.method ?? "GET", effectiveUrl.pathname) && !idempotencyHeader(req)) {
       return json(res, 428, { error: "Idempotency-Key header is required for hosted wallet writes." });
     }
+    const persistTenant = !["GET", "HEAD", "OPTIONS"].includes((req.method ?? "GET").toUpperCase());
     await runWithAuth(auth, async () => {
       await runWithWalletTenant(auth?.key ?? null, auth?.claims ?? null, auth ? accountBinding(auth) : null, async () => {
         if (effectiveUrl.pathname.startsWith("/api/") && !publicHosted && (!isLive() || tenantDataMissing().length > 0)) {
@@ -689,9 +729,14 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
           if (!rl.ok) return json(res, 429, { error: "Too many requests. Please wait a moment and try again.", retryAfter: rl.retryAfter });
         }
         await runIdempotent(req, res, effectiveUrl.pathname, () => Promise.resolve(r.handler(req, res, effectiveUrl)));
-      });
+      }, { persist: persistTenant });
     });
   } catch (e) {
+    if (res.headersSent) {
+      if (!res.writableEnded) res.end();
+      logRouteError("post-response handler error", e);
+      return;
+    }
     if (e instanceof HostedLocalProverError) {
       return json(res, 400, { error: e.message, code: e.code });
     }

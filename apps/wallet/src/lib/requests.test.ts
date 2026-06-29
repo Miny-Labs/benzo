@@ -10,7 +10,7 @@ const mem = new Map<string, string>();
   length: 0,
 } as Storage;
 
-import { addRequest, listRequests, cancelRequest, markPaid, markReminded, remindedToday } from "./requests.js";
+import { addRequest, listRequests, findRequest, cancelRequest, markPaid, markReminded, remindedToday, updateRequestStatus } from "./requests.js";
 
 const DAY = 24 * 3600;
 
@@ -37,9 +37,18 @@ describe("money requests (C7 - local, private, no public feed)", () => {
     markPaid("b", "2000000");
     const rs = listRequests(1002);
     expect(rs.find((r) => r.id === "a")?.status).toBe("cancelled");
+    expect(findRequest("a", 1002)?.status).toBe("cancelled");
     const b = rs.find((r) => r.id === "b");
     expect(b?.status).toBe("paid");
     expect(b?.paidAmount).toBe("2000000");
+  });
+
+  it("tracks partially paid request state", () => {
+    addRequest({ id: "partial", link: "x", amount: "5000000" }, 1000);
+    updateRequestStatus("partial", "partially_paid", "2000000");
+    const r = findRequest("partial", 1001);
+    expect(r?.status).toBe("partially_paid");
+    expect(r?.paidAmount).toBe("2000000");
   });
 
   it("rate-limits reminders to once per day", () => {

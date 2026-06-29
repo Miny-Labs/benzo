@@ -14,7 +14,7 @@ import { ArrowLeft, Check, Eye, Fingerprint, Loader2, Send, ShieldCheck, X } fro
 import { LogoMark } from "../ui/Logo";
 import { Button } from "../ui/primitives";
 import { fadeUp, stagger, EASE } from "../ui/motion";
-import { api, clearGoogleCredential, storeGoogleCredential } from "../lib/api";
+import { api, clearGoogleCredential, currentGoogleCredential, storeGoogleCredential } from "../lib/api";
 import { friendlyError } from "../lib/errors";
 import { useWallet } from "../lib/store";
 import { registerPasskey, loginWithPasskey, isWebAuthnAvailable } from "../lib/passkey";
@@ -120,10 +120,15 @@ function Welcome({ onNext }: { onNext: () => void }) {
 }
 
 function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const [busy, setBusy] = useState<"passkey" | "google" | null>(null);
+  const [busy, setBusy] = useState<"passkey" | "google" | "stored" | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [clientId, setClientId] = useState(GOOGLE_CLIENT_ID_FALLBACK);
+  const [hasStoredCredential, setHasStoredCredential] = useState(() => !!currentGoogleCredential());
   const gbtn = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setHasStoredCredential(!!currentGoogleCredential());
+  }, []);
 
   async function withPasskey() {
     setBusy("passkey");
@@ -135,6 +140,18 @@ function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
       onNext();
     } catch (e) {
       setErr((e as Error).message.includes("cancel") ? "Passkey cancelled." : "Passkey didn't work here. Try again on this device.");
+      setBusy(null);
+    }
+  }
+
+  async function withStoredCredential() {
+    setBusy("stored");
+    setErr(null);
+    try {
+      await api.session();
+      onNext();
+    } catch (e) {
+      setErr(friendlyError(e, "Sign in again to continue."));
       setBusy(null);
     }
   }
@@ -207,6 +224,11 @@ function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
         <Button full size="lg" onClick={withPasskey} loading={busy === "passkey"} data-testid="auth-passkey">
           <Fingerprint size={18} /> {isWebAuthnAvailable() ? "Continue with passkey" : "Continue with this device"}
         </Button>
+        {hasStoredCredential ? (
+          <Button full variant="secondary" size="lg" onClick={withStoredCredential} loading={busy === "stored"} data-testid="auth-stored">
+            Continue with signed-in account
+          </Button>
+        ) : null}
         {clientId ? (
           <div className="benzo-google-shell flex h-14 w-full items-center justify-center overflow-hidden rounded-full border border-hair bg-card shadow-[0_6px_18px_rgba(25,40,55,0.05)]">
             <div ref={gbtn} className="benzo-google-button flex w-full justify-center" data-testid="auth-google" />

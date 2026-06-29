@@ -18,18 +18,28 @@ describe("contacts (C6 - local-first recipient management)", () => {
   it("normalizes handles to a single leading @", () => {
     expect(normHandle("alex")).toBe("@alex");
     expect(normHandle("@alex")).toBe("@alex");
+    expect(normHandle("ALEX")).toBe("@alex");
     expect(normHandle("  @@alex  ")).toBe("@alex");
     expect(normHandle("")).toBe("");
+    expect(normHandle("bo")).toBe("");
+    expect(normHandle("bad handle!!!")).toBe("");
+    expect(normHandle("a".repeat(21))).toBe("");
   });
 
   it("saves and de-dupes by handle (latest wins, most-recent first)", () => {
     saveContact("alex", "Alex Rivera");
-    saveContact("@bo", "Bo");
+    saveContact("@bob", "Bob");
     saveContact("alex", "Alex R."); // same handle, new nickname
     const cs = listLocal();
     expect(cs).toHaveLength(2);
     expect(cs[0]).toEqual({ handle: "@alex", name: "Alex R." }); // updated + moved to front
     expect(isSaved("@alex")).toBe(true);
+  });
+
+  it("refuses malformed local contacts", () => {
+    saveContact("bad handle!!!", "Bad");
+    saveContact("bo", "Too short");
+    expect(listLocal()).toHaveLength(0);
   });
 
   it("removes a saved contact", () => {

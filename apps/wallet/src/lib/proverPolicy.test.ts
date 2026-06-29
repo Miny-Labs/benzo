@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { preferDeviceProving, delegatedProverKind, apiProverKind, proverPlan } from "./proverPolicy";
+import { preferDeviceProving, delegatedProverKind, apiProverKind, proverPlan, apiBoundaryProverPlan } from "./proverPolicy";
 
 /** Stub navigator + matchMedia to simulate a given device, run fn, restore. */
 function asDevice(
@@ -78,6 +78,13 @@ describe("proverPolicy - where the proof runs", () => {
     expect(apiProverKind("local", true)).toBe("tee");
     expect(apiProverKind("local", false)).toBe("tee");
     expect(apiProverKind("tee", false)).toBe("tee");
+  });
+
+  it("API-bound UI copy says TEE when a desktop-local plan crosses the API boundary", () => {
+    const plan = { onDevice: true, kind: "local" as const, reason: "Capable device - proving on-device, witness stays here" };
+    const apiPlan = apiBoundaryProverPlan(plan, true);
+    expect(apiPlan).toMatchObject({ onDevice: false, kind: "tee" });
+    expect(apiPlan.reason).toContain("attested secure enclave");
   });
 
   it("proverPlan: phone + TEE wired → delegate to TEE", () => {

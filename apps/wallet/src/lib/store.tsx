@@ -61,10 +61,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const refreshBalance = useCallback(async () => {
     // Independent loads: a transient history/public-balance miss must not drop a
     // good private balance - each settles on its own.
-    const [b, p, h] = await Promise.allSettled([api.balance(), api.publicBalance(), api.history()]);
-    if (b.status === "fulfilled") setBalance(b.value);
-    if (p.status === "fulfilled") setPublicBalance(p.value);
-    if (h.status === "fulfilled") setHistory(h.value);
+    const balanceP = api.balance().then((value) => {
+      setBalance(value);
+      return value;
+    });
+    const publicP = api.publicBalance().then((value) => {
+      setPublicBalance(value);
+      return value;
+    });
+    const historyP = api.history().then((value) => {
+      setHistory(value);
+      return value;
+    });
+    const [b] = await Promise.allSettled([balanceP, publicP, historyP]);
     if (b.status === "rejected") setError((b.reason as Error)?.message ?? "Failed to load");
   }, []);
 
@@ -72,13 +81,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     // Each read model loads independently - one transient failure can't blank
     // the whole wallet (Promise.all rejected atomically; allSettled degrades).
-    const results = await Promise.allSettled([api.session(), api.balance(), api.publicBalance(), api.history(), api.contacts()]);
-    const [s, b, p, h, c] = results;
-    if (s.status === "fulfilled") setSession(s.value as Session);
-    if (b.status === "fulfilled") setBalance(b.value as Balance);
-    if (p.status === "fulfilled") setPublicBalance(p.value as PublicBalance);
-    if (h.status === "fulfilled") setHistory(h.value as ActivityRow[]);
-    if (c.status === "fulfilled") setContacts(c.value as Contact[]);
+    const sessionP = api.session().then((value) => {
+      setSession(value);
+      return value;
+    });
+    const balanceP = api.balance().then((value) => {
+      setBalance(value);
+      return value;
+    });
+    const publicP = api.publicBalance().then((value) => {
+      setPublicBalance(value);
+      return value;
+    });
+    const historyP = api.history().then((value) => {
+      setHistory(value);
+      return value;
+    });
+    const contactsP = api.contacts().then((value) => {
+      setContacts(value);
+      return value;
+    });
+    const results = await Promise.allSettled([sessionP, balanceP, publicP, historyP, contactsP]);
+    const b = results[1];
     const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     setError(failed.length === results.length ? (failed[0]?.reason as Error)?.message ?? "Failed to load" : null);
     setLoading(false);

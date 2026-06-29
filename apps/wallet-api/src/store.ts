@@ -147,6 +147,8 @@ export interface WalletDb {
   recovery: RecoveryBinding | null;
   proofReceipts: ProofReceipt[];
   idempotency: Record<string, IdempotencyRecord>;
+  /** @benzo/core scanner snapshots, ASP cache, and transaction journal. */
+  coreState: Record<string, string>;
 }
 
 export function seed(): WalletDb {
@@ -160,6 +162,7 @@ export function seed(): WalletDb {
     recovery: null,
     proofReceipts: [],
     idempotency: {},
+    coreState: {},
   };
 }
 
@@ -302,6 +305,7 @@ function normalizeWalletDb(value: WalletDb): WalletDb {
   value.recovery ??= null;
   value.proofReceipts ??= [];
   value.idempotency ??= {};
+  value.coreState ??= {};
   return value;
 }
 
@@ -355,6 +359,7 @@ export async function runWithWalletTenant<T>(
   claims: { name?: string; email?: string } | null,
   binding: AccountBinding | null,
   fn: () => Promise<T>,
+  opts: { persist?: boolean } = {},
 ): Promise<T> {
   if (!hostedTenantMode() || !authKey) return fn();
   const tenantKey = `wallet:${authKey}`;
@@ -368,7 +373,7 @@ export async function runWithWalletTenant<T>(
     try {
       return await fn();
     } finally {
-      if (!ctx.deleted) await saveTenantDocument("wallet", tenantKey, ctx.db);
+      if (!ctx.deleted && opts.persist !== false) await saveTenantDocument("wallet", tenantKey, ctx.db);
     }
   });
 }

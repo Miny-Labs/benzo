@@ -159,7 +159,8 @@ function canUseDevAccountExport(): boolean {
 async function accountFromDevExport(): Promise<{ spendSk: string; viewSecret: string; mvkSecret: string } | null> {
   if (!canUseDevAccountExport()) return null;
   try {
-    const r = await fetch("/api/dev/account");
+    const prepared = prepareApiRequest("/dev/account");
+    const r = await fetch(prepared.url, prepared.init);
     return r.ok ? await r.json() : null;
   } catch {
     return null;

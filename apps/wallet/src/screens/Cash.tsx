@@ -1,11 +1,7 @@
 /**
- * Cash - the on/off ramp, given the "special" treatment. Add money / Cash out
- * over a REAL on-chain testnet reserve (the `ramp` contract). Add-money
- * dispenses USDC from the reserve and shields it on your device; cash-out
- * unshields and returns it to the reserve. No bank, cash, Stripe, or MoneyGram
- * partner payout is wired in this build. The done overlay plays the real journey
- * (dispense, prove, settle)
- * so the moment feels crafted, not a toast.
+ * Cash - the testnet on-ramp/off-ramp surface. The reserve contract moves real
+ * testnet USDC; the app shields or unshields at the edge. No bank, cash, Stripe,
+ * or MoneyGram partner payout is wired in this build.
  */
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -64,6 +60,11 @@ export function Cash() {
   // browser path exists; API-mediated ramp operations always use the TEE.
   const teeAvailable = !!session?.prover.available.includes("tee");
   const plan = proverPlan(teeAvailable);
+  const apiProver = apiProverKind(plan.kind, teeAvailable);
+  const rampProverReason =
+    apiProver === "tee"
+      ? "Ramp proof uses the attested secure enclave (TEE)"
+      : plan.reason;
 
   const n = Number(amount);
   const max = tab === "in" ? MAX_IN : MAX_OUT;
@@ -75,7 +76,6 @@ export function Cash() {
     setPhase("busy");
     setErr(null);
     try {
-      const apiProver = apiProverKind(plan.kind, teeAvailable);
       const r = tab === "in" ? await api.addMoney(amount, apiProver) : await api.cashOut(amount, apiProver);
       setResult(r);
       setOnChain(r.onChain);
@@ -96,7 +96,7 @@ export function Cash() {
       <ScreenHeader title="Cash" />
       <div className="px-5 pt-2">
         <Segmented<Tab>
-          items={[{ id: "in", label: "Add money" }, { id: "out", label: "Cash out" }]}
+          items={[{ id: "in", label: "On-ramp" }, { id: "out", label: "Off-ramp" }]}
           active={tab}
           onChange={(t) => { setTab(t); setPhase("form"); setErr(null); }}
         />
@@ -106,10 +106,12 @@ export function Cash() {
             <div className="mt-5">
               <AmountField value={amount} onChange={setAmount} autoFocus />
               <div className="text-center text-[13px] text-muted">
-                {tab === "in" ? "Dispensed from the testnet reserve, shielded on your device" : "Unshielded privately, then returned to the testnet reserve"}
+                {tab === "in"
+                  ? "Reserve USDC enters, then a shield proof makes it private"
+                  : "Private USDC exits through an unshield proof to the reserve"}
               </div>
               <div className={`mt-1 text-center text-[12px] ${tooLow || tooHigh ? "text-[#9a6b12]" : "text-muted/70"}`} data-testid="cash-limits">
-                {tooLow ? `Minimum is $${MIN}` : tooHigh ? `Max ${tab === "in" ? "add" : "cash-out"} is $${max.toLocaleString()}` : `$${MIN}–$${max.toLocaleString()} per ${tab === "in" ? "add" : "cash-out"}`}
+                {tooLow ? `Minimum is $${MIN}` : tooHigh ? `Max ${tab === "in" ? "on-ramp" : "off-ramp"} is $${max.toLocaleString()}` : `$${MIN} to $${max.toLocaleString()} per ${tab === "in" ? "on-ramp" : "off-ramp"}`}
               </div>
             </div>
 
@@ -125,15 +127,16 @@ export function Cash() {
               <div className="mt-5 space-y-2 rounded-2xl border border-hair bg-card p-4 text-[13px]" data-testid="cash-quote">
                 <QRow k="Amount" v={fmtUsd(toS(amount))} />
                 <QRow k="Fee" v={<span className="font-semibold text-pos">Free</span>} />
-                <QRow k="Settles" v="On Stellar testnet, in seconds" />
-                <QRow k="Privacy" v="Amount stays private" />
+                <QRow k="Edge" v={tab === "in" ? "Testnet reserve to private" : "Private to testnet reserve"} />
+                <QRow k="Proof" v={tab === "in" ? "Shield" : "Unshield"} />
+                <QRow k="Privacy" v="Amount stays private inside Benzo" />
               </div>
             ) : null}
 
             {tab === "out" ? (
               <div className="mt-6 flex items-center gap-2 rounded-2xl border border-hair bg-card px-3.5 py-2.5 text-[12.5px] text-muted" data-testid="cash-prover-plan">
-                {plan.onDevice ? <Smartphone size={15} className="flex-none text-accent" /> : <ShieldCheck size={15} className="flex-none text-accent" />}
-                <span>{plan.reason}</span>
+                {apiProver === "tee" ? <ShieldCheck size={15} className="flex-none text-accent" /> : <Smartphone size={15} className="flex-none text-accent" />}
+                <span>{rampProverReason}</span>
               </div>
             ) : null}
 
@@ -142,7 +145,7 @@ export function Cash() {
             </div>
 
             <Button full size="lg" className="mt-4" disabled={!valid} loading={phase === "busy"} onClick={go} data-testid={tab === "in" ? "add-submit" : "cashout-submit"}>
-              <span className="truncate">{tab === "in" ? "Add money" : "Cash out to reserve"}{valid ? ` · ${fmtUsd(toS(amount))}` : ""}</span>
+              <span className="truncate">{tab === "in" ? "On-ramp" : "Off-ramp to reserve"}{valid ? ` · ${fmtUsd(toS(amount))}` : ""}</span>
             </Button>
             {tab === "in" ? (
               <button onClick={() => nav("/deposit")} className="mt-3 w-full rounded-lg py-1 text-center text-[13px] font-semibold text-accent outline-none focus-visible:ring-2 focus-visible:ring-accent/40" data-testid="cash-deposit-link">
@@ -184,8 +187,8 @@ function ReserveBadge({ reserve, error, onRetry }: { reserve: string | null; err
         <span className="relative inline-flex h-2 w-2 rounded-full bg-pos" />
       </span>
       <div className="min-w-0 flex-1 leading-tight">
-        <div className="tnum truncate text-xs font-semibold text-ink">Testnet reserve {reserve != null ? `· ${fmtUsd(reserve)}` : ""}</div>
-        <div className="text-[11px] text-muted">Backed on-chain, settles on Stellar testnet</div>
+        <div className="tnum truncate text-xs font-semibold text-ink">Testnet on/off-ramp reserve {reserve != null ? `· ${fmtUsd(reserve)}` : ""}</div>
+        <div className="text-[11px] text-muted">Read live from Stellar testnet</div>
       </div>
       <Radio size={15} className="flex-none text-accent" />
     </div>
@@ -195,8 +198,8 @@ function ReserveBadge({ reserve, error, onRetry }: { reserve: string | null; err
 /** The crafted done overlay - plays the REAL journey, step by step. */
 function RampDone({ tab, amount, onChain, result, onDone }: { tab: Tab; amount: string; onChain: boolean; result: SettleResult | null; onDone: () => void }) {
   const steps = tab === "in"
-    ? ["Reserve dispensed USDC", "Shielded privately on your device", "Added to your balance"]
-    : ["Unshielded privately", "Returned to the testnet reserve", "Stellar testnet settlement recorded"];
+    ? ["Reserve released testnet USDC", "Shield proof created a private note", "Private balance updated"]
+    : ["Unshield proof opened the edge", "USDC returned to reserve", "Off-ramp receipt recorded"];
   const [lit, setLit] = useState(0);
   useEffect(() => {
     const timers = steps.map((_, i) => setTimeout(() => setLit(i + 1), 420 * (i + 1)));
@@ -213,7 +216,7 @@ function RampDone({ tab, amount, onChain, result, onDone }: { tab: Tab; amount: 
         <Landmark size={30} />
       </motion.div>
       <div>
-        <div className="font-display text-2xl">{tab === "in" ? "Money added" : "Returned to reserve"}</div>
+        <div className="font-display text-2xl">{tab === "in" ? "On-ramp complete" : "Off-ramp complete"}</div>
         <div className="mt-1 text-[15px] text-muted">{fmtUsd(amount)}{onChain ? "" : " · not verified on-chain"}</div>
       </div>
 
@@ -233,7 +236,7 @@ function RampDone({ tab, amount, onChain, result, onDone }: { tab: Tab; amount: 
 
       {onChain ? (
         <div className="flex items-center gap-1.5 text-[12px] text-pos" data-testid="cash-proof">
-          <ShieldCheck size={13} /> {tab === "in" ? "Real testnet USDC from the reserve. No one saw your balance" : "The network verified it without seeing your balance"}
+          <ShieldCheck size={13} /> {tab === "in" ? "Real testnet USDC shielded into Benzo" : "Edge proof settled on Stellar testnet"}
         </div>
       ) : null}
       <div className="w-full max-w-[320px]">

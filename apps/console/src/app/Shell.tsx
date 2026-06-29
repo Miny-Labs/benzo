@@ -229,23 +229,21 @@ export function Shell() {
 
           <div className="relative flex flex-1 flex-col overflow-hidden">
             <main className="no-scrollbar relative z-10 h-full overflow-y-auto px-5 py-6">
-              <AnimatePresence mode="wait">
-                <Routes location={loc} key={loc.pathname}>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/approvals" element={<Approvals />} />
-                  <Route path="/policies" element={<Policies />} />
-                  <Route path="/contractors" element={<Contractors />} />
-                  <Route path="/payroll" element={<Payroll />} />
-                  <Route path="/invoices" element={<Invoices />} />
-                  <Route path="/pay" element={<Pay />} />
-                  <Route path="/treasury" element={<Treasury />} />
-                  <Route path="/grants" element={<Grants />} />
-                  <Route path="/audit" element={<AuditLog />} />
-                  <Route path="/invites" element={<Invites />} />
-                  <Route path="/settings" element={<SettingsScreen />} />
-                  <Route path="*" element={<Dashboard />} />
-                </Routes>
-              </AnimatePresence>
+              <Routes location={loc} key={loc.pathname}>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/approvals" element={<Approvals />} />
+                <Route path="/policies" element={<Policies />} />
+                <Route path="/contractors" element={<Contractors />} />
+                <Route path="/payroll" element={<Payroll />} />
+                <Route path="/invoices" element={<Invoices />} />
+                <Route path="/pay" element={<Pay />} />
+                <Route path="/treasury" element={<Treasury />} />
+                <Route path="/grants" element={<Grants />} />
+                <Route path="/audit" element={<AuditLog />} />
+                <Route path="/invites" element={<Invites />} />
+                <Route path="/settings" element={<SettingsScreen />} />
+                <Route path="*" element={<Dashboard />} />
+              </Routes>
             </main>
           </div>
         </div>

@@ -105,6 +105,14 @@ export interface HistoryItem {
   memo?: string;
 }
 
+function visibleHistoryAmount(amount: string | bigint): boolean {
+  try {
+    return BigInt(amount) > 0n;
+  } catch {
+    return false;
+  }
+}
+
 export interface ProgressEvent {
   op: "send" | "shield" | "unshield";
   status: TxStatus;
@@ -708,13 +716,25 @@ export class BenzoClient {
    * counterparties) reconciled with on-chain receives discovered by scanning.
    */
   getHistory(): HistoryItem[] {
-    const items: HistoryItem[] = [...this.journal];
+    const items: HistoryItem[] = this.journal.filter((j) => visibleHistoryAmount(j.amount));
 
     // Incoming notes this account can decrypt that aren't journal entries.
     const journaledTx = new Set(this.journal.map((j) => j.txHash).filter(Boolean));
-    for (const d of this.scanner.scan(this.account.viewSecret)) {
+    const seenIncoming = new Set<string>();
+    const discovered = this.scanner.scan(this.account.viewSecret);
+    const ownSpendTx = new Set<string>();
+    for (const d of discovered) {
+      const spentIn = this.scanner.nullifierTxHash(noteNullifier(this.account.spendSk, BigInt(d.leafIndex)));
+      if (spentIn) ownSpendTx.add(spentIn);
+    }
+    for (const d of discovered) {
+      if (!visibleHistoryAmount(d.plain.amount)) continue;
       const rec = this.scanner.commitments[d.leafIndex];
       if (!rec || journaledTx.has(rec.txHash)) continue;
+      if (ownSpendTx.has(rec.txHash)) continue;
+      const key = `${rec.txHash}:${d.plain.amount.toString()}:${d.plain.recipientPk.toString()}:${d.plain.blinding.toString()}`;
+      if (seenIncoming.has(key)) continue;
+      seenIncoming.add(key);
       // Skip self-change notes already represented by a journaled send/shield.
       items.push({
         type: "receive",
@@ -727,6 +747,18 @@ export class BenzoClient {
       });
     }
     return items.sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  /** Public nullifiers observed for a settlement transaction. */
+  nullifiersForTxHash(txHash: string): bigint[] {
+    return [...this.scanner.nullifierRecords.values()]
+      .filter((r) => r.txHash === txHash)
+      .map((r) => r.nullifier);
+  }
+
+  /** Transaction hash that spent a given nullifier, if scanner state has it. */
+  txHashForNullifier(nullifier: bigint): string | undefined {
+    return this.scanner.nullifierTxHash(nullifier);
   }
 
   /** Last durable-write failure, if any (so `flush()` callers can detect a
@@ -1885,8 +1917,13 @@ export class BenzoClient {
     if (v == null) return null;
     const r = v as Record<string, unknown>;
     const status = r.status as { tag?: string } | string | undefined;
+    const statusTag = Array.isArray(status)
+      ? String(status[0] ?? "")
+      : typeof status === "object"
+        ? String(status?.tag ?? "")
+        : String(status);
     return {
-      status: typeof status === "object" ? String(status?.tag) : String(status),
+      status: statusTag,
       amount: BigInt(String(r.amount ?? 0)),
       minAmount: BigInt(String(r.min_amount ?? 0)),
       paidTotal: BigInt(String(r.paid_total ?? 0)),

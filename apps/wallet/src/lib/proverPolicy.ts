@@ -17,6 +17,12 @@
 import type { ProverKind } from "./api";
 import { TEE_CONFIG } from "./network";
 
+export interface ProverPlan {
+  onDevice: boolean;
+  kind: ProverKind;
+  reason: string;
+}
+
 /** Coarse pointer + touch points ⇒ a phone/tablet (no mouse). */
 function isTouchFirst(): boolean {
   if (typeof navigator === "undefined" || typeof window === "undefined") return false;
@@ -61,7 +67,7 @@ export function apiProverKind(kind: ProverKind, teeAvailable = false): ProverKin
 }
 
 /** One-liner for UI copy / telemetry: how this device will prove. */
-export function proverPlan(teeAvailable: boolean): { onDevice: boolean; kind: ProverKind; reason: string } {
+export function proverPlan(teeAvailable: boolean): ProverPlan {
   if (preferDeviceProving()) return { onDevice: true, kind: "local", reason: "Capable device - proving on-device, witness stays here" };
   const kind = delegatedProverKind(teeAvailable);
   return {
@@ -69,4 +75,22 @@ export function proverPlan(teeAvailable: boolean): { onDevice: boolean; kind: Pr
     kind,
     reason: "Low-power device - delegating to the attested secure enclave (TEE)",
   };
+}
+
+/**
+ * UI copy for proofs that cross the wallet API boundary. Browser-local proving
+ * is only true when the browser owns the whole proof+submit path; API-bound
+ * actions delegate to the attested TEE so Vercel/serverless never handles a
+ * user witness.
+ */
+export function apiBoundaryProverPlan(plan: ProverPlan, teeAvailable = false): ProverPlan {
+  const kind = apiProverKind(plan.kind, teeAvailable);
+  if (kind === "tee") {
+    return {
+      onDevice: false,
+      kind,
+      reason: "Proof runs in the attested secure enclave (TEE); Vercel never proves with your witness",
+    };
+  }
+  return { ...plan, kind };
 }

@@ -11,8 +11,8 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AlertTriangle, AtSign, Globe, Send as SendIcon, ShieldCheck, Smartphone, UserPlus } from "lucide-react";
-import { api, type ProverKind, type SettleResult } from "../lib/api";
-import { proverPlan } from "../lib/proverPolicy";
+import { api, currentGoogleCredential, type ProverKind, type SettleResult } from "../lib/api";
+import { apiBoundaryProverPlan, proverPlan } from "../lib/proverPolicy";
 import { useSendStream } from "../lib/useSendStream";
 import { shouldLockOnSend, requireUnlock } from "../lib/lock";
 import { mergeContacts } from "../lib/contacts";
@@ -61,6 +61,7 @@ export function Send() {
   const [to, setTo] = useState(() => params.get("to") ?? ""); // prefilled from Contacts / a request
   const [amount, setAmount] = useState(() => params.get("amount") ?? "");
   const [memo, setMemo] = useState(() => params.get("memo") ?? "");
+  const requestId = params.get("requestId") ?? undefined;
   const [step, setStep] = useState<Step>("form");
   const [stepUp, setStepUp] = useState(false); // C5: just-in-time ID step-up sheet
   const [firing, setFiring] = useState(false); // double-tap guard: requireUnlock() awaits before the overlay shows
@@ -77,6 +78,11 @@ export function Send() {
   const plan = useMemo(() => proverPlan(teeAvailable), [teeAvailable]);
   const recipient = to.trim();
   const kind = useMemo(() => (recipient ? classify(recipient) : null), [recipient]);
+  const hostedPrivateSend = kind === "handle" && !!currentGoogleCredential();
+  const effectivePrivatePlan = useMemo(
+    () => hostedPrivateSend ? apiBoundaryProverPlan(plan, teeAvailable) : plan,
+    [hostedPrivateSend, plan, teeAvailable],
+  );
   // Looks like a wallet address but the checksum doesn't add up - a typo'd key.
   // Surface this clearly instead of routing it to the "invite" flow or paying it.
   const badAddress = useMemo(() => looksLikeStellarAddressInput(recipient) && !isValidStellarAddress(recipient), [recipient]);
@@ -96,7 +102,7 @@ export function Send() {
     amount: receipt?.amount ?? toStroopsSafe(amount),
     recipient: display,
     memo: memo || undefined,
-    prover: receipt?.prover ?? plan.kind,
+    prover: receipt?.prover ?? effectivePrivatePlan.kind,
     onChain: receipt?.onChain ?? false, // honesty-bearing flag: fail honest, not optimistic
     txHash: receipt?.txHash,
     provingMs: receipt?.provingMs,
@@ -132,7 +138,7 @@ export function Send() {
         return;
       }
       // "Send privately" - the @handle path: real 3-phase ZK ceremony.
-      await run(recipient, amount, memo || undefined, plan.kind);
+      await run(recipient, amount, memo || undefined, effectivePrivatePlan.kind, teeAvailable, requestId);
       void refresh();
     } finally {
       setFiring(false);
@@ -252,7 +258,7 @@ export function Send() {
             address={kind === "address" ? recipient : undefined}
             amount={toStroopsSafe(amount)}
             memo={memo}
-            plan={plan}
+            plan={effectivePrivatePlan}
             isNewRecipient={!known && kind === "handle"}
             firing={firing || pubPhase === "busy"}
             pubErr={kind === "address" ? pubErr : null}

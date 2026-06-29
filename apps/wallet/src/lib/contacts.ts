@@ -10,8 +10,8 @@ const LS = "benzo.contacts.local.v1";
 
 /** Normalize to a leading-@ handle so "alice" and "@alice" are the same key. */
 export function normHandle(h: string): string {
-  const t = h.trim().replace(/^@+/, "");
-  return t ? `@${t}` : "";
+  const t = h.trim().replace(/^@+/, "").toLowerCase();
+  return /^[a-z0-9_.]{3,20}$/.test(t) ? `@${t}` : "";
 }
 
 export function listLocal(): Contact[] {

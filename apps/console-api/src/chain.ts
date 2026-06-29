@@ -45,8 +45,26 @@ const DEPLOYMENT_URL = new URL("../../../deployments/testnet.json", import.meta.
 const WALLET = process.env.BENZO_CONSOLE_ACCOUNT || join(homedir(), ".benzo", "console", "account.json");
 const STATE = process.env.BENZO_CONSOLE_STATE || join(dirname(WALLET), "state.json");
 const TX_SOURCE = "benzo-deployer";
+const RELAY_SOURCE = "benzo-relayer";
+const OPERATOR_ADMIN_SOURCE = "benzo-operator-admin";
+const HOSTED_ORG_SOURCE = "benzo-hosted-console-org";
 /** The deployment record (set when the live client is built) — for the MVK registry. */
 let deployment: Record<string, unknown> | null = null;
+
+function operatorAdminSecret(): string | null {
+  return process.env.BENZO_OPERATOR_ADMIN_SECRET
+    ?? process.env.BENZO_CONSOLE_ADMIN_SECRET
+    ?? (hostedRuntime() ? null : process.env.DEPLOYER_SECRET)
+    ?? null;
+}
+
+function operatorAdminSource(): string {
+  return hostedRuntime() ? OPERATOR_ADMIN_SOURCE : TX_SOURCE;
+}
+
+function consoleOrgSource(): string {
+  return hostedRuntime() ? HOSTED_ORG_SOURCE : TX_SOURCE;
+}
 
 /** Durable note-discovery + journal store (atomic-write JSON file). */
 class FileKVStore {
@@ -100,17 +118,31 @@ function chainClientForRuntime(): ChainClient {
   if (!orgSecret || !orgAddress) throw new Error("Hosted console account has no Stellar public-edge signer");
   const relayerSecret = process.env.RELAYER_SECRET;
   if (!relayerSecret) throw new Error("RELAYER_SECRET is required for hosted console relay signing");
+  const adminSecret = operatorAdminSecret();
   const relayerAddress = Keypair.fromSecret(relayerSecret).publicKey();
+  const adminAddress = adminSecret ? Keypair.fromSecret(adminSecret).publicKey() : "";
   const server = new rpc.Server(cfg.rpcUrl, { allowHttp: cfg.rpcUrl.startsWith("http://") });
-  const signerFor = (source: string) =>
-    source === "benzo-relayer"
-      ? LocalKeypairSigner.fromSecret(relayerSecret)
-      : LocalKeypairSigner.fromSecret(orgSecret);
-  const addressFor = (source: string) => source === "benzo-relayer" ? relayerAddress : orgAddress;
+  const signerFor = (source: string) => {
+    if (source === RELAY_SOURCE) return LocalKeypairSigner.fromSecret(relayerSecret);
+    if (source === OPERATOR_ADMIN_SOURCE) {
+      if (!adminSecret) throw new Error("BENZO_OPERATOR_ADMIN_SECRET is required for admin-gated console operations");
+      return LocalKeypairSigner.fromSecret(adminSecret);
+    }
+    return LocalKeypairSigner.fromSecret(orgSecret);
+  };
+  const addressFor = (source: string) => {
+    if (source === RELAY_SOURCE) return relayerAddress;
+    if (source === OPERATOR_ADMIN_SOURCE) {
+      if (!adminAddress) throw new Error("BENZO_OPERATOR_ADMIN_SECRET is required for admin-gated console operations");
+      return adminAddress;
+    }
+    return orgAddress;
+  };
   const submitWrite = async (opts: { contractId: string; source: string; fnArgs: string[] }) =>
     makeClientSubmitWrite({
       server,
       signer: signerFor(opts.source),
+      feeBumpSigner: opts.source === HOSTED_ORG_SOURCE ? LocalKeypairSigner.fromSecret(relayerSecret) : undefined,
       networkPassphrase: cfg.networkPassphrase,
       addressFor,
     })(opts);
@@ -163,8 +195,8 @@ export function getClient(relayer = false): BenzoClient | null {
         BENZO_PROVER_LOCAL_CIRCUITS: process.env.BENZO_PROVER_LOCAL_CIRCUITS ?? "",
       }),
       rpcUrl: process.env.SOROBAN_RPC_URL,
-      txSource: "benzo-deployer",
-      relayer: relayer ? { source: "benzo-relayer", address: relayerAddress() } : undefined,
+      txSource: consoleOrgSource(),
+      relayer: relayer ? { source: RELAY_SOURCE, address: relayerAddress() } : undefined,
       handleRegistry: dep.handleRegistry,
       requestRegistry: dep.requestRegistry,
       store: new FileKVStore(statePath()),
@@ -263,7 +295,7 @@ export async function treasurySendPublic(toAddress: string, amount: string): Pro
     if (stroops > liquid) return { onChain: false, error: "Not enough in your Public balance to send that." };
     const r = await c.opts.cli.invoke({
       contractId: token,
-      source: TX_SOURCE,
+      source: consoleOrgSource(),
       send: true,
       // SAC transfer(from, to, amount) — `from` is the treasury's custodial account.
       fnArgs: ["transfer", "--from", from, "--to", to, "--amount", stroops.toString()],
@@ -300,7 +332,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<void> {
   let leaves = await fetchMvkRegistryLeaves(rpc, registry, 1);
   let onchain = BigInt((await c.opts.cli.view(registry, TX_SOURCE, ["current_root"])) as string);
   if (!leaves.includes(myLeaf)) {
-    await c.opts.cli.invoke({ contractId: registry, source: TX_SOURCE, send: true, fnArgs: ["register_mvk", "--mvk_pub", myMvk.toString(), "--key_meta", "0"] });
+    await c.opts.cli.invoke({ contractId: registry, source: operatorAdminSource(), send: true, fnArgs: ["register_mvk", "--mvk_pub", myMvk.toString(), "--key_meta", "0"] });
   }
   for (let attempt = 0; attempt < 12; attempt++) {
     const reg = new MvkRegistryMirror();
@@ -343,7 +375,7 @@ export async function registerOwnerMvk(): Promise<{ onChain: boolean; txHash?: s
   let leaves = await fetchMvkRegistryLeaves(rpc, registry, 1);
   let txHash: string | undefined;
   if (!leaves.includes(myLeaf)) {
-    const r = await c.opts.cli.invoke({ contractId: registry, source: TX_SOURCE, send: true, fnArgs: ["register_mvk", "--mvk_pub", myMvk.toString(), "--key_meta", "0"] });
+    const r = await c.opts.cli.invoke({ contractId: registry, source: operatorAdminSource(), send: true, fnArgs: ["register_mvk", "--mvk_pub", myMvk.toString(), "--key_meta", "0"] });
     txHash = r.txHash;
   }
   mvkWired.delete(c); // force a fresh mirror that includes our (possibly new) leaf
@@ -424,7 +456,7 @@ async function ensureOrgSetup(c: BenzoClient): Promise<void> {
   if (current !== org.memberRoot.toString()) {
     await c.opts.cli.invoke({
       contractId: orgContract,
-      source: TX_SOURCE,
+      source: operatorAdminSource(),
       send: true,
       fnArgs: ["set_member_root", "--org_id", setupKey, "--root", org.memberRoot.toString()],
     });
@@ -467,7 +499,7 @@ async function ensureOrgRegistered(c: BenzoClient, org: string): Promise<void> {
   if (!admin) throw new Error("deployment missing admin address for org registration");
   await c.opts.cli.invoke({
     contractId: org,
-    source: TX_SOURCE,
+    source: operatorAdminSource(),
     send: true,
     fnArgs: [
       "register_org",
@@ -491,11 +523,19 @@ export async function attestKyb(approve: boolean): Promise<{ onChain: boolean; s
   const inquiryRef = Date.now().toString(); // ties the on-chain record to the provider case file
   const r = await c.opts.cli.invoke({
     contractId: org,
-    source: TX_SOURCE,
+    source: operatorAdminSource(),
     send: true,
     fnArgs: ["attest_kyb", "--org_id", kybOrgId(), "--status", approve ? "Approved" : "Rejected", "--inquiry_ref", inquiryRef],
   });
-  const after = await getKybStatus();
+  const expected = approve ? "approved" : "rejected";
+  let after = await getKybStatus();
+  for (let attempt = 0; after.status !== expected && attempt < 20; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 750 + attempt * 150));
+    after = await getKybStatus();
+  }
+  if (after.status !== expected) {
+    throw new Error(`KYB attestation submitted but chain read returned ${after.status}`);
+  }
   return { onChain: true, status: after.status, txHash: r.txHash, inquiryRef };
 }
 
@@ -534,7 +574,7 @@ export async function fundTreasury(amountStroops: string): Promise<{ onChain: bo
     await wireMvkRegistry(c);
     await ensureOrgSetup(c);
     const org = await getOrg(c);
-    const r = await c.fundTreasury({ org, amount: BigInt(amountStroops), fromAddress: from, fromSource: TX_SOURCE });
+    const r = await c.fundTreasury({ org, amount: BigInt(amountStroops), fromAddress: from, fromSource: consoleOrgSource() });
     await c.flush();
     bustTreasuryCache();
     return { onChain: true, txHash: r.txHash };
@@ -579,6 +619,7 @@ export function liveStatus(): { live: boolean; mode: "live" | "unavailable"; mis
     if (!process.env.BENZO_ACCOUNT_SALT && !process.env.BENZO_AUTH_SALT) missing.push("BENZO_ACCOUNT_SALT");
     if (!process.env.RELAYER_SECRET) missing.push("RELAYER_SECRET");
     if (!process.env.BENZO_PRIVATE_EVENT_SECRET) missing.push("BENZO_PRIVATE_EVENT_SECRET");
+    if (!operatorAdminSecret()) missing.push("BENZO_OPERATOR_ADMIN_SECRET");
   } else if (!process.env.DEPLOYER_SECRET) {
     missing.push("DEPLOYER_SECRET");
   }
@@ -652,7 +693,7 @@ export async function anchorPrivateAuditRoot(input: {
     const sequence = BigInt(String(seqRaw ?? 0)).toString();
     const res = await c.opts.cli.invoke({
       contractId,
-      source: TX_SOURCE,
+      source: operatorAdminSource(),
       send: true,
       fnArgs: [
         "anchor_root",

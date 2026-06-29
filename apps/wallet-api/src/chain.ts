@@ -45,7 +45,7 @@ import {
   type ProverPort,
 } from "@benzo/core";
 import { encodeBenzoLink } from "@benzo/links";
-import { db, nowSec, type ActivityRow, type WalletInvite } from "./store.js";
+import { db, nowSec, type ActivityRow, type WalletInvite, type WalletLedgerEntry, type WalletLedgerSource } from "./store.js";
 import { accountFingerprint, currentAuth } from "./auth.js";
 import { hostedRuntime } from "./runtime.js";
 
@@ -132,6 +132,20 @@ class FileKVStore {
   }
 }
 
+/** Hosted core scanner/journal state belongs inside the encrypted wallet tenant
+ * document, not a shared server temp file. */
+class TenantKVStore {
+  async get(key: string): Promise<string | null> {
+    db.coreState ??= {};
+    return db.coreState[key] ?? null;
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    db.coreState ??= {};
+    db.coreState[key] = value;
+  }
+}
+
 let dep: Record<string, string | number> | null = null;
 function deployment(): Record<string, string | number> {
   if (!dep) {
@@ -199,6 +213,10 @@ function statePath(): string {
     return process.env.BENZO_WALLET_STATE || join(tmpdir(), "benzo-wallet-hosted-state.json");
   }
   return STATE;
+}
+
+function coreStateStore(): FileKVStore | TenantKVStore {
+  return hostedRuntime() ? new TenantKVStore() : new FileKVStore(statePath());
 }
 
 function chainClientForRuntime(): ChainClient {
@@ -292,7 +310,7 @@ export function getClient(prover: ProverKind = hostedRuntime() ? "tee" : "local"
       aspSource: hostedRuntime() ? operatorAdminSource() : "benzo-deployer",
       handleRegistry: d.handleRegistry as string,
       requestRegistry: d.requestRegistry as string,
-      store: new FileKVStore(statePath()),
+      store: coreStateStore(),
     });
     c.useAccount(loadWalletAccount());
     clients.set(key, c);
@@ -330,7 +348,8 @@ export function proverInfo(): { available: ProverKind[]; tee: { endpoint: string
   return { available: tee ? ["local", "tee"] : ["local"], tee };
 }
 
-const hostedProvisioning = new Map<string, Promise<void>>();
+const hostedProvisioning = new Map<string, Promise<string>>();
+const hostedRpcVisibility = new Map<string, Promise<void>>();
 
 /**
  * The wallet's public Stellar address (the on/off-ramp edge). The durable account
@@ -398,14 +417,31 @@ async function waitForHostedRpcAccount(accountAddress: string): Promise<void> {
   throw new Error(`Hosted wallet account is not visible to Soroban RPC yet: ${String((lastErr as Error)?.message ?? lastErr)}`);
 }
 
-async function ensureHostedPublicAccount(): Promise<void> {
+async function waitForHostedRpcReady(authKey: string, accountAddress: string): Promise<void> {
+  const cached = hostedRpcVisibility.get(authKey);
+  if (cached) return cached;
+  const work = waitForHostedRpcAccount(accountAddress);
+  hostedRpcVisibility.set(authKey, work);
+  try {
+    await work;
+  } catch (e) {
+    hostedRpcVisibility.delete(authKey);
+    throw e;
+  }
+}
+
+async function ensureHostedPublicAccount(opts: { waitForRpc?: boolean } = {}): Promise<void> {
   if (!hostedRuntime()) return;
   const auth = currentAuth();
   if (!auth?.account.stellarSecret || !auth.account.stellarAddress) throw new Error("Hosted wallet account has no public-edge signer");
   const accountSecret = auth.account.stellarSecret;
   const accountAddress = auth.account.stellarAddress;
   const cached = hostedProvisioning.get(auth.key);
-  if (cached) return cached;
+  if (cached) {
+    const address = await cached;
+    if (opts.waitForRpc !== false) await waitForHostedRpcReady(auth.key, address);
+    return;
+  }
   const work = (async () => {
     const sponsorSecret = process.env.RELAYER_SECRET;
     if (!sponsorSecret) throw new Error("RELAYER_SECRET is required for hosted wallet onboarding");
@@ -430,13 +466,15 @@ async function ensureHostedPublicAccount(): Promise<void> {
         newAccountSecret: accountSecret,
       });
     }
-    await waitForHostedRpcAccount(accountAddress);
+    return accountAddress;
   })();
   hostedProvisioning.set(auth.key, work);
   try {
-    await work;
+    const address = await work;
+    if (opts.waitForRpc !== false) await waitForHostedRpcReady(auth.key, address);
   } catch (e) {
     hostedProvisioning.delete(auth.key);
+    hostedRpcVisibility.delete(auth.key);
     throw e;
   }
 }
@@ -532,6 +570,18 @@ const DIRECTION: Record<string, "in" | "out"> = {
   receive: "in", shield: "in", cashIn: "in", send: "out", unshield: "out", cashOut: "out",
 };
 
+const LEDGER_ACTIVITY: Record<WalletLedgerSource, { type: string; name: string; note: string; direction: "in" | "out"; tone: ActivityRow["tone"] }> = {
+  onramp: { type: "shield", name: "Added money", note: "From testnet reserve", direction: "in", tone: "accent" },
+  offramp: { type: "unshield", name: "Cash out", note: "To testnet reserve", direction: "out", tone: "amber" },
+  import: { type: "shield", name: "Added money", note: "Imported from Public balance", direction: "in", tone: "accent" },
+  make_public: { type: "unshield", name: "Made public", note: "Moved to Public balance", direction: "out", tone: "amber" },
+  send_public: { type: "send", name: "You sent", note: "Public send", direction: "out", tone: "neutral" },
+  send_private: { type: "send", name: "You sent", note: "Sent privately", direction: "out", tone: "neutral" },
+  invite_fund: { type: "send", name: "Invite funded", note: "Pending claim link", direction: "out", tone: "neutral" },
+  invite_claim: { type: "receive", name: "Invite claimed", note: "Claimed funded link", direction: "in", tone: "accent" },
+  invite_refund: { type: "receive", name: "Invite refunded", note: "Returned to Private balance", direction: "in", tone: "accent" },
+};
+
 /** Friendly display name + note for an edge (cash/shield) vs a person (send/receive). */
 function nameFor(type: string, counterparty?: string): { name: string; note: string } {
   if (type === "shield" || type === "cashIn") return { name: "Added money", note: "From testnet reserve" };
@@ -541,19 +591,56 @@ function nameFor(type: string, counterparty?: string): { name: string; note: str
   return { name: friendly ? counterparty! : NOTE[type]?.() ?? type, note: NOTE[type]?.() ?? type };
 }
 
+function ledgerAmount(e: WalletLedgerEntry): string {
+  const preferred = e.lines.find((l) => l.accountId === "private" || l.accountId === "public" || l.accountId === "claim_escrow");
+  if (preferred?.amount) return preferred.amount;
+  if (e.requestedAmount) {
+    try {
+      return toStroops(e.requestedAmount).toString();
+    } catch {
+      return "0";
+    }
+  }
+  return "0";
+}
+
+function ledgerActivityRow(e: WalletLedgerEntry, i: number): ActivityRow | null {
+  const meta = LEDGER_ACTIVITY[e.sourceType];
+  if (!meta) return null;
+  const amount = ledgerAmount(e);
+  return {
+    id: `ledger_${i}_${e.id}`,
+    type: meta.type,
+    name: meta.name,
+    note: e.status === "failed" && e.error ? `${meta.note} · ${e.error}` : meta.note,
+    amount,
+    direction: meta.direction,
+    status: e.status,
+    timestamp: e.postedAt,
+    txHash: e.txId,
+    tone: meta.tone,
+  };
+}
+
 export async function getActivity(): Promise<ActivityRow[]> {
   const c = getClient();
   if (c) {
     await c.sync();
+    const ledgerRows = (db.ledger ?? [])
+      .map(ledgerActivityRow)
+      .filter((r): r is ActivityRow => !!r && BigInt(r.amount || "0") > 0n);
+    const ledgerTxs = new Set(ledgerRows.map((r) => r.txHash).filter(Boolean));
     const items = c.getHistory();
-    return items
+    const chainRows = items
+      .filter((h) => !h.txHash || !ledgerTxs.has(h.txHash))
       .map((h, i): ActivityRow => {
         const { name, note } = nameFor(h.type, h.counterparty);
+        const memo = displayMemo(h.memo);
         return {
           id: `h_${i}_${h.txHash ?? h.timestamp}`,
           type: h.type,
           name,
-          note: `${note}${h.memo ? ` · ${h.memo}` : ""}`,
+          note: `${note}${memo ? ` · ${memo}` : ""}`,
           amount: h.amount,
           direction: DIRECTION[h.type] ?? "out",
           status: h.status === "settled" ? "settled" : h.status === "failed" ? "failed" : "proving",
@@ -561,8 +648,8 @@ export async function getActivity(): Promise<ActivityRow[]> {
           txHash: h.txHash,
           tone: DIRECTION[h.type] === "in" ? "accent" : h.type.startsWith("cash") || h.type === "unshield" ? "amber" : "neutral",
         };
-      })
-      .sort((a, b) => b.timestamp - a.timestamp);
+      });
+    return [...ledgerRows, ...chainRows].sort((a, b) => b.timestamp - a.timestamp);
   }
   return [];
 }
@@ -577,7 +664,29 @@ export interface SettleResult {
   amount: string;
   onChain: boolean;
   sorobanPublics?: string[];
+  nullifier?: string;
+  requestId?: string;
   error?: string;
+}
+
+function requestPaymentMemo(requestId: string, memo: string | undefined): string {
+  const id = requestId.trim();
+  return memo ? `req:${id}|${memo}` : `req:${id}`;
+}
+
+function parseRequestPaymentMemo(memo: string | undefined): { requestId: string; memo?: string } | null {
+  if (!memo?.startsWith("req:")) return null;
+  const raw = memo.slice(4);
+  const sep = raw.indexOf("|");
+  if (sep < 0) return raw ? { requestId: raw } : null;
+  const requestId = raw.slice(0, sep);
+  if (!requestId) return null;
+  const humanMemo = raw.slice(sep + 1);
+  return { requestId, memo: humanMemo || undefined };
+}
+
+function displayMemo(memo: string | undefined): string | undefined {
+  return parseRequestPaymentMemo(memo)?.memo ?? memo;
 }
 
 function latestSettledTx(c: BenzoClient, type: "shield" | "unshield", amount: bigint): string | undefined {
@@ -624,6 +733,97 @@ export function classifyRecipient(to: string): "handle" | "address" | "invite" {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isPrivateStateLag(e: unknown): boolean {
+  return /out of sync|pool tree mirror|ASP membership mirror|not synced to the on-chain root|unknown root|WrongAspRoot|MvkRegistryMirror|is_known_root].*false|Error\(Contract, #(5|8)\)|timed out/i
+    .test(String((e as Error)?.message ?? e));
+}
+
+async function flushBestEffort(c: BenzoClient, label: string): Promise<void> {
+  try {
+    await withTimeout(c.flush(), 45_000, label);
+  } catch (e) {
+    console.warn(`[wallet-api] ${label} failed after settlement`, errorSummary(e));
+  }
+}
+
+async function privateDebitLooksSettled(c: BenzoClient, before: bigint, amount: bigint): Promise<boolean> {
+  const target = before - amount;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await c.sync();
+      if (await c.getBalance() <= target) return true;
+    } catch {
+      /* retry below */
+    }
+    await sleep(900 + attempt * 300);
+  }
+  return false;
+}
+
+async function privateSendToHandle(
+  c: BenzoClient,
+  handle: string,
+  amount: bigint,
+  memo: string | undefined,
+  prover: ProverKind,
+  requestId?: string,
+  onPhase?: PhaseSink,
+): Promise<SettleResult> {
+  const before = await c.getBalance();
+  try {
+    const sh = await c.sendToHandle({ handle: handle.replace(/^@/, ""), amount, memo, useRelayer: false });
+    sh.onProgress((e: { status?: string }) => {
+      if (e.status === "proving") onPhase?.({ phase: "proving" });
+    });
+    const r = await sh.settled();
+    let txHash = r?.txHash;
+    if (!txHash && r?.nullifier) {
+      try {
+        await c.sync();
+        txHash = c.txHashForNullifier(r.nullifier);
+      } catch {
+        /* best effort */
+      }
+    }
+    onPhase?.({ phase: "submitting", provingMs: r?.provingMs, txHash });
+    await flushBestEffort(c, "private send flush");
+    onPhase?.({ phase: "confirmed", txHash, provingMs: r?.provingMs, onChain: true });
+    return {
+      status: "settled",
+      txHash,
+      provingMs: r?.provingMs,
+      prover,
+      amount: amount.toString(),
+      onChain: true,
+      sorobanPublics: r?.sorobanPublics,
+      nullifier: r?.nullifier?.toString(),
+      requestId,
+    };
+  } catch (e) {
+    if (isPrivateStateLag(e) && await privateDebitLooksSettled(c, before, amount)) {
+      onPhase?.({ phase: "submitting" });
+      await flushBestEffort(c, "private send recovery flush");
+      onPhase?.({ phase: "confirmed", onChain: true });
+      return { status: "settled", prover, amount: amount.toString(), onChain: true, requestId };
+    }
+    throw e;
+  }
+}
+
 /**
  * Unified consumer send with live phase events for the 3-phase ceremony. A
  * `@handle` is a private shielded transfer; a `G…` Stellar address is a public
@@ -635,6 +835,7 @@ export async function send(
   amount: string,
   memo: string | undefined,
   prover: ProverKind,
+  requestId?: string,
   onPhase?: PhaseSink,
 ): Promise<SettleResult> {
   const kind = classifyRecipient(to);
@@ -656,21 +857,14 @@ export async function send(
     onPhase?.({ phase: "proving" });
     const wd = await c.unshield({ amount: stroops, toAddress: to.trim() });
     onPhase?.({ phase: "submitting", provingMs: wd.provingMs, txHash: wd.txHash });
-    await c.flush();
+    await flushBestEffort(c, "public payout flush");
     onPhase?.({ phase: "confirmed", txHash: wd.txHash, provingMs: wd.provingMs, onChain: true });
     return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
   }
 
   // private shielded send to a @handle
-  const sh = await c.sendToHandle({ handle: to.replace(/^@/, ""), amount: stroops, memo, useRelayer: false });
-  sh.onProgress((e: { status?: string }) => {
-    if (e.status === "proving") onPhase?.({ phase: "proving" });
-  });
-  const r = await sh.settled();
-  onPhase?.({ phase: "submitting", provingMs: r?.provingMs, txHash: r?.txHash });
-  await c.flush();
-  onPhase?.({ phase: "confirmed", txHash: r?.txHash, provingMs: r?.provingMs, onChain: true });
-  return { status: "settled", txHash: r?.txHash, provingMs: r?.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: r?.sorobanPublics };
+  const chainMemo = requestId ? requestPaymentMemo(requestId, memo) : memo;
+  return privateSendToHandle(c, to, stroops, chainMemo, prover, requestId, onPhase);
 }
 
 export async function sendToHandle(
@@ -678,6 +872,7 @@ export async function sendToHandle(
   amount: string,
   memo: string | undefined,
   prover: ProverKind,
+  requestId?: string,
 ): Promise<SettleResult> {
   const stroops = toStroops(amount);
   const c = getClient(prover);
@@ -685,10 +880,8 @@ export async function sendToHandle(
     await ensureHostedPublicAccount();
     await c.sync();
     await wireMvkRegistry(c);
-    const sh = await c.sendToHandle({ handle: handle.replace(/^@/, ""), amount: stroops, useRelayer: false });
-    const r = await sh.settled();
-    await c.flush();
-    return { status: "settled", txHash: r?.txHash, provingMs: r?.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: r?.sorobanPublics };
+    const chainMemo = requestId ? requestPaymentMemo(requestId, memo) : memo;
+    return privateSendToHandle(c, handle, stroops, chainMemo, prover, requestId);
   }
   throw new RampError("busy", "Live testnet client unavailable. No funds were moved.");
 }
@@ -735,6 +928,10 @@ function mapRampError(e: unknown, dir: "in" | "out"): RampError {
   return new RampError("busy", dir === "in" ? "Couldn't add money right now. Your money is safe. Please try again." : "Couldn't cash out right now. Your money is safe. Please try again.");
 }
 
+function isSequenceRace(e: unknown): boolean {
+  return /txbadseq|tx_bad_seq|bad sequence/i.test(String((e as Error)?.message ?? e));
+}
+
 /** Live USDC reserve balance (stroops) — readable by anyone, straight from chain. */
 export async function getRampReserve(): Promise<{ reserve: string; live: boolean }> {
   try {
@@ -766,7 +963,7 @@ async function rampCashIn(c: BenzoClient, to: string, stroops: bigint): Promise<
   }
   const reference = rampRef();
   let last: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     try {
       await c.opts.cli.invoke({
         contractId: ramp,
@@ -779,6 +976,10 @@ async function rampCashIn(c: BenzoClient, to: string, stroops: bigint): Promise<
       last = e;
       const msg = String((e as Error)?.message ?? e);
       console.error("[wallet-api] ramp cash_in failed", errorSummary(e));
+      if (isSequenceRace(e) && attempt < 5) {
+        await sleep(900 + attempt * 600);
+        continue;
+      }
       if (/not confirmed after \d+ polls|duplicateref|#6\b/i.test(msg)) {
         try {
           await waitForLiquidUsdc(c, to, stroops);
@@ -788,7 +989,7 @@ async function rampCashIn(c: BenzoClient, to: string, stroops: bigint): Promise<
           // timed-out tx later lands, the duplicate-ref path falls back to this
           // same balance check instead of dispensing twice.
         }
-        if (attempt < 2) {
+        if (attempt < 5) {
           await sleep(1_500 + attempt * 1_500);
           continue;
         }
@@ -848,24 +1049,35 @@ async function waitForLiquidUsdcAtMost(c: BenzoClient, address: string, maxStroo
 async function rampCashOut(c: BenzoClient, from: string, stroops: bigint): Promise<void> {
   const ramp = rampId();
   if (!ramp) return;
-  try {
-    await c.opts.cli.invoke({
-      contractId: ramp,
-      source: walletUserSource(),
-      send: true,
-      fnArgs: ["cash_out", "--from", from, "--amount", stroops.toString(), "--reference", rampRef()],
-    });
-  } catch (e) {
-    console.error("[wallet-api] ramp cash_out failed", errorSummary(e));
-    throw mapRampError(e, "out");
+  const reference = rampRef();
+  let last: unknown;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      await c.opts.cli.invoke({
+        contractId: ramp,
+        source: walletUserSource(),
+        send: true,
+        fnArgs: ["cash_out", "--from", from, "--amount", stroops.toString(), "--reference", reference],
+      });
+      return;
+    } catch (e) {
+      last = e;
+      console.error("[wallet-api] ramp cash_out failed", errorSummary(e));
+      if (isSequenceRace(e) && attempt < 5) {
+        await sleep(900 + attempt * 600);
+        continue;
+      }
+      throw mapRampError(e, "out");
+    }
   }
+  if (last) throw mapRampError(last, "out");
 }
 
-async function finishRampCashOut(c: BenzoClient, from: string, stroops: bigint): Promise<void> {
+async function finishRampCashOut(c: BenzoClient, from: string, stroops: bigint, expectedPublicAtLeast = stroops): Promise<void> {
   let last: unknown;
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
-      await waitForLiquidUsdc(c, from, stroops);
+      await waitForLiquidUsdc(c, from, expectedPublicAtLeast);
       await rampCashOut(c, from, stroops);
       return;
     } catch (e) {
@@ -893,8 +1105,12 @@ async function shieldLiquidUsdc(
   for (let attempt = 0; attempt < 8; attempt++) {
     try {
       await waitForLiquidUsdc(c, from, stroops);
-      const sh = await c.shield({ amount: stroops, fromAddress: from, fromSource: walletUserSource() });
-      await c.flush();
+      const sh = await withTimeout(
+        c.shield({ amount: stroops, fromAddress: from, fromSource: walletUserSource() }),
+        90_000,
+        "shield submit",
+      );
+      await withTimeout(c.flush(), 45_000, "shield flush");
       const txHash = await waitForShieldedBalanceIncrease(c, before, stroops);
       if (expectedLiquidAfter !== undefined) {
         await waitForLiquidUsdcAtMost(c, from, expectedLiquidAfter);
@@ -910,6 +1126,19 @@ async function shieldLiquidUsdc(
       };
     } catch (e) {
       const msg = String((e as Error)?.message ?? e);
+      if (/shield (submit|flush) timed out/i.test(msg)) {
+        const txHash = await waitForShieldedBalanceIncrease(c, before, stroops);
+        if (txHash !== undefined) {
+          if (expectedLiquidAfter !== undefined) {
+            await waitForLiquidUsdcAtMost(c, from, expectedLiquidAfter);
+          }
+          return { status: "settled", txHash, prover, amount: stroops.toString(), onChain: true };
+        }
+        if (expectedLiquidAfter !== undefined && await waitForLiquidUsdcAtMost(c, from, expectedLiquidAfter)) {
+          return { status: "settled", prover, amount: stroops.toString(), onChain: true };
+        }
+        throw new RampError("busy", "USDC is still settling to your wallet. Please try again in a moment.");
+      }
       if (/out of sync|ASP membership mirror|not synced to the on-chain root|unknown root|WrongAspRoot|Error\(Contract, #(5|8)\)/i.test(msg)) {
         const txHash = await waitForShieldedBalanceIncrease(c, before, stroops);
         if (txHash !== undefined) {
@@ -917,6 +1146,9 @@ async function shieldLiquidUsdc(
             await waitForLiquidUsdcAtMost(c, from, expectedLiquidAfter);
           }
           return { status: "settled", txHash, prover, amount: stroops.toString(), onChain: true };
+        }
+        if (expectedLiquidAfter !== undefined && await waitForLiquidUsdcAtMost(c, from, expectedLiquidAfter)) {
+          return { status: "settled", prover, amount: stroops.toString(), onChain: true };
         }
         last = e;
         console.warn("[wallet-api] shield mirror lag before settlement; retrying shield", {
@@ -956,14 +1188,26 @@ export async function cashOut(amount: string, prover: ProverKind): Promise<Settl
     await ensureHostedPublicAccount();
     await c.sync();
     await wireMvkRegistry(c);
+    const privateBalance = await c.getBalance();
+    if (stroops > privateBalance) {
+      throw new RampError("balance", "That's more than your private balance.");
+    }
     // Unshield to the wallet's own public Stellar address (the off-ramp edge),
     // then hand that USDC to the on-chain ramp reserve (the anchor absorbs it;
     // the fiat payout is the only simulated leg).
     const to = await selfAddress(c);
+    const token = deployment().token as string;
+    let liquidBefore = 0n;
+    try {
+      liquidBefore = await publicBalanceOf(c, token, to);
+    } catch {
+      liquidBefore = 0n;
+    }
+    const expectedLiquid = liquidBefore + stroops;
     try {
       const wd = await c.unshield({ amount: stroops, toAddress: to });
-      await c.flush();
-      await finishRampCashOut(c, to, stroops);
+      await flushBestEffort(c, "cash-out unshield flush");
+      await finishRampCashOut(c, to, stroops, expectedLiquid);
       return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
     } catch (e) {
       // The unshield submit can settle and make liquid USDC visible before the
@@ -971,13 +1215,13 @@ export async function cashOut(amount: string, prover: ProverKind): Promise<Settl
       // off-ramp atomic from the user's point of view by finishing the reserve
       // cash_out leg instead of leaving public USDC stranded.
       if (/out of sync/.test((e as Error).message)) {
-        await finishRampCashOut(c, to, stroops);
-        await c.flush();
+        await finishRampCashOut(c, to, stroops, expectedLiquid);
+        await flushBestEffort(c, "cash-out recovery flush");
         return { status: "settled", prover, amount: stroops.toString(), onChain: true };
       }
       if (/resulting balance is not within the allowed range|Error\(Contract, #10\)/i.test(String((e as Error).message ?? e))) {
-        await finishRampCashOut(c, to, stroops);
-        await c.flush();
+        await finishRampCashOut(c, to, stroops, expectedLiquid);
+        await flushBestEffort(c, "cash-out reserve recovery flush");
         return { status: "settled", prover, amount: stroops.toString(), onChain: true };
       }
       if (/UnknownRoot|is_known_root].*false|Error\(Contract, #5\)/is.test(String((e as Error).message ?? e))) {
@@ -985,9 +1229,12 @@ export async function cashOut(amount: string, prover: ProverKind): Promise<Settl
         await c.sync();
         await wireMvkRegistry(c);
         const wd = await c.unshield({ amount: stroops, toAddress: to });
-        await c.flush();
-        await finishRampCashOut(c, to, stroops);
+        await flushBestEffort(c, "cash-out retry flush");
+        await finishRampCashOut(c, to, stroops, expectedLiquid);
         return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
+      }
+      if (/shielded balance is too fragmented/i.test(String((e as Error).message ?? e))) {
+        throw new RampError("busy", "Your private balance is still consolidating. Try again in a moment, or cash out a smaller amount.");
       }
       throw e;
     }
@@ -1045,18 +1292,45 @@ export async function addMoney(amount: string, prover: ProverKind = "local"): Pr
 /** The wallet's public deposit address + its current LIQUID (unshielded) USDC. */
 export async function getDepositInfo(): Promise<{ address: string; liquid: string; asset: string; issuer: string; live: boolean }> {
   try {
+    const [asset, issuer] = String(deployment().usdcAsset ?? "USDC:").split(":");
+    if (hostedRuntime()) {
+      const auth = currentAuth();
+      const address = auth?.account.stellarAddress;
+      if (!address) throw new Error("Hosted wallet account has no public-edge address");
+      let provisioned = false;
+      try {
+        await withTimeout(ensureHostedPublicAccount({ waitForRpc: false }), 8_000, "deposit account provisioning");
+        provisioned = true;
+      } catch (e) {
+        // A receive address is still deterministic and safe to display. The UI
+        // must not hang behind Horizon/RPC lag; the next poll will pick up
+        // provisioning and liquid balance once the network catches up.
+        console.warn("[wallet-api] deposit account provisioning still pending", e instanceof Error ? e.message : e);
+      }
+      let liquid = "0";
+      if (provisioned) {
+        try {
+          const token = deployment().token as string;
+          const cli = chainClientForRuntime();
+          liquid = String(await withTimeout(cli.view(token, walletUserSource(), ["balance", "--id", address]), 5_000, "deposit balance"));
+        } catch (e) {
+          console.warn("[wallet-api] public balance unavailable; treating as zero", e instanceof Error ? e.message : e);
+        }
+      }
+      return { address, liquid, asset: asset || "USDC", issuer: issuer || "", live: provisioned };
+    }
     const c = getClient();
     if (!c) throw new Error("Live testnet client unavailable.");
-    await ensureHostedPublicAccount();
+    await ensureHostedPublicAccount({ waitForRpc: false });
     const address = await selfAddress(c);
     const token = deployment().token as string;
-    const [asset, issuer] = String(deployment().usdcAsset ?? "USDC:").split(":");
     let liquid = "0";
     try {
-      liquid = String(await c.opts.cli.view(token, walletUserSource(), ["balance", "--id", address]));
+      liquid = String(await withTimeout(c.opts.cli.view(token, walletUserSource(), ["balance", "--id", address]), 5_000, "deposit balance"));
     } catch (e) {
       // A newly sponsored account can have no SAC balance entry until the first
-      // USDC lands. The deposit address is still valid; liquid USDC is 0.
+      // USDC lands. Soroban RPC can also lag after sponsorship. The deposit
+      // address is still valid; liquid USDC is 0 until the balance read catches up.
       console.warn("[wallet-api] public balance unavailable; treating as zero", e instanceof Error ? e.message : e);
     }
     return { address, liquid, asset: asset || "USDC", issuer: issuer || "", live: true };
@@ -1314,10 +1588,150 @@ export async function createRequest(amount: string | undefined, memo: string | u
       amount: amount ? toStroops(amount) : undefined,
       expiry: nowSec() + 7 * 86_400,
       memo,
+      register: true,
+      payeeSource: walletUserSource(),
     });
     return { ...r, link: walletRouteLink(r.link) };
   }
   throw new Error("Live testnet client unavailable. Request was not registered.");
+}
+
+export async function getMoneyRequestStatus(id: string): Promise<{
+  id: string;
+  status: "open" | "partially_paid" | "paid" | "expired" | "cancelled" | "missing";
+  amount?: string;
+  minAmount?: string;
+  paidTotal?: string;
+  expiry?: number;
+  onChain: boolean;
+}> {
+  const c = getClient();
+  if (!c) throw new Error("Live testnet client unavailable. Request status was not read.");
+  const r = await c.getRequest(id);
+  if (!r) return { id, status: "missing", onChain: false };
+  const status = normalizeRequestStatus(r.status);
+  return {
+    id,
+    status,
+    amount: r.amount.toString(),
+    minAmount: r.minAmount.toString(),
+    paidTotal: r.paidTotal.toString(),
+    expiry: r.expiry,
+    onChain: true,
+  };
+}
+
+export async function reconcileMoneyRequest(id: string): Promise<{
+  id: string;
+  status: "open" | "partially_paid" | "paid" | "expired" | "cancelled" | "missing";
+  amount?: string;
+  minAmount?: string;
+  paidTotal?: string;
+  expiry?: number;
+  onChain: boolean;
+  reconciled: boolean;
+  txHash?: string;
+}> {
+  const c = getClient();
+  if (!c) throw new Error("Live testnet client unavailable. Request status was not reconciled.");
+  await ensureHostedPublicAccount();
+  await c.sync();
+  await wireMvkRegistry(c);
+
+  let current = await getMoneyRequestStatus(id);
+  if (current.status !== "open" && current.status !== "partially_paid") {
+    return { ...current, reconciled: false };
+  }
+
+  const receives = c.getHistory()
+    .filter((h) => h.type === "receive" && h.status === "settled")
+    .filter((h) => parseRequestPaymentMemo(h.memo)?.requestId === id)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  for (const h of receives) {
+    if (!h.txHash) continue;
+    const nullifiers = c.nullifiersForTxHash(h.txHash);
+    for (const nullifier of nullifiers) {
+      try {
+        await c.markRequestPaid({
+          id,
+          nullifier,
+          amount: BigInt(h.amount),
+          payeeSource: walletUserSource(),
+        });
+        await waitForRequestPaidProgress(c, id);
+        current = await getMoneyRequestStatus(id);
+        return { ...current, reconciled: true, txHash: h.txHash };
+      } catch {
+        current = await getMoneyRequestStatus(id);
+        if (current.status === "paid" || current.status === "partially_paid") {
+          return { ...current, reconciled: true, txHash: h.txHash };
+        }
+      }
+    }
+  }
+
+  return { ...current, reconciled: false };
+}
+
+function normalizeRequestStatus(status: string): "open" | "partially_paid" | "paid" | "expired" | "cancelled" {
+  const tag = status.toLowerCase();
+  if (tag === "partiallypaid" || tag === "partially_paid") return "partially_paid";
+  if (tag === "cancelled") return "cancelled";
+  if (tag === "expired") return "expired";
+  if (tag === "paid") return "paid";
+  return "open";
+}
+
+async function waitForRequestPaidProgress(
+  c: BenzoClient,
+  id: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    const r = await c.getRequest(id);
+    if (r) {
+      const status = normalizeRequestStatus(r.status);
+      if (status === "paid" || status === "partially_paid") return true;
+    }
+    await sleep(900 + attempt * 350);
+  }
+  return false;
+}
+
+async function waitForRequestStatus(
+  c: BenzoClient,
+  id: string,
+  target: "cancelled",
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const r = await c.getRequest(id);
+    if (r && normalizeRequestStatus(r.status) === target) return true;
+    await sleep(700 + attempt * 300);
+  }
+  return false;
+}
+
+export async function cancelMoneyRequest(id: string): Promise<{ id: string; status: "cancelled"; onChain: boolean }> {
+  const c = getClient();
+  if (!c) throw new Error("Live testnet client unavailable. Request was not cancelled.");
+  await ensureHostedPublicAccount();
+  try {
+    await c.cancelRequest(id, walletUserSource());
+  } catch (e) {
+    const r = await c.getRequest(id);
+    if (r && normalizeRequestStatus(r.status) === "cancelled") {
+      return { id, status: "cancelled", onChain: true };
+    }
+    const current = r ? normalizeRequestStatus(r.status) : "missing";
+    if (current === "paid" || current === "expired") {
+      throw new Error(`Request is already ${current}; it cannot be cancelled.`);
+    }
+    throw e;
+  }
+  if (!(await waitForRequestStatus(c, id, "cancelled"))) {
+    throw new Error("Request cancellation was submitted but the registry did not confirm it yet. Please retry.");
+  }
+  return { id, status: "cancelled", onChain: true };
 }
 
 // ----------------------------------------------------------------- external invite / claim (P0-3)
@@ -1362,6 +1776,24 @@ export interface InviteResult {
   sorobanPublics?: string[];
 }
 
+function inviteFundRetryable(e: unknown): boolean {
+  const m = String((e as Error)?.message ?? e);
+  return /insufficient spendable balance|out of sync|unknown root|ASP membership|MvkRegistryMirror|not synced to the on-chain root|WrongAspRoot|Error\(Contract, #(5|8)\)|still settling/i.test(m);
+}
+
+async function waitForPrivateBalanceAtLeast(c: BenzoClient, target: bigint): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await c.sync();
+      if (await c.getBalance() >= target) return true;
+    } catch {
+      /* retry below */
+    }
+    await sleep(1_000 + attempt * 350);
+  }
+  return false;
+}
+
 export async function createInvite(amount: string, note: string | undefined, onPhase?: PhaseSink): Promise<InviteResult> {
   const stroops = toStroops(amount);
   const localId = `inv_${Date.now().toString(36)}`;
@@ -1369,22 +1801,50 @@ export async function createInvite(amount: string, note: string | undefined, onP
   const c = getClient();
   if (c) {
     await ensureHostedPublicAccount();
-    await c.sync();
-    await wireMvkRegistry(c);
-    onPhase?.({ phase: "building" });
-    onPhase?.({ phase: "proving" });
-    const r = await c.createClaimLink({ amount: stroops });
-    await c.flush();
-    const secret = b64urlFromHex(r.claimSecretHex);
-    const claimLink = encodeBenzoLink(
-      { type: "claim", secret, app: "consumer", amount: stroops.toString(), expiresAt: String(expiresAt) },
-      "scheme",
-    );
-    const link = walletRouteLink(claimLink);
-    tenantInvites().push({ localId, amount: stroops.toString(), note, link, secret, createdAt: nowSec(), expiresAt, status: "pending" });
-    onPhase?.({ phase: "submitting", txHash: r.sendTx });
-    onPhase?.({ phase: "confirmed", txHash: r.sendTx, onChain: true });
-    return { link, localId, claimAccountPub: r.recipient.spendPub.toString(16), amount: stroops.toString(), expiresAt, onChain: true, txHash: r.sendTx, sorobanPublics: r.sorobanPublics };
+    let last: unknown;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        await c.sync();
+        await wireMvkRegistry(c);
+        if ((await c.getBalance()) < stroops && !(await waitForPrivateBalanceAtLeast(c, stroops))) {
+          throw new RampError("balance", "Not enough private balance to fund this invite.");
+        }
+        onPhase?.({ phase: "building" });
+        onPhase?.({ phase: "proving" });
+        const r = await c.createClaimLink({ amount: stroops });
+        try {
+          await withTimeout(c.flush(), 45_000, "invite flush");
+        } catch (e) {
+          // The private transfer has already returned as settled; a local scanner
+          // persistence hiccup must not strand a funded link behind a false 503.
+          console.warn("[wallet-api] invite post-settlement flush failed", errorSummary(e));
+        }
+        const secret = b64urlFromHex(r.claimSecretHex);
+        const claimLink = encodeBenzoLink(
+          { type: "claim", secret, app: "consumer", amount: stroops.toString(), expiresAt: String(expiresAt) },
+          "scheme",
+        );
+        const link = walletRouteLink(claimLink);
+        tenantInvites().push({ localId, amount: stroops.toString(), note, link, secret, createdAt: nowSec(), expiresAt, status: "pending" });
+        onPhase?.({ phase: "submitting", txHash: r.sendTx });
+        onPhase?.({ phase: "confirmed", txHash: r.sendTx, onChain: true });
+        return { link, localId, claimAccountPub: r.recipient.spendPub.toString(16), amount: stroops.toString(), expiresAt, onChain: true, txHash: r.sendTx, sorobanPublics: r.sorobanPublics };
+      } catch (e) {
+        last = e;
+        if (e instanceof RampError) throw e;
+        if (!inviteFundRetryable(e) || attempt === 5) break;
+        console.warn("[wallet-api] invite fund retrying after private-state lag", {
+          attempt: attempt + 1,
+          message: String((e as Error)?.message ?? e),
+        });
+        await sleep(1_800 + attempt * 900);
+      }
+    }
+    if (last instanceof Error && /insufficient spendable balance/i.test(last.message)) {
+      throw new RampError("balance", "Not enough private balance to fund this invite.");
+    }
+    console.error("[wallet-api] invite fund failed", errorSummary(last));
+    throw new RampError("busy", "Couldn't fund this invite right now. Your money is safe. Please try again.");
   }
   throw new RampError("busy", "Live testnet client unavailable. Invite was not funded.");
 }
@@ -1413,44 +1873,70 @@ async function sweepClaim(secret: string): Promise<{ amount: string; txHash?: st
   }
 }
 
-export async function claimInvite(secret: string, localId?: string): Promise<{ amount: string; txHash?: string; onChain: boolean; sorobanPublics?: string[] }> {
+export async function claimInvite(secret: string, localId?: string, fallbackAmount?: string): Promise<{ amount: string; txHash?: string; onChain: boolean; sorobanPublics?: string[] }> {
   const c = getClient();
   if (c) {
     // (1) Sweep the escrowed note out of the ephemeral claim-account → the
     // recipient's liquid USDC address. (2) Then shield it into the recipient's
     // OWN note so it lands in the in-app (shielded) balance and is spendable
     // under the recipient's distinct spend key — not left sitting as public USDC.
-    const r = await sweepClaim(secret);
-    let txHash = r.txHash;
-    let sorobanPublics = r.sorobanPublics;
-    if (r.onChain && BigInt(r.amount) > 0n) {
-      try {
-        await c.sync();
-        await wireMvkRegistry(c);
-        const from = await selfAddress(c);
-        const before = await c.getBalance();
-        const sh = await c.shield({ amount: BigInt(r.amount), fromAddress: from, fromSource: walletUserSource() });
-        await c.flush();
-        txHash = sh.txHash ?? txHash;
-        sorobanPublics = sh.sorobanPublics;
-      } catch (e) {
-        // Same RPC-retention tolerance as addMoney: the shield settles on-chain
-        // before the SDK's strict full-tree assertion, which can trip on a
-        // long-lived deployment. Confirm by the shielded-balance delta.
-        if (/out of sync/.test((e as Error).message)) {
-          await c.sync();
-        } else throw e;
-      }
+    let r: { amount: string; txHash?: string; onChain: boolean; sorobanPublics?: string[] };
+    try {
+      r = await sweepClaim(secret);
+    } catch (e) {
+      const amount = fallbackAmount ? BigInt(fallbackAmount) : 0n;
+      if (amount <= 0n) throw e;
+      await c.sync();
+      await wireMvkRegistry(c);
+      const from = await selfAddress(c);
+      const token = deployment().token as string;
+      if (!(await waitForPublicBalanceAtLeast(c, token, from, amount))) throw e;
+      r = { amount: amount.toString(), onChain: true };
     }
+    const shielded = await shieldClaimLiquid(c, BigInt(r.amount), r.txHash, r.sorobanPublics);
     const invite = localId ? tenantInvites().find((e) => e.localId === localId) : tenantInvites().find((e) => e.secret === secret);
     if (invite) invite.status = "claimed";
     db.activity.unshift({
       id: `act_${Date.now()}`, type: "receive", name: "Claimed a link", note: "Money received",
       amount: r.amount, direction: "in", status: "settled", timestamp: nowSec(), tone: "accent",
     });
-    return { ...r, txHash, sorobanPublics };
+    return shielded;
   }
   throw new RampError("busy", "Live testnet client unavailable. Claim was not submitted.");
+}
+
+async function shieldClaimLiquid(
+  c: BenzoClient,
+  amount: bigint,
+  txHash?: string,
+  sorobanPublics?: string[],
+): Promise<{ amount: string; txHash?: string; onChain: boolean; sorobanPublics?: string[] }> {
+  if (amount <= 0n) throw new RampError("balance", "Invite has no USDC to settle.");
+  await c.sync();
+  await wireMvkRegistry(c);
+  const from = await selfAddress(c);
+  const before = await c.getBalance();
+  const token = deployment().token as string;
+  let liquidBefore: bigint | undefined;
+  try {
+    liquidBefore = await publicBalanceOf(c, token, from);
+  } catch {
+    liquidBefore = undefined;
+  }
+  const sh = await shieldLiquidUsdc(
+    c,
+    from,
+    amount,
+    before,
+    hostedRuntime() ? "tee" : "local",
+    liquidBefore === undefined ? undefined : liquidBefore > amount ? liquidBefore - amount : 0n,
+  );
+  return {
+    amount: amount.toString(),
+    onChain: true,
+    txHash: sh.txHash ?? txHash,
+    sorobanPublics: sh.sorobanPublics ?? sorobanPublics,
+  };
 }
 
 export async function refundInvite(localId: string): Promise<{ amount: string; txHash?: string; onChain: boolean; sorobanPublics?: string[] }> {
@@ -1459,9 +1945,34 @@ export async function refundInvite(localId: string): Promise<{ amount: string; t
   if (e.status === "claimed") throw new Error("already claimed - can't refund");
   const c = getClient();
   if (c) {
-    const r = await sweepClaim(e.secret);
+    await ensureHostedPublicAccount();
+    await c.sync();
+    await wireMvkRegistry(c);
+    const amount = BigInt(e.amount);
+    const from = await selfAddress(c);
+    const token = deployment().token as string;
+    let liquidBefore = 0n;
+    try {
+      liquidBefore = await publicBalanceOf(c, token, from);
+    } catch {
+      liquidBefore = 0n;
+    }
+    let r: { amount: string; txHash?: string; onChain: boolean; sorobanPublics?: string[] };
+    try {
+      r = await sweepClaim(e.secret);
+    } catch (err) {
+      const hasRecoveredPublicFunds = await waitForPublicBalanceAtLeast(c, token, from, liquidBefore + amount)
+        || liquidBefore >= amount;
+      if (!hasRecoveredPublicFunds) throw err;
+      r = { amount: amount.toString(), onChain: true };
+    }
+    const shielded = await shieldClaimLiquid(c, BigInt(r.amount), r.txHash, r.sorobanPublics);
     e.status = "refunded";
-    return r;
+    db.activity.unshift({
+      id: `act_${Date.now()}`, type: "receive", name: "Invite refunded", note: "Unclaimed link returned",
+      amount: shielded.amount, direction: "in", status: "settled", timestamp: nowSec(), tone: "accent",
+    });
+    return shielded;
   }
   throw new RampError("busy", "Live testnet client unavailable. Refund was not submitted.");
 }

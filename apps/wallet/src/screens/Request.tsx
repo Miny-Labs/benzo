@@ -5,13 +5,13 @@
  * (re-share), and Cancel. The payer accepts / pays-different / declines on Claim;
  * settlement reuses the existing ZK transfer.
  */
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, Check, Copy, Inbox, Link2, X } from "lucide-react";
 import { api } from "../lib/api";
 import { friendlyError } from "../lib/errors";
 import { fmtUsd } from "../lib/format";
-import { addRequest, listRequests, cancelRequest, markReminded, remindedToday, type MoneyRequest } from "../lib/requests";
+import { addRequest, listRequests, cancelRequest, markReminded, remindedToday, updateRequestStatus, type MoneyRequest } from "../lib/requests";
 import { Screen } from "../ui/motion";
 import { ScreenHeader } from "../ui/chrome";
 import { AmountField, Button, Card, EmptyState, Input, Sheet, useToast } from "../ui/primitives";
@@ -26,7 +26,45 @@ export function Request() {
   const [copied, setCopied] = useState(false);
   const [, bump] = useState(0);
   const [confirmCancel, setConfirmCancel] = useState<MoneyRequest | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const requests = listRequests();
+  const pendingRequestIds = useMemo(
+    () => requests
+      .filter((r) => r.status === "pending" || r.status === "partially_paid")
+      .map((r) => r.id)
+      .join("|"),
+    [requests],
+  );
+
+  useEffect(() => {
+    if (!pendingRequestIds) return;
+    let cancelled = false;
+    let running = false;
+    async function reconcile() {
+      if (running) return;
+      running = true;
+      try {
+        for (const id of pendingRequestIds.split("|").filter(Boolean)) {
+          try {
+            const r = await api.reconcileRequest(id);
+            if (cancelled) return;
+            if (r.status === "paid" || r.status === "partially_paid" || r.status === "expired" || r.status === "cancelled") {
+              updateRequestStatus(id, r.status, r.paidTotal);
+              bump((n) => n + 1);
+            }
+          } catch {
+            // Keep the local row pending; the explicit request status screen still
+            // fails cleanly if the registry cannot be reached.
+          }
+        }
+      } finally {
+        running = false;
+      }
+    }
+    void reconcile();
+    const timer = window.setInterval(() => void reconcile(), 15_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [pendingRequestIds]);
 
   async function create() {
     setBusy(true);
@@ -57,11 +95,19 @@ export function Request() {
     bump((n) => n + 1);
   }
 
-  function doCancel(id: string) {
-    cancelRequest(id);
-    setConfirmCancel(null);
-    bump((n) => n + 1);
-    toast({ title: "Request cancelled", tone: "muted" });
+  async function doCancel(id: string) {
+    setCancelling(true);
+    try {
+      await api.cancelRequest(id);
+      cancelRequest(id);
+      setConfirmCancel(null);
+      bump((n) => n + 1);
+      toast({ title: "Request cancelled", tone: "muted" });
+    } catch (e) {
+      toast({ title: friendlyError(e, "Couldn't cancel the request. The link is still active."), tone: "danger" });
+    } finally {
+      setCancelling(false);
+    }
   }
 
   return (
@@ -141,8 +187,8 @@ export function Request() {
               The link for {confirmCancel.amount ? <b className="text-ink">{fmtUsd(confirmCancel.amount)}</b> : "this request"} stops working and it's removed from your list. This can't be undone.
             </p>
             <div className="mt-5 flex gap-3">
-              <Button full variant="secondary" onClick={() => setConfirmCancel(null)}>Keep it</Button>
-              <Button full variant="danger" onClick={() => doCancel(confirmCancel.id)} data-testid="request-cancel-confirm-btn">Cancel request</Button>
+              <Button full variant="secondary" disabled={cancelling} onClick={() => setConfirmCancel(null)}>Keep it</Button>
+              <Button full variant="danger" loading={cancelling} onClick={() => void doCancel(confirmCancel.id)} data-testid="request-cancel-confirm-btn">Cancel request</Button>
             </div>
           </div>
         ) : null}
@@ -154,6 +200,7 @@ export function Request() {
 function ReqStatus({ status }: { status: MoneyRequest["status"] }) {
   const map: Record<MoneyRequest["status"], { label: string; cls: string }> = {
     pending: { label: "Pending", cls: "bg-amber/12 text-[#9a6b12]" },
+    partially_paid: { label: "Part paid", cls: "bg-accent/10 text-accent" },
     paid: { label: "Paid", cls: "bg-pos/12 text-pos" },
     declined: { label: "Declined", cls: "bg-ink/[0.06] text-muted" },
     expired: { label: "Expired", cls: "bg-ink/[0.06] text-muted" },

@@ -9,7 +9,8 @@ const memoryRoutes = new Map<string, { tenantKey: string; expiresAt?: number }>(
 const memoryRateLimits = new Map<string, { windowStart: number; count: number }>();
 
 function useMemoryStore(): boolean {
-  if (hostedRuntime() && process.env.BENZO_TENANT_STORE_MEMORY === "1") {
+  const localHostedMemory = process.env.BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE === "1" && process.env.VERCEL !== "1";
+  if (hostedRuntime() && process.env.BENZO_TENANT_STORE_MEMORY === "1" && !localHostedMemory) {
     throw new Error("BENZO_TENANT_STORE_MEMORY is not allowed for hosted tenant storage");
   }
   return process.env.BENZO_TENANT_STORE_MEMORY === "1";
@@ -125,8 +126,9 @@ function decrypt<T>(app: string, tenantKey: string, ciphertext: string): T {
 export function tenantStorageMissing(): string[] {
   const missing: string[] = [];
   if (hostedRuntime()) {
-    if (process.env.BENZO_TENANT_STORE_MEMORY === "1") missing.push("BENZO_TENANT_STORE_MEMORY");
-    if (!process.env.DATABASE_URL) missing.push("DATABASE_URL");
+    const localHostedMemory = process.env.BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE === "1" && process.env.VERCEL !== "1";
+    if (process.env.BENZO_TENANT_STORE_MEMORY === "1" && !localHostedMemory) missing.push("BENZO_TENANT_STORE_MEMORY");
+    if (!process.env.DATABASE_URL && !localHostedMemory) missing.push("DATABASE_URL");
     if (!process.env.BENZO_DATA_ENCRYPTION_SECRET) missing.push("BENZO_DATA_ENCRYPTION_SECRET");
   }
   return missing;

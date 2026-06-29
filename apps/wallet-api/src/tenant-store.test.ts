@@ -65,6 +65,8 @@ test("hosted wallet UX, invites, and accounting state are encrypted and partitio
       verifier: "verifier_contract",
       publicInputs: { source: "settlement-tx", txHash: "tx_shield" },
     });
+    db.coreState["benzo:alice-view:journal"] = JSON.stringify([{ type: "shield", amount: "30000000" }]);
+    db.coreState["benzo:global:asp"] = JSON.stringify({ cursorLedger: 12, leaves: ["1"] });
     expect(verifyWalletLedger()).toMatchObject({ ok: true, length: 2 });
     expect(walletLedgerBalances()).toMatchObject({ private: "30000000", ramp_reserve: "-30000000" });
   });
@@ -75,7 +77,9 @@ test("hosted wallet UX, invites, and accounting state are encrypted and partitio
     expect(db.invites).toEqual([]);
     expect(db.ledger).toEqual([]);
     expect(db.proofReceipts).toEqual([]);
+    expect(db.coreState).toEqual({});
     db.profile.handle = "@bob";
+    db.coreState["benzo:bob-view:journal"] = JSON.stringify([{ type: "shield", amount: "10000000" }]);
   });
 
   await runWithWalletTenant("alice", null, { accountFingerprint: "wallet_alice", subjectKey: "alice" }, async () => {
@@ -84,6 +88,8 @@ test("hosted wallet UX, invites, and accounting state are encrypted and partitio
     expect(db.invites.map((i) => i.localId)).toEqual(["inv_alice"]);
     expect(db.ledger.map((e) => e.sourceType)).toEqual(["onramp", "offramp"]);
     expect(db.proofReceipts.map((r) => [r.action, r.vkId, r.txHash])).toEqual([["wallet.add-money", "SHIELD", "tx_shield"]]);
+    expect(Object.keys(db.coreState).sort()).toEqual(["benzo:alice-view:journal", "benzo:global:asp"]);
+    expect(db.coreState["benzo:bob-view:journal"]).toBeUndefined();
     expect(verifyWalletLedger()).toMatchObject({ ok: true, length: 2 });
     expect(walletLedgerBalances()).toMatchObject({ private: "30000000", ramp_reserve: "-30000000" });
     db.ledger[0].requestedAmount = "999";
@@ -114,6 +120,26 @@ test("hosted wallet fails closed when a tenant account binding changes", async (
     expect(recoverySummary()).toMatchObject({ bound: true });
     expect(recoverySummary()).not.toHaveProperty("accountFingerprint");
     expect(recoverySummary()).not.toHaveProperty("subjectKey");
+  });
+});
+
+test("read-only hosted wallet requests do not overwrite a saved write", async () => {
+  process.env.BENZO_HOSTED_TENANT_TEST = "1";
+  process.env.BENZO_TENANT_STORE_MEMORY = "1";
+  process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
+  process.env.BENZO_DISABLE_TENANT_LEGACY_DECRYPT = "1";
+  const { db, runWithWalletTenant } = await import("./store.js");
+
+  await runWithWalletTenant("race-user", { name: "Race" }, { accountFingerprint: "wallet_race", subjectKey: "race-user" }, async () => {
+    db.profile.handle = "@claimed";
+  });
+
+  await runWithWalletTenant("race-user", { name: "Race" }, { accountFingerprint: "wallet_race", subjectKey: "race-user" }, async () => {
+    db.profile.handle = "@stale-read";
+  }, { persist: false });
+
+  await runWithWalletTenant("race-user", null, { accountFingerprint: "wallet_race", subjectKey: "race-user" }, async () => {
+    expect(db.profile.handle).toBe("@claimed");
   });
 });
 

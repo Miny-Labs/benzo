@@ -7,7 +7,7 @@
  * The link is provided via `?link=<benzo url>` (the in-app deep-link path); the
  * claim secret lives in the link fragment and is sent to the local BFF to settle.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, Briefcase, Building2, Check, Gift, X } from "lucide-react";
@@ -17,6 +17,7 @@ import { orgApi } from "../lib/orgApi";
 import { friendlyError } from "../lib/errors";
 import { useWallet } from "../lib/store";
 import { fmtUsd } from "../lib/format";
+import { findRequest, type RequestStatus } from "../lib/requests";
 import { Screen } from "../ui/motion";
 import { ScreenHeader } from "../ui/chrome";
 import { Button, SuccessCheck } from "../ui/primitives";
@@ -79,7 +80,7 @@ export function Claim() {
     setPhase("claiming");
     setErr(null);
     try {
-      const r = await api.claim(secret);
+      const r = await api.claim(secret, undefined, claimAmount);
       setAmount(r.amount);
       setPhase("done");
       void refresh();
@@ -134,6 +135,9 @@ export function Claim() {
 function PayRequest({ link }: { link: Extract<BenzoLink, { type: "request" }> }) {
   const nav = useNavigate();
   const [declined, setDeclined] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [unavailable, setUnavailable] = useState<RequestStatus | "missing" | null>(null);
+  const requestId = link.id ?? "";
   const who = link.to || "Someone";
   const usd = link.amount ? String(Number(link.amount) / 1e7) : "";
   const q = (withAmount: boolean) => {
@@ -141,8 +145,45 @@ function PayRequest({ link }: { link: Extract<BenzoLink, { type: "request" }> })
     if (link.to) p.set("to", link.to);
     if (withAmount && usd) p.set("amount", usd);
     if (link.memo) p.set("memo", link.memo);
+    if (requestId) p.set("requestId", requestId);
     return `/send?${p.toString()}`;
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!requestId) {
+      setUnavailable("missing");
+      setChecking(false);
+      return () => { cancelled = true; };
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const expiry = Number(link.expiry ?? 0);
+    const local = findRequest(requestId);
+    if (expiry && now >= expiry) {
+      setUnavailable("expired");
+      setChecking(false);
+      return () => { cancelled = true; };
+    }
+    if (local && local.status !== "pending" && local.status !== "partially_paid") {
+      setUnavailable(local.status);
+      setChecking(false);
+      return () => { cancelled = true; };
+    }
+    setChecking(true);
+    api.requestStatus(requestId)
+      .then((r) => {
+        if (cancelled) return;
+        if (r.status === "open" || r.status === "partially_paid") setUnavailable(null);
+        else setUnavailable(r.status);
+      })
+      .catch(() => {
+        if (!cancelled) setUnavailable("missing");
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false);
+      });
+    return () => { cancelled = true; };
+  }, [link.expiry, requestId]);
 
   if (declined) {
     return (
@@ -152,6 +193,42 @@ function PayRequest({ link }: { link: Extract<BenzoLink, { type: "request" }> })
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-ink/[0.06] text-ink"><X size={26} /></div>
           <div className="font-display mt-4 text-xl">Request declined</div>
           <p className="mt-2 max-w-[280px] text-[14px] text-muted">No money moved. You can close this.</p>
+          <Button variant="secondary" className="mt-5" onClick={() => nav("/")}>Back to wallet</Button>
+        </div>
+      </Screen>
+    );
+  }
+
+  if (checking) {
+    return (
+      <Screen>
+        <ScreenHeader title="Payment request" />
+        <div className="flex flex-1 flex-col items-center justify-center px-7 pb-12 text-center" data-testid="request-checking">
+          <div className="font-display text-xl">Checking request</div>
+          <p className="mt-2 max-w-[280px] text-[14px] text-muted">Making sure this link is still open.</p>
+        </div>
+      </Screen>
+    );
+  }
+
+  if (unavailable) {
+    const copy: Record<RequestStatus | "missing", { title: string; hint: string }> = {
+      pending: { title: "Checking request", hint: "Making sure this link is still open." },
+      partially_paid: { title: "This request is partly paid", hint: "You can still pay the remaining amount." },
+      paid: { title: "This request is already paid", hint: "No money moved. Ask the requester to send a fresh link if needed." },
+      declined: { title: "This request was declined", hint: "No money moved." },
+      expired: { title: "This request expired", hint: "No money moved. Ask the requester to send a fresh link." },
+      cancelled: { title: "This request was cancelled", hint: "No money moved. Ask the requester to send a fresh link." },
+      missing: { title: "This request could not be verified", hint: "No money moved. Ask the requester to send it again." },
+    };
+    const c = copy[unavailable];
+    return (
+      <Screen>
+        <ScreenHeader title="Payment request" />
+        <div className="flex flex-1 flex-col items-center justify-center px-7 pb-12 text-center" data-testid="request-unavailable">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-ink/[0.06] text-ink"><X size={26} /></div>
+          <div className="font-display mt-4 text-xl">{c.title}</div>
+          <p className="mt-2 max-w-[280px] text-[14px] text-muted">{c.hint}</p>
           <Button variant="secondary" className="mt-5" onClick={() => nav("/")}>Back to wallet</Button>
         </div>
       </Screen>

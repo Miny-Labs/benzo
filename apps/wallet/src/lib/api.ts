@@ -45,6 +45,8 @@ export interface SettleResult {
   amount: string;
   onChain: boolean;
   sorobanPublics?: string[];
+  nullifier?: string;
+  requestId?: string;
   error?: string;
 }
 
@@ -277,11 +279,11 @@ export const api = {
   history: () => http<ActivityRow[]>("/history"),
   proofReceipts: () => http<ProofReceipt[]>("/proof-receipts"),
   contacts: () => http<Contact[]>("/contacts"),
-  send: (to: string, amount: string, memo?: string, prover: ProverKind = "tee") =>
-    http<SettleResult>("/send", { method: "POST", body: JSON.stringify({ to, amount, memo, prover }) }),
+  send: (to: string, amount: string, memo?: string, prover: ProverKind = "tee", requestId?: string) =>
+    http<SettleResult>("/send", { method: "POST", body: JSON.stringify({ to, amount, memo, prover, requestId }) }),
   /** Streaming send: drives the 3-phase ceremony via SSE-over-fetch (POST). */
   sendStream: async (
-    args: { to: string; amount: string; memo?: string; prover?: ProverKind },
+    args: { to: string; amount: string; memo?: string; prover?: ProverKind; requestId?: string },
     onPhase: (e: SendPhaseEvent) => void,
   ): Promise<SettleResult> => {
     const prepared = prepareApiRequest("/send", {
@@ -338,13 +340,24 @@ export const api = {
     }),
   request: (amount?: string, memo?: string) =>
     http<{ link: string; id: string }>("/request", { method: "POST", body: JSON.stringify({ amount, memo }) }),
+  requestStatus: (id: string) =>
+    http<{ id: string; status: "open" | "partially_paid" | "paid" | "expired" | "cancelled" | "missing"; onChain: boolean; amount?: string; minAmount?: string; paidTotal?: string; expiry?: number }>(
+      `/request/status?id=${encodeURIComponent(id)}`,
+    ),
+  reconcileRequest: (id: string) =>
+    http<{ id: string; status: "open" | "partially_paid" | "paid" | "expired" | "cancelled" | "missing"; onChain: boolean; amount?: string; minAmount?: string; paidTotal?: string; expiry?: number; reconciled: boolean; txHash?: string }>(
+      "/request/reconcile",
+      { method: "POST", body: JSON.stringify({ id }) },
+    ),
+  cancelRequest: (id: string) =>
+    http<{ id: string; status: "cancelled"; onChain: boolean }>("/request/cancel", { method: "POST", body: JSON.stringify({ id }) }),
   invite: (amount: string, note?: string) =>
     http<InviteResult>("/invite", { method: "POST", body: JSON.stringify({ amount, note }) }),
   invites: () => http<InviteSummary[]>("/invites"),
   refundInvite: (localId: string) =>
     http<{ amount: string; txHash?: string; onChain: boolean }>("/invite/refund", { method: "POST", body: JSON.stringify({ localId }) }),
-  claim: (secret: string, localId?: string) =>
-    http<{ amount: string; txHash?: string; onChain: boolean }>("/claim", { method: "POST", body: JSON.stringify({ secret, localId }) }),
+  claim: (secret: string, localId?: string, amount?: string) =>
+    http<{ amount: string; txHash?: string; onChain: boolean }>("/claim", { method: "POST", body: JSON.stringify({ secret, localId, amount }) }),
   cashOut: (amount: string, prover: ProverKind = "tee") =>
     http<SettleResult>("/cash-out", { method: "POST", body: JSON.stringify({ amount, prover }) }),
   addMoney: (amount: string, prover: ProverKind = "tee") =>

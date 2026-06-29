@@ -135,26 +135,24 @@ export function App() {
           <AnimatePresence>{!onboarded ? <Onboarding onDone={finishOnboarding} /> : null}</AnimatePresence>
           <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
             <main className="no-scrollbar flex-1 overflow-y-auto">
-              <AnimatePresence mode="wait">
-                <Routes location={loc} key={loc.pathname}>
-                  <Route path="/" element={<Home />} />
-                  <Route path="/send" element={<Send />} />
-                  <Route path="/request" element={<Request />} />
-                  <Route path="/activity" element={<Activity />} />
-                  <Route path="/activity/:id" element={<TxDetail />} />
-                  <Route path="/cash" element={<Cash />} />
-                  <Route path="/convert" element={<Convert />} />
-                  <Route path="/deposit" element={<Deposit />} />
-                  <Route path="/profile" element={<Profile />} />
-                  <Route path="/notifications" element={<Notifications />} />
-                  <Route path="/contacts" element={<Contacts />} />
-                  <Route path="/share-proof" element={<ShareProof />} />
-                  <Route path="/invite" element={<InviteExternal />} />
-                  <Route path="/claim" element={<Claim />} />
-                  <Route path="/work" element={<Work />} />
-                  <Route path="*" element={<Home />} />
-                </Routes>
-              </AnimatePresence>
+              <Routes location={loc} key={loc.pathname}>
+                <Route path="/" element={<Home />} />
+                <Route path="/send" element={<Send />} />
+                <Route path="/request" element={<Request />} />
+                <Route path="/activity" element={<Activity />} />
+                <Route path="/activity/:id" element={<TxDetail />} />
+                <Route path="/cash" element={<Cash />} />
+                <Route path="/convert" element={<Convert />} />
+                <Route path="/deposit" element={<Deposit />} />
+                <Route path="/profile" element={<Profile />} />
+                <Route path="/notifications" element={<Notifications />} />
+                <Route path="/contacts" element={<Contacts />} />
+                <Route path="/share-proof" element={<ShareProof />} />
+                <Route path="/invite" element={<InviteExternal />} />
+                <Route path="/claim" element={<Claim />} />
+                <Route path="/work" element={<Work />} />
+                <Route path="*" element={<Home />} />
+              </Routes>
             </main>
             <BottomNav />
           </div>

@@ -41,7 +41,7 @@ export function useSendStream() {
   }, []);
 
   const run = useCallback(
-    async (to: string, amount: string, memo: string | undefined, prover: ProverKind) => {
+    async (to: string, amount: string, memo: string | undefined, prover: ProverKind, teeAvailable = false, requestId?: string) => {
       dispatch({ type: "RESET" });
       setReceipt(null);
       dispatch({ type: "START" }); // building immediately (snappy first frame)
@@ -50,7 +50,7 @@ export function useSendStream() {
         // client. The client picks the backend: capable desktops use local WASM;
         // mobile/weak devices seal the witness to the attested TEE. Vercel never
         // proves; it can only relay already-proven writes.
-        if (isHandleSend(to) && !currentGoogleCredential()) {
+        if (isHandleSend(to) && !currentGoogleCredential() && !requestId) {
           try {
             if (await clientSideReadsAvailable()) {
               apply({ phase: "proving" });
@@ -66,7 +66,7 @@ export function useSendStream() {
             /* fall through to the BFF send path */
           }
         }
-        const r = await api.sendStream({ to, amount, memo, prover: apiProverKind(prover) }, apply);
+        const r = await api.sendStream({ to, amount, memo, prover: apiProverKind(prover, teeAvailable), ...(requestId ? { requestId } : {}) }, apply);
         setReceipt(r);
         // ensure terminal even if the done event raced ahead of the last phase
         if (r.status !== "failed") apply({ phase: "confirmed", txHash: r.txHash, provingMs: r.provingMs, onChain: r.onChain });

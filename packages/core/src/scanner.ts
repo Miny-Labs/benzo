@@ -36,6 +36,14 @@ export interface MvkBindingRecord {
   ledger: number;
 }
 
+export interface NullifierRecord {
+  nullifier: bigint;
+  ledger: number;
+  /** ledger close time, unix seconds (0 if unknown) */
+  ts: number;
+  txHash: string;
+}
+
 export interface DiscoveredNote {
   leafIndex: number;
   commitment: bigint;
@@ -56,6 +64,13 @@ export interface ScannerSnapshot {
     txHash: string;
   }>;
   nullifiers: string[];
+  /** Added after v1 launch; optional so older snapshots still restore. */
+  nullifierRecords?: Array<{
+    nullifier: string;
+    ledger: number;
+    ts: number;
+    txHash: string;
+  }>;
   mvkBindings: Array<{ tag: string; mvkCt: string; ledger: number }>;
 }
 
@@ -84,6 +99,7 @@ function toBig(v: unknown): bigint {
 export class NoteScanner {
   readonly commitments: CommitmentRecord[] = [];
   readonly nullifiers = new Set<string>();
+  readonly nullifierRecords = new Map<string, NullifierRecord>();
   readonly mvkBindings: MvkBindingRecord[] = [];
   readonly tree: MerkleTreeMirror;
   cursorLedger: number;
@@ -119,7 +135,15 @@ export class NoteScanner {
       this.commitments[rec.leafIndex] = rec;
       this.tree.insert(commitment);
     } else if (eventName === "new_nullifier_event") {
-      this.nullifiers.add(toBig(topics[topics.length - 1]).toString());
+      const nullifier = toBig(topics[topics.length - 1]);
+      const key = nullifier.toString();
+      this.nullifiers.add(key);
+      this.nullifierRecords.set(key, {
+        nullifier,
+        ledger: ev.ledger,
+        ts: ev.closedAt ?? 0,
+        txHash: ev.txHash,
+      });
     } else if (eventName === "mvk_bound_event") {
       const v = value as Record<string, unknown>;
       this.mvkBindings.push({
@@ -133,6 +157,10 @@ export class NoteScanner {
 
   isSpent(nullifier: bigint): boolean {
     return this.nullifiers.has(nullifier.toString());
+  }
+
+  nullifierTxHash(nullifier: bigint): string | undefined {
+    return this.nullifierRecords.get(nullifier.toString())?.txHash;
   }
 
   /** Serialize the scanner's discovered state for durable, incremental resume. */
@@ -150,8 +178,14 @@ export class NoteScanner {
           ledger: r.ledger,
           ts: r.ts,
           txHash: r.txHash,
-        })),
+      })),
       nullifiers: [...this.nullifiers],
+      nullifierRecords: [...this.nullifierRecords.values()].map((r) => ({
+        nullifier: r.nullifier.toString(),
+        ledger: r.ledger,
+        ts: r.ts,
+        txHash: r.txHash,
+      })),
       mvkBindings: this.mvkBindings.map((b) => ({
         tag: b.tag.toString(),
         mvkCt: toHex(b.mvkCt),
@@ -180,6 +214,14 @@ export class NoteScanner {
       if (rec) s.tree.insert(rec.commitment);
     }
     for (const n of snap.nullifiers) s.nullifiers.add(n);
+    for (const r of snap.nullifierRecords ?? []) {
+      s.nullifierRecords.set(r.nullifier, {
+        nullifier: BigInt(r.nullifier),
+        ledger: r.ledger,
+        ts: r.ts,
+        txHash: r.txHash,
+      });
+    }
     for (const b of snap.mvkBindings) {
       s.mvkBindings.push({ tag: BigInt(b.tag), mvkCt: hexToBytes(b.mvkCt), ledger: b.ledger });
     }

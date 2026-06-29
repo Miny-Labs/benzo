@@ -11,7 +11,7 @@
 const LS = "benzo.requests.v1";
 const THIRTY_DAYS = 30 * 24 * 3600;
 
-export type RequestStatus = "pending" | "paid" | "declined" | "expired" | "cancelled";
+export type RequestStatus = "pending" | "partially_paid" | "paid" | "declined" | "expired" | "cancelled";
 
 export interface MoneyRequest {
   id: string;
@@ -37,6 +37,10 @@ export function listRequests(now: number = nowS()): MoneyRequest[] {
   return raw
     .map((r) => (r.status === "pending" && now >= r.expiresAt ? { ...r, status: "expired" as RequestStatus } : r))
     .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function findRequest(id: string, now: number = nowS()): MoneyRequest | null {
+  return listRequests(now).find((r) => r.id === id) ?? null;
 }
 
 function write(rs: MoneyRequest[]): void {
@@ -76,6 +80,10 @@ export function markReminded(id: string, at: number = nowS()): void {
 
 export function markPaid(id: string, paidAmount?: string): void {
   patch(id, { status: "paid", paidAmount });
+}
+
+export function updateRequestStatus(id: string, status: RequestStatus, paidAmount?: string): void {
+  patch(id, { status, paidAmount });
 }
 
 /** Reminders are rate-limited to once/day in the UI (Venmo's manual-nudge pattern). */

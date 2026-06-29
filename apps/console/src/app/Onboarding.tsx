@@ -6,9 +6,9 @@
  * proving, not a browser-local console prover.
  */
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { BadgeCheck, Building2, Check, FileCheck2, Landmark, Loader2, ScanSearch, ShieldCheck, Sparkles, Users, Wallet } from "lucide-react";
-import { api, storeGoogleCredential, type OnboardingDraft } from "../lib/api";
+import { api, currentGoogleCredential, storeGoogleCredential, type OnboardingDraft } from "../lib/api";
 import { attestAuthEnclave, authEnclaveEndpoint, type EnclaveAttestation } from "../lib/attest";
 import { friendlyError } from "../lib/format";
 import { Logo } from "../ui/Logo";
@@ -52,7 +52,12 @@ function AuthShell({ onAuthed }: { onAuthed: () => void }) {
   const [clientId, setClientId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [attest, setAttest] = useState<EnclaveAttestation | null>(null);
+  const [hasStoredCredential, setHasStoredCredential] = useState(() => !!currentGoogleCredential());
   const gbtn = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setHasStoredCredential(!!currentGoogleCredential());
+  }, []);
 
   // Load real Google Identity Services if the BFF/enclave has a client id configured.
   useEffect(() => {
@@ -106,6 +111,19 @@ function AuthShell({ onAuthed }: { onAuthed: () => void }) {
     setBusy("local");
     setTimeout(onAuthed, 350);
   }
+
+  async function withStoredCredential() {
+    setBusy("stored");
+    setErr(null);
+    try {
+      await api.session();
+      onAuthed();
+    } catch (e) {
+      setErr(friendlyError(e, "Sign in again to continue."));
+      setBusy(null);
+    }
+  }
+
   return (
     <Centered>
       <Card className="w-[420px] p-8 text-center">
@@ -115,6 +133,11 @@ function AuthShell({ onAuthed }: { onAuthed: () => void }) {
         <h1 className="font-display text-2xl">Pay your team privately</h1>
         <p className="mt-1.5 text-[13.5px] text-muted">Run payroll and pay vendors on-chain. Amounts and recipients stay confidential by default.</p>
         <div className="mt-6 space-y-2.5">
+          {hasStoredCredential ? (
+            <Button className="w-full" variant="secondary" size="md" loading={busy === "stored"} onClick={withStoredCredential} data-testid="auth-stored">
+              Continue with signed-in account
+            </Button>
+          ) : null}
           {clientId ? (
             // Real Google sign-in (zkLogin Phase 1).
             <div ref={gbtn} className="flex justify-center" data-testid="auth-google" />
@@ -232,8 +255,7 @@ function Wizard({ onDone }: { onDone: () => void }) {
 
         {/* step content */}
         <div className="flex flex-1 flex-col p-7">
-          <AnimatePresence mode="wait">
-            <motion.div key={step.key} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.25, ease: EASE }} className="flex-1">
+          <motion.div key={step.key} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25, ease: EASE }} className="flex-1">
               {step.key === "org" ? (
                 <Step title="About your business" hint="The legal entity that will hold the treasury.">
                   <Field label="Business name"><Input value={draft.name ?? ""} maxLength={80} onChange={(e) => set({ name: e.target.value })} placeholder="Acme Robotics" data-testid="org-name" /></Field>
@@ -291,8 +313,7 @@ function Wizard({ onDone }: { onDone: () => void }) {
                   </div>
                 </Step>
               )}
-            </motion.div>
-          </AnimatePresence>
+          </motion.div>
 
           <div className="mt-6 flex items-center justify-between">
             <button onClick={() => setStepIdx((i) => Math.max(0, i - 1))} disabled={stepIdx === 0} className="text-[13px] font-semibold text-muted disabled:opacity-40">Back</button>
