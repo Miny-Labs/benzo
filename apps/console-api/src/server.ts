@@ -25,6 +25,7 @@ import type {
   PaymentOrder,
   PayrollBatch,
   PayrollLine,
+  TreasuryView,
 } from "@benzo/types";
 import { ROLE_PERMISSIONS } from "@benzo/types";
 import { anchorPrivateAuditRoot, attestKyb, auditorGrantViewKey, computeTreasury, fundTreasury, getKybStatus, isLive, liveStatus, payOne, payableBalance, proveAnonymousApproval, proveBalance, proveFunded, proveKybCredential, proveLineCap, proveLineInnocence, proveNetting, proveRunComputation, proveSolvency, proveTotal, proveTotalAttestation, registerOwnerMvk, submitShieldedTransfer, treasuryPublicBalance, treasuryReceiveInfo, treasurySendPublic, type OnChainRef } from "./chain.js";
@@ -69,6 +70,24 @@ function privateAuditOrgId(): string {
     return `org-${auth.key}`;
   }
   return db.org.id;
+}
+
+function unavailableTreasury(): TreasuryView {
+  const zero = { amount: "0", assetCode: "USDC" as const };
+  return {
+    totalHidden: zero,
+    accounts: db.accounts.map((account) => ({ account, balance: null })),
+    proveBalanceAvailable: false,
+    live: false,
+  };
+}
+
+async function safeComputeTreasury(): Promise<TreasuryView> {
+  try {
+    return await computeTreasury();
+  } catch {
+    return unavailableTreasury();
+  }
 }
 
 function privateEventKey(): Buffer {
@@ -584,8 +603,9 @@ route("POST", "/api/onboarding/finish", async (_req, res) => {
 });
 
 route("GET", "/api/dashboard", async (_req, res) => {
+  const treasury = await safeComputeTreasury();
   const summary: DashboardSummary = {
-    totalPosition: (await computeTreasury()).totalHidden,
+    totalPosition: treasury.totalHidden,
     pendingApprovals: db.payments.filter((p) => p.status === "needs_approval").length,
     openInvoices: db.invoices.filter((i) => i.status === "open").length,
     scheduledPayrolls: db.payrolls.filter((p) => p.status === "needs_approval" || p.status === "approved").length,
@@ -599,12 +619,12 @@ route("GET", "/api/dashboard", async (_req, res) => {
         amountLabel: fmtUsd(i.total.amount), at: i.createdAt,
       })),
     ].slice(0, 10),
-    live: isLive(),
+    live: isLive() && treasury.live,
   };
   json(res, 200, summary);
 });
 
-route("GET", "/api/treasury", async (_req, res) => json(res, 200, await computeTreasury()));
+route("GET", "/api/treasury", async (_req, res) => json(res, 200, await safeComputeTreasury()));
 route("POST", "/api/treasury/prove-balance", async (req, res) => {
   const body = await readJson<{ min: string }>(req);
   const proof = await proveBalance(String(body.min));
