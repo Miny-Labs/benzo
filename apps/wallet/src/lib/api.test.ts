@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, apiHref, AUTH_REQUIRED_EVENT } from "./api";
+import { api, apiHref, AUTH_REQUIRED_EVENT, credentialLooksWellFormed } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -25,6 +25,11 @@ function callHeaders(call: unknown[]): Headers {
   return call[1] instanceof Object && "headers" in call[1]
     ? call[1].headers as Headers
     : new Headers();
+}
+
+function token(payload: Record<string, unknown>, prefix = "benzo-test"): string {
+  const body = btoa(JSON.stringify(payload)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `${prefix}.${body}.sig`;
 }
 
 describe("wallet API idempotency", () => {
@@ -217,5 +222,16 @@ describe("wallet API idempotency", () => {
     expect(localStorage.getItem("benzo.googleCredential")).toBe("new.jwt");
     expect(onAuthRequired).not.toHaveBeenCalled();
     window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+  });
+
+  it("classifies malformed and expired credentials before the shell mounts API screens", () => {
+    const future = Math.floor(Date.now() / 1000) + 60;
+    const past = Math.floor(Date.now() / 1000) - 60;
+
+    expect(credentialLooksWellFormed(null)).toBe(false);
+    expect(credentialLooksWellFormed("benzo-test.not-json.sig")).toBe(false);
+    expect(credentialLooksWellFormed(token({ iss: "benzo:test", sub: "alice", exp: past }))).toBe(false);
+    expect(credentialLooksWellFormed(token({ iss: "benzo:test", sub: "alice", exp: future }))).toBe(true);
+    expect(credentialLooksWellFormed(token({ iss: "https://accounts.google.com", aud: "client", sub: "google-sub", exp: future }, "header"))).toBe(true);
   });
 });

@@ -53,30 +53,47 @@ export function Work() {
   const cp = params.get("cp") ?? "";
   const org = params.get("org") ?? "the company";
   const inviteToken = params.get("token") ?? undefined;
+  const missingInvite = !cp || !inviteToken;
   const [amount, setAmount] = useState("");
   const [desc, setDesc] = useState("");
   const [busy, setBusy] = useState(false);
   const [mine, setMine] = useState<OrgInvoice[] | null>(null);
-  const [loadErr, setLoadErr] = useState(false);
+  const [loadErr, setLoadErr] = useState<null | "invite" | "network">(null);
   const [open, setOpen] = useState<string | null>(null);
   const [handoff, setHandoff] = useState<string | null>(null);
 
   const n = Number(amount);
   const amountOk = Number.isFinite(n) && n > 0 && n <= MAX_INVOICE;
 
-  const load = () =>
-    orgApi
+  const load = () => {
+    if (missingInvite) {
+      setMine([]);
+      setLoadErr(null);
+      return Promise.resolve();
+    }
+    return orgApi
       .invoices(inviteToken)
-      .then((all) => { setMine(all.filter((i) => i.counterpartyId === cp)); setLoadErr(false); })
+      .then((all) => { setMine(all.filter((i) => i.counterpartyId === cp)); setLoadErr(null); })
       // A down backend shouldn't masquerade as "No invoices yet" - flag it so we can
       // offer a retry instead of a deceptive empty state (only when we have nothing yet).
-      .catch(() => setLoadErr((had) => (mine == null ? true : had)));
+      .catch((e) => {
+        const message = e instanceof Error ? e.message : String(e);
+        const kind = /invite not found|expired/i.test(message) ? "invite" : "network";
+        setLoadErr((had) => (mine == null ? kind : had));
+      });
+  };
   useEffect(() => {
+    if (missingInvite) {
+      setMine([]);
+      setLoadErr(null);
+      return undefined;
+    }
+    if (loadErr) return undefined;
     void load();
     const t = setInterval(load, 5000); // poll so "Paid" appears after the employer pays
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cp]);
+  }, [cp, inviteToken, loadErr]);
 
   async function submit() {
     if (!amountOk || !desc.trim() || !cp) return;
@@ -108,14 +125,21 @@ export function Work() {
           </div>
         </div>
 
-        <Card className="mt-5 p-5">
-          <div className="mb-1 text-[13px] font-semibold text-ink">New invoice</div>
-          <AmountField value={amount} onChange={setAmount} />
-          <Input className="mt-3" label="What's it for?" placeholder="Services for this period" value={desc} onChange={(e) => setDesc(e.target.value)} data-testid="work-desc" />
-          <Button full size="lg" className="mt-4" loading={busy} disabled={!amountOk || !desc.trim() || !cp} onClick={submit} data-testid="work-submit">
-            <Send size={16} /> Send invoice
-          </Button>
-        </Card>
+        {missingInvite ? (
+          <Card className="mt-5 flex flex-col items-center gap-2 px-6 py-8 text-center" data-testid="work-missing-invite">
+            <div className="text-sm font-semibold text-ink">Open this from a contractor invite</div>
+            <div className="max-w-[270px] text-[13px] text-muted">Ask the company to send a fresh work link, then open it from this wallet.</div>
+          </Card>
+        ) : (
+          <Card className="mt-5 p-5">
+            <div className="mb-1 text-[13px] font-semibold text-ink">New invoice</div>
+            <AmountField value={amount} onChange={setAmount} />
+            <Input className="mt-3" label="What's it for?" placeholder="Services for this period" value={desc} onChange={(e) => setDesc(e.target.value)} data-testid="work-desc" />
+            <Button full size="lg" className="mt-4" loading={busy} disabled={!amountOk || !desc.trim() || !cp} onClick={submit} data-testid="work-submit">
+              <Send size={16} /> Send invoice
+            </Button>
+          </Card>
+        )}
 
         {handoff ? (
           <Card className="mt-4 p-4" data-testid="work-invoice-handoff">
@@ -138,9 +162,15 @@ export function Work() {
           <div className="mb-2 text-[12px] font-bold uppercase tracking-wide text-muted">Your invoices</div>
           {mine === null && loadErr ? (
             <Card className="flex flex-col items-center gap-2 px-6 py-8 text-center">
-              <div className="text-sm font-semibold text-ink">Couldn't load your invoices</div>
-              <div className="max-w-[240px] text-[13px] text-muted">Check your connection and try again.</div>
-              <Button size="sm" variant="secondary" className="mt-1" onClick={() => void load()} data-testid="work-retry">Retry</Button>
+              <div className="text-sm font-semibold text-ink">
+                {loadErr === "invite" ? "This work link is invalid or expired" : "Couldn't load your invoices"}
+              </div>
+              <div className="max-w-[250px] text-[13px] text-muted">
+                {loadErr === "invite" ? "Ask the company to send a fresh contractor invite." : "Check your connection and try again."}
+              </div>
+              {loadErr === "network" ? (
+                <Button size="sm" variant="secondary" className="mt-1" onClick={() => void load()} data-testid="work-retry">Retry</Button>
+              ) : null}
             </Card>
           ) : mine === null ? (
             <Card className="divide-y divide-hair/60 p-0">

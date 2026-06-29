@@ -182,6 +182,18 @@ export function currentGoogleCredential(): string | null {
   return localStorage.getItem(GOOGLE_TOKEN_KEY);
 }
 
+export function credentialLooksWellFormed(credential = currentGoogleCredential()): boolean {
+  if (!credential) return false;
+  const parts = credential.split(".");
+  if (parts.length !== 3) return false;
+  const payload = b64urlJson(parts[1]);
+  if (!payload) return false;
+  if (typeof payload.sub !== "string" || !payload.sub) return false;
+  if (typeof payload.exp === "number" && payload.exp * 1000 <= Date.now()) return false;
+  if (parts[0] === "benzo-test") return payload.iss === "benzo:test";
+  return typeof payload.iss === "string" && typeof payload.aud === "string";
+}
+
 function shortHash(input: string): string {
   let h = 0x811c9dc5;
   for (const ch of input) {

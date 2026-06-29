@@ -28,7 +28,8 @@ import { InviteExternal } from "./screens/InviteExternal";
 import { Claim } from "./screens/Claim";
 import { Work } from "./screens/Work";
 import { Onboarding } from "./screens/Onboarding";
-import { AUTH_REQUIRED_EVENT } from "./lib/api";
+import { AUTH_REQUIRED_EVENT, clearGoogleCredential, clearHostedAuthState, credentialLooksWellFormed, currentGoogleCredential } from "./lib/api";
+import { hasPasskey } from "./lib/passkey";
 
 const TABS = [
   { to: "/", label: "Home", icon: HomeIcon },
@@ -100,11 +101,14 @@ function useIsDesktop() {
 export function App() {
   const loc = useLocation();
   const isDesktop = useIsDesktop();
-  const [onboarded, setOnboarded] = useState(() => localStorage.getItem("benzo.onboarded") === "1");
+  const shellCredentialReady = () => credentialLooksWellFormed() || hasPasskey();
+  const [onboarded, setOnboarded] = useState(() => localStorage.getItem("benzo.onboarded") === "1" && shellCredentialReady());
   // App lock (C4): if "require unlock on open" is set, gate the whole shell until
   // the on-device passkey check passes.
   const [locked, setLocked] = useState(() => shouldLockOnOpen());
   useEffect(() => {
+    if (!credentialLooksWellFormed() && currentGoogleCredential()) clearGoogleCredential();
+    if (!shellCredentialReady()) clearHostedAuthState();
     const onAuthRequired = () => {
       setLocked(false);
       setOnboarded(false);
@@ -116,6 +120,7 @@ export function App() {
     localStorage.setItem("benzo.onboarded", "1");
     setOnboarded(true);
   }
+  const showShell = onboarded && !locked;
   // Send/Request/Share are presented as sheets over Home in real use, but each is
   // also a routable screen so deep-links + back work. The shell stays mounted.
   return (
@@ -133,6 +138,7 @@ export function App() {
           <VideoBackground tint="#f2f2ee" />
           <AnimatePresence>{onboarded && locked ? <LockGate onUnlock={() => setLocked(false)} /> : null}</AnimatePresence>
           <AnimatePresence>{!onboarded ? <Onboarding onDone={finishOnboarding} /> : null}</AnimatePresence>
+          {showShell ? (
           <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
             <main className="no-scrollbar flex-1 overflow-y-auto">
               <Routes location={loc} key={loc.pathname}>
@@ -156,6 +162,7 @@ export function App() {
             </main>
             <BottomNav />
           </div>
+          ) : null}
         </div>
       </div>
     </div>

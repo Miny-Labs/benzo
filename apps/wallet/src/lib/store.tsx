@@ -4,7 +4,7 @@
  * so the UI always reflects real on-chain state after a settle.
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, AUTH_CHANGED_EVENT, currentGoogleCredential, type ActivityRow, type Balance, type Contact, type Session } from "./api";
+import { api, AUTH_CHANGED_EVENT, credentialLooksWellFormed, type ActivityRow, type Balance, type Contact, type Session } from "./api";
 import { readShieldedBalanceClientSide } from "./benzoClient";
 
 /** The "Public" balance: plain liquid USDC on the account (send to / receive from any wallet). */
@@ -48,7 +48,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<boolean>(() => localStorage.getItem("benzo.hidden") === "1");
   const [deviceVerified, setDeviceVerified] = useState(false);
-  const [authenticated, setAuthenticated] = useState(() => !!currentGoogleCredential());
+  const [authenticated, setAuthenticated] = useState(() => credentialLooksWellFormed());
 
   const toggleHidden = useCallback(() => {
     setHidden((h) => {
@@ -153,7 +153,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [authenticated, refresh, refreshBalance]);
 
   useEffect(() => {
-    const onAuthChanged = () => setAuthenticated(!!currentGoogleCredential());
+    const onAuthChanged = () => setAuthenticated(credentialLooksWellFormed());
     window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
     return () => window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
   }, []);
