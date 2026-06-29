@@ -13,6 +13,7 @@
 import { readFileSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   BASE_FEE,
   Asset,
@@ -51,7 +52,7 @@ import { hostedRuntime } from "./runtime.js";
 
 export type ProverKind = "local" | "tee";
 
-const ROOT = process.env.BENZO_ROOT || process.cwd();
+const ROOT = process.env.BENZO_ROOT || fileURLToPath(new URL("../../..", import.meta.url));
 const DEPLOYMENT_URL = new URL("../../../deployments/testnet.json", import.meta.url);
 const TX_SOURCE = "benzo-deployer";
 const RELAY_SOURCE = "benzo-relayer";

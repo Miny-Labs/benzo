@@ -13,6 +13,7 @@
 import { readFileSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import type { Money, PaymentOrder, TreasuryView } from "@benzo/types";
 import {
@@ -38,7 +39,7 @@ import { db, id, now, usd } from "./store.js";
 import { currentAuth } from "./auth.js";
 import { hostedRuntime } from "./runtime.js";
 
-const ROOT = process.env.BENZO_ROOT || process.cwd();
+const ROOT = process.env.BENZO_ROOT || fileURLToPath(new URL("../../..", import.meta.url));
 const DEPLOYMENT_URL = new URL("../../../deployments/testnet.json", import.meta.url);
 const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 // The business org's OWN shielded treasury identity + note-discovery state — kept
