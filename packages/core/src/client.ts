@@ -360,6 +360,25 @@ export class BenzoClient {
     throw new Error("ASP membership mirror is not synced to the on-chain root yet");
   }
 
+  private async shieldWithFreshAspRoot(
+    leaf: bigint,
+    build: (aspLeafIndex: number) => Parameters<BenzoPoolClient["shield"]>[0],
+  ): Promise<Awaited<ReturnType<BenzoPoolClient["shield"]>>> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const aspLeafIndex = await this.syncAspMembershipAndLocate(leaf);
+      try {
+        return await this.pool.shield(build(aspLeafIndex));
+      } catch (e) {
+        const msg = String((e as Error)?.message ?? e);
+        if (attempt < 3 && /ASP membership mirror|on-chain root|WrongAspRoot|unknown root/i.test(msg)) {
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw new Error("ASP membership mirror is not synced to the on-chain root yet");
+  }
+
   // ----------------------------------------------------- persistence ------
 
   private stateLoaded = false;
@@ -495,8 +514,6 @@ export class BenzoClient {
       send: true,
       fnArgs: ["insert_leaf", "--leaf", leaf.toString()],
     });
-    const aspLeafIndex = await this.syncAspMembershipAndLocate(leaf);
-
     const orgNote: Note = {
       amount: opts.amount,
       recipientPk: opts.org.recipientPk,
@@ -505,16 +522,18 @@ export class BenzoClient {
     };
     const plain = encodeNotePlain({ ...orgNote });
     const tvk = deriveTvk(this.account.mvkSecret, opts.scope ?? DISCLOSURE_SCOPE);
-    const res = await this.pool.shield({
+    const noteCt = seal(plain, this.account.viewPub).bytes;
+    const mvkCt = seal(plain, tvk.publicKey).bytes;
+    const res = await this.shieldWithFreshAspRoot(leaf, (aspLeafIndex) => ({
       source: opts.fromSource,
       from: opts.fromAddress,
       note: orgNote,
       mvkPubScalar: this.account.mvkScalar,
       aspBlinding,
       aspLeafIndex,
-      noteCt: seal(plain, this.account.viewPub).bytes,
-      mvkCt: seal(plain, tvk.publicKey).bytes,
-    });
+      noteCt,
+      mvkCt,
+    }));
     this.record({
       type: "shield",
       amount: opts.amount.toString(),
@@ -836,21 +855,21 @@ export class BenzoClient {
       send: true,
       fnArgs: ["insert_leaf", "--leaf", leaf.toString()],
     });
-    const aspLeafIndex = await this.syncAspMembershipAndLocate(leaf);
-
     const note = newNote(opts.amount, this.account.spendPub, assetId);
     const plain = encodeNotePlain({ ...note });
     const tvk = deriveTvk(this.account.mvkSecret, opts.scope ?? DISCLOSURE_SCOPE);
-    const res = await this.pool.shield({
+    const noteCt = seal(plain, this.account.viewPub).bytes;
+    const mvkCt = seal(plain, tvk.publicKey).bytes;
+    const res = await this.shieldWithFreshAspRoot(leaf, (aspLeafIndex) => ({
       source: opts.fromSource,
       from: opts.fromAddress,
       note,
       mvkPubScalar: this.account.mvkScalar,
       aspBlinding,
       aspLeafIndex,
-      noteCt: seal(plain, this.account.viewPub).bytes,
-      mvkCt: seal(plain, tvk.publicKey).bytes,
-    });
+      noteCt,
+      mvkCt,
+    }));
     this.record({
       type: "shield",
       amount: opts.amount.toString(),

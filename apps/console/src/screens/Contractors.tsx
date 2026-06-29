@@ -143,6 +143,7 @@ export function Contractors() {
         lines: payable.map((c) => ({ counterpartyId: c.id })),
       });
       toast({ title: `${period()} run drafted: ${batch.lines.length} contractors · ${fmtUsd(batch.total.amount)}`, tone: "success" });
+      await refresh();
       nav("/payroll");
     } catch (e) {
       toast({ title: friendlyError(e), tone: "danger" });

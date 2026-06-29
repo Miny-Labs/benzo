@@ -486,17 +486,17 @@ async function ensureHostedPublicAccount(opts: { waitForRpc?: boolean } = {}): P
  * mirror can produce its membership path (and self-register on-chain if needed).
  * Fails loud if the mirror root diverges from the on-chain root.
  */
-const mvkWired = new WeakSet<BenzoClient>();
+const mvkWiredRoot = new WeakMap<BenzoClient, bigint>();
 async function wireMvkRegistry(c: BenzoClient): Promise<void> {
-  if (mvkWired.has(c)) return;
   const d = deployment();
   const registry = d.mvkRegistry as string | undefined;
   const rpc = process.env.SOROBAN_RPC_URL;
   if (!registry || !rpc) return;
   const myMvk = c.account.mvkScalar;
   const myLeaf = mvkRegistryLeaf(myMvk, 0n);
-  let leaves = await fetchMvkRegistryLeaves(rpc, registry, 1);
   let onchain = BigInt((await c.opts.cli.view(registry, TX_SOURCE, ["current_root"])) as string);
+  if (mvkWiredRoot.get(c) === onchain) return;
+  let leaves = await fetchMvkRegistryLeaves(rpc, registry, 1);
   if (!leaves.includes(myLeaf)) {
     // not yet registered — register our MVK on-chain, then refetch.
     try {
@@ -518,7 +518,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<void> {
       onchain = BigInt((await c.opts.cli.view(registry, TX_SOURCE, ["current_root"])) as string);
       if (reg.root() === onchain) {
         c.pool.useMvkRegistry(reg);
-        mvkWired.add(c);
+        mvkWiredRoot.set(c, onchain);
         return;
       }
     }
@@ -536,7 +536,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<void> {
     throw new Error(`mvk registry mirror drift: mirror=${reg.root()} onchain=${onchain}`);
   }
   c.pool.useMvkRegistry(reg);
-  mvkWired.add(c);
+  mvkWiredRoot.set(c, onchain);
 }
 
 /** Accept human ("25.50") or stroop ("250000000") amounts; normalise to stroops. */
@@ -1762,7 +1762,7 @@ function sweepExpired(): void {
 /** Re-adopt the wallet account after a claim (which mutates the client's account). */
 function restoreWalletAccount(c: BenzoClient): void {
   c.useAccount(loadWalletAccount());
-  mvkWired.delete(c); // wallet MVK must be re-wired after the claim account hijack
+  mvkWiredRoot.delete(c); // wallet MVK must be re-wired after the claim account handoff
 }
 
 export interface InviteResult {
@@ -1860,7 +1860,7 @@ async function sweepClaim(secret: string): Promise<{ amount: string; txHash?: st
   // first — the unshield that settles the claim needs the spender's MVK
   // membership path (else "MvkRegistryMirror: MVK not registered").
   c.useAccount(accountFromClaimSecret(claimSecret));
-  mvkWired.delete(c);
+  mvkWiredRoot.delete(c);
   await c.sync();
   await wireMvkRegistry(c);
   try {
@@ -1868,7 +1868,7 @@ async function sweepClaim(secret: string): Promise<{ amount: string; txHash?: st
     await c.flush();
     return { amount: r.amount.toString(), txHash: r.txHash, onChain: true, sorobanPublics: r.sorobanPublics };
   } finally {
-    restoreWalletAccount(c); // re-adopt the wallet (mvkWired reset; re-wires lazily)
+    restoreWalletAccount(c); // re-adopt the wallet (MVK root cache reset; re-wires lazily)
     await c.sync();
   }
 }

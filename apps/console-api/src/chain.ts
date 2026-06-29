@@ -28,16 +28,19 @@ import {
   mvkRegistryLeaf,
   makeClientSubmitWrite,
   proverFromEnv,
+  sponsoredOnboard,
+  sponsoredTrustlineOps,
   toHex,
   type ChainClient,
 } from "@benzo/core";
-import { Keypair, rpc } from "@stellar/stellar-sdk";
+import { Asset, BASE_FEE, Horizon, Keypair, TransactionBuilder, rpc } from "@stellar/stellar-sdk";
 import { db, id, now, usd } from "./store.js";
 import { currentAuth } from "./auth.js";
 import { hostedRuntime } from "./runtime.js";
 
 const ROOT = process.env.BENZO_ROOT || process.cwd();
 const DEPLOYMENT_URL = new URL("../../../deployments/testnet.json", import.meta.url);
+const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 // The business org's OWN shielded treasury identity + note-discovery state — kept
 // SEPARATE from the consumer wallet (different product, different identity system;
 // the two never share an account). App-specific env vars so a generic override
@@ -50,6 +53,8 @@ const OPERATOR_ADMIN_SOURCE = "benzo-operator-admin";
 const HOSTED_ORG_SOURCE = "benzo-hosted-console-org";
 /** The deployment record (set when the live client is built) — for the MVK registry. */
 let deployment: Record<string, unknown> | null = null;
+const hostedProvisioning = new Map<string, Promise<string>>();
+const hostedRpcVisibility = new Map<string, Promise<void>>();
 
 function operatorAdminSecret(): string | null {
   return process.env.BENZO_OPERATOR_ADMIN_SECRET
@@ -196,6 +201,7 @@ export function getClient(relayer = false): BenzoClient | null {
       }),
       rpcUrl: process.env.SOROBAN_RPC_URL,
       txSource: consoleOrgSource(),
+      aspSource: hostedRuntime() ? operatorAdminSource() : TX_SOURCE,
       relayer: relayer ? { source: RELAY_SOURCE, address: relayerAddress() } : undefined,
       handleRegistry: dep.handleRegistry,
       requestRegistry: dep.requestRegistry,
@@ -230,6 +236,118 @@ async function selfAddress(c: BenzoClient): Promise<string> {
   return c.account.stellarAddress ?? (await c.opts.cli.keyAddress(TX_SOURCE));
 }
 
+function usdcAsset(): { code: string; issuer: string } {
+  const [code, issuer] = String((deployment?.usdcAsset as string) ?? "USDC:").split(":");
+  if (!code || !issuer) throw new Error("USDC asset deployment is missing");
+  return { code, issuer };
+}
+
+function isMissingAccountError(e: unknown): boolean {
+  const maybe = e as { response?: { status?: number }; status?: number; message?: string };
+  return maybe.response?.status === 404 ||
+    maybe.status === 404 ||
+    /account.*not.*found|not.*found|404/i.test(String(maybe.message ?? e));
+}
+
+async function sponsoredTrustline(params: { accountSecret: string; sponsorSecret: string; asset: { code: string; issuer: string } }): Promise<void> {
+  const sponsor = Keypair.fromSecret(params.sponsorSecret);
+  const account = Keypair.fromSecret(params.accountSecret);
+  const server = new Horizon.Server(HORIZON_URL);
+  const sponsorAccount = await server.loadAccount(sponsor.publicKey());
+  const asset = new Asset(params.asset.code, params.asset.issuer);
+  const builder = new TransactionBuilder(sponsorAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: process.env.NETWORK_PASSPHRASE ?? "Test SDF Network ; September 2015",
+  });
+  for (const op of sponsoredTrustlineOps(
+    { sponsor: sponsor.publicKey(), account: account.publicKey(), asset: params.asset },
+    asset,
+  )) {
+    builder.addOperation(op);
+  }
+  const tx = builder.setTimeout(120).build();
+  tx.sign(sponsor, account);
+  await server.submitTransaction(tx);
+}
+
+async function waitForHostedRpcAccount(accountAddress: string): Promise<void> {
+  const cfg = configFromEnv();
+  const server = new rpc.Server(cfg.rpcUrl, { allowHttp: cfg.rpcUrl.startsWith("http://") });
+  let lastErr: unknown;
+  for (let i = 0; i < 30; i++) {
+    try {
+      await server.getAccount(accountAddress);
+      return;
+    } catch (e) {
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 500 * (i < 5 ? 1 : 2)));
+    }
+  }
+  throw new Error(`Hosted console account is not visible to Soroban RPC yet: ${String((lastErr as Error)?.message ?? lastErr)}`);
+}
+
+async function waitForHostedRpcReady(authKey: string, accountAddress: string): Promise<void> {
+  const cached = hostedRpcVisibility.get(authKey);
+  if (cached) return cached;
+  const work = waitForHostedRpcAccount(accountAddress);
+  hostedRpcVisibility.set(authKey, work);
+  try {
+    await work;
+  } catch (e) {
+    hostedRpcVisibility.delete(authKey);
+    throw e;
+  }
+}
+
+async function ensureHostedPublicAccount(opts: { waitForRpc?: boolean } = {}): Promise<void> {
+  if (!hostedRuntime()) return;
+  const auth = currentAuth();
+  if (!auth?.account.stellarSecret || !auth.account.stellarAddress) throw new Error("Hosted console account has no public-edge signer");
+  const accountSecret = auth.account.stellarSecret;
+  const accountAddress = auth.account.stellarAddress;
+  const cached = hostedProvisioning.get(auth.key);
+  if (cached) {
+    const address = await cached;
+    if (opts.waitForRpc !== false) await waitForHostedRpcReady(auth.key, address);
+    return;
+  }
+  const work = (async () => {
+    const sponsorSecret = process.env.RELAYER_SECRET;
+    if (!sponsorSecret) throw new Error("RELAYER_SECRET is required for hosted console onboarding");
+    const asset = usdcAsset();
+    const server = new Horizon.Server(HORIZON_URL);
+    try {
+      const account = await server.loadAccount(accountAddress);
+      const hasTrustline = account.balances.some((b) =>
+        "asset_code" in b &&
+        b.asset_code === asset.code &&
+        "asset_issuer" in b &&
+        b.asset_issuer === asset.issuer
+      );
+      if (!hasTrustline) await sponsoredTrustline({ accountSecret, sponsorSecret, asset });
+    } catch (e) {
+      if (!isMissingAccountError(e)) throw e;
+      await sponsoredOnboard({
+        horizonUrl: HORIZON_URL,
+        networkPassphrase: process.env.NETWORK_PASSPHRASE ?? "Test SDF Network ; September 2015",
+        sponsorSecret,
+        asset,
+        newAccountSecret: accountSecret,
+      });
+    }
+    return accountAddress;
+  })();
+  hostedProvisioning.set(auth.key, work);
+  try {
+    const address = await work;
+    if (opts.waitForRpc !== false) await waitForHostedRpcReady(auth.key, address);
+  } catch (e) {
+    hostedProvisioning.delete(auth.key);
+    hostedRpcVisibility.delete(auth.key);
+    throw e;
+  }
+}
+
 /** Basic Stellar account-id (G-address) shape check before a public send. */
 function isValidStellarAddress(addr: string): boolean {
   return /^G[A-Z2-7]{55}$/.test(addr.trim());
@@ -245,6 +363,7 @@ export async function treasuryPublicBalance(): Promise<{ stroops: string; addres
   const c = getClient();
   if (!c) throw new Error("Live console client unavailable. Treasury balance was not read.");
   const address = await selfAddress(c);
+  await ensureHostedPublicAccount({ waitForRpc: false });
   const token = deployment?.token as string;
   const [asset, issuer] = String((deployment?.usdcAsset as string) ?? "USDC:").split(":");
   let stroops = "0";
@@ -268,6 +387,7 @@ export async function treasuryReceiveInfo(): Promise<{ address: string; asset: s
     const c = getClient();
     if (!c) throw new Error("Live console client unavailable.");
     const address = await selfAddress(c);
+    await ensureHostedPublicAccount({ waitForRpc: false });
     const [asset, issuer] = String((deployment?.usdcAsset as string) ?? "USDC:").split(":");
     return { address, asset: asset || "USDC", issuer: issuer || "", live: true };
   } catch (e) {
@@ -321,16 +441,16 @@ export async function treasurySendPublic(toAddress: string, amount: string): Pro
  * note-binding ops produce a `registeredMvkRoot` the registry accepts (else the
  * single-leaf fallback is rejected — Contract #13). Self-registers our MVK if absent.
  */
-const mvkWired = new WeakSet<BenzoClient>();
+const mvkWiredRoot = new WeakMap<BenzoClient, bigint>();
 async function wireMvkRegistry(c: BenzoClient): Promise<void> {
-  if (mvkWired.has(c)) return;
   const registry = deployment?.mvkRegistry as string | undefined;
   const rpc = process.env.SOROBAN_RPC_URL;
   if (!registry || !rpc) return;
   const myMvk = c.account.mvkScalar;
   const myLeaf = mvkRegistryLeaf(myMvk, 0n);
-  let leaves = await fetchMvkRegistryLeaves(rpc, registry, 1);
   let onchain = BigInt((await c.opts.cli.view(registry, TX_SOURCE, ["current_root"])) as string);
+  if (mvkWiredRoot.get(c) === onchain) return;
+  let leaves = await fetchMvkRegistryLeaves(rpc, registry, 1);
   if (!leaves.includes(myLeaf)) {
     await c.opts.cli.invoke({ contractId: registry, source: operatorAdminSource(), send: true, fnArgs: ["register_mvk", "--mvk_pub", myMvk.toString(), "--key_meta", "0"] });
   }
@@ -341,7 +461,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<void> {
       onchain = BigInt((await c.opts.cli.view(registry, TX_SOURCE, ["current_root"])) as string);
       if (reg.root() === onchain) {
         c.pool.useMvkRegistry(reg);
-        mvkWired.add(c);
+        mvkWiredRoot.set(c, onchain);
         return;
       }
     }
@@ -356,7 +476,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<void> {
   onchain = BigInt((await c.opts.cli.view(registry, TX_SOURCE, ["current_root"])) as string);
   if (reg.root() !== onchain) throw new Error(`mvk registry mirror drift: mirror=${reg.root()} onchain=${onchain}`);
   c.pool.useMvkRegistry(reg);
-  mvkWired.add(c);
+  mvkWiredRoot.set(c, onchain);
 }
 
 /**
@@ -378,7 +498,7 @@ export async function registerOwnerMvk(): Promise<{ onChain: boolean; txHash?: s
     const r = await c.opts.cli.invoke({ contractId: registry, source: operatorAdminSource(), send: true, fnArgs: ["register_mvk", "--mvk_pub", myMvk.toString(), "--key_meta", "0"] });
     txHash = r.txHash;
   }
-  mvkWired.delete(c); // force a fresh mirror that includes our (possibly new) leaf
+  mvkWiredRoot.delete(c); // force a fresh mirror that includes our (possibly new) leaf
   await wireMvkRegistry(c);
   const root = (await c.opts.cli.view(registry, TX_SOURCE, ["current_root"])) as string;
   return { onChain: true, txHash, mvkRoot: String(root) };
@@ -570,6 +690,7 @@ export async function fundTreasury(amountStroops: string): Promise<{ onChain: bo
   if (!c) return { onChain: false, error: "console API is not connected to live testnet signing" };
   const from = await selfAddress(c);
   try {
+    await ensureHostedPublicAccount();
     await c.sync();
     await wireMvkRegistry(c);
     await ensureOrgSetup(c);

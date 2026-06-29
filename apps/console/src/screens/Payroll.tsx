@@ -27,7 +27,7 @@ export function Payroll() {
   const [policing, setPolicing] = useState<string | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [computing, setComputing] = useState<string | null>(null);
-  const [cap, setCap] = useState("0.50");
+  const [cap, setCap] = useState("5000.00");
   const [open, setOpen] = useState<string | null>(null);
   // Confirm gate for the highest-value irreversible action (Approve & run).
   const [confirmRun, setConfirmRun] = useState<PayrollBatch | null>(null);
@@ -82,12 +82,17 @@ export function Payroll() {
     setOpen(b.id);
     try {
       const r = await api.provePolicy(b.id, cap);
-      const over = r.lines.filter((l) => l.capProof && !l.capProof.withinCap).length;
-      const flagged = r.lines.filter((l) => l.screenProof && !l.screenProof.innocent).length;
-      const problems = over + flagged;
+      const over = r.lines.filter((l) => l.capProof?.onChain && !l.capProof.withinCap).length;
+      const flagged = r.lines.filter((l) => l.screenProof?.onChain && !l.screenProof.innocent).length;
+      const unverified = r.lines.filter((l) => l.capProof && !l.capProof.onChain || l.screenProof && !l.screenProof.onChain).length;
+      const problems = over + flagged + unverified;
       toast({
         title: problems
-          ? `${over ? `${over} over the ${cap} cap` : ""}${over && flagged ? ", " : ""}${flagged ? `${flagged} sanctioned` : ""} (proven on-chain)`
+          ? [
+              over ? `${over} over the ${cap} cap` : "",
+              flagged ? `${flagged} sanctioned` : "",
+              unverified ? `${unverified} proof${unverified === 1 ? "" : "s"} not verified on-chain` : "",
+            ].filter(Boolean).join(", ")
           : `All lines within cap and clear of sanctions, proven on-chain`,
         tone: problems ? "danger" : "success",
       });
@@ -319,13 +324,13 @@ export function Payroll() {
                         <span className="w-40 truncate">{name(l.counterpartyId)}</span>
                         <span className="flex-1 text-[12px] text-danger">{l.status === "failed" && l.error ? l.error : ""}</span>
                         {l.capProof ? (
-                          <Pill tone={!l.capProof.withinCap ? "danger" : l.capProof.onChain ? "shielded" : "warning"}>
-                            <ShieldCheck size={10} /> {l.capProof.withinCap ? (l.capProof.onChain ? "within cap" : "cap not verified on-chain") : "over cap"}
+                          <Pill tone={!l.capProof.onChain ? "warning" : !l.capProof.withinCap ? "danger" : "shielded"}>
+                            <ShieldCheck size={10} /> {!l.capProof.onChain ? "cap not verified on-chain" : l.capProof.withinCap ? "within cap" : "over cap"}
                           </Pill>
                         ) : null}
                         {l.screenProof ? (
-                          <Pill tone={!l.screenProof.innocent ? "danger" : l.screenProof.onChain ? "shielded" : "warning"}>
-                            <ShieldCheck size={10} /> {l.screenProof.innocent ? (l.screenProof.onChain ? "not sanctioned" : "screening not verified on-chain") : "sanctioned"}
+                          <Pill tone={!l.screenProof.onChain ? "warning" : !l.screenProof.innocent ? "danger" : "shielded"}>
+                            <ShieldCheck size={10} /> {!l.screenProof.onChain ? "screening not verified on-chain" : l.screenProof.innocent ? "not sanctioned" : "sanctioned"}
                           </Pill>
                         ) : null}
                         {l.txHash ? (

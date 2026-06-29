@@ -292,7 +292,7 @@ async function settlePayroll(batch: PayrollBatch): Promise<void> {
       for (const l of batch.lines) {
         if (!l.onChain && BigInt(l.amount || "0") > 0n) {
           l.status = "failed";
-          l.error = "run not funded — treasury below run total (proven on-chain). Top up and re-approve.";
+          l.error = "run not funded - treasury below run total (proven on-chain). Top up and re-approve.";
         }
       }
       batch.status = "processing";
@@ -312,7 +312,7 @@ async function settlePayroll(batch: PayrollBatch): Promise<void> {
     }
     if (live && amt > remaining) {
       l.status = "failed";
-      l.error = "insufficient treasury balance — top up and re-approve to retry";
+      l.error = "insufficient treasury balance - top up and re-approve to retry";
       continue;
     }
     const r = await payOne(payrollLineHandle(l), l.amount);
@@ -758,7 +758,11 @@ route("POST", "/api/payroll-proofs/policy", async (req, res) => {
   for (let i = 0; i < (body.lines ?? []).length; i++) {
     const l = (body.lines ?? [])[i];
     if (!l.handle || BigInt(l.amount || "0") <= 0n) {
-      lines.push({ counterpartyId: l.counterpartyId });
+      lines.push({
+        counterpartyId: l.counterpartyId,
+        capProof: { withinCap: false, onChain: false },
+        screenProof: { innocent: false, onChain: false },
+      });
       continue;
     }
     const cap = await proveLineCap(l.handle, l.amount, capStroops, BigInt(i + 1));
@@ -1231,7 +1235,11 @@ route("POST", "/api/payrolls/:id/prove-policy", async (req, res, p) => {
   for (let i = 0; i < batch.lines.length; i++) {
     const l = batch.lines[i];
     const handle = payrollLineHandle(l);
-    if (!handle || BigInt(l.amount || "0") <= 0n) continue;
+    if (!handle || BigInt(l.amount || "0") <= 0n) {
+      l.capProof = { withinCap: false, onChain: false };
+      l.screenProof = { innocent: false, onChain: false };
+      continue;
+    }
     const cap = await proveLineCap(handle, l.amount, capStroops, BigInt(i + 1));
     l.capProof = { withinCap: cap.withinCap, onChain: cap.onChain };
     const screen = await proveLineInnocence(handle, l.amount, BigInt(1000 + i));
