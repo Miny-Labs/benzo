@@ -83,7 +83,7 @@ test("hosted wallet live status does not depend on DEPLOYER_SECRET", async () =>
 
 test("hosted wallet reports missing operator admin signer separately from user auth", async () => {
   vi.resetModules();
-  delete process.env.DEPLOYER_SECRET;
+  process.env.DEPLOYER_SECRET = Keypair.random().secret();
   delete process.env.BENZO_OPERATOR_ADMIN_SECRET;
   delete process.env.BENZO_RAMP_ADMIN_SECRET;
   delete process.env.RAMP_ADMIN_SECRET;

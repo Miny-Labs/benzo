@@ -33,6 +33,7 @@ import { accountBinding, authFromRequest, createTestAuthToken, currentAuth, runW
 import { matchPolicy, progress, recordApproval } from "./approvals.js";
 import { validateInviteInput } from "./inviteValidation.js";
 import { validateNettingAmounts } from "./nettingValidation.js";
+import { validateGrantInput } from "./grantValidation.js";
 import { activateAcceptedMemberInvite, db, fmtUsd, id, now, parseRosterCsv, recoverySummary, RecoveryRequiredError, runWithConsoleTenant, runWithConsoleTenantKey, tenantDataMissing, currentConsoleTenantKey, type OrgInvite } from "./store.js";
 import { lookupTenantRoute, registerTenantRoute, takeTenantRateLimit } from "./tenantData.js";
 import { hostedRuntime, serverlessRuntime } from "./runtime.js";
@@ -1346,14 +1347,17 @@ route("PATCH", "/api/policies/:id", async (req, res, p) => {
 route("GET", "/api/grants", (_req, res) => json(res, 200, db.grants));
 route("POST", "/api/grants", async (req, res) => {
   const body = await readJson<CreateViewingGrantRequest>(req);
+  const validation = validateGrantInput(body);
+  if (!validation.ok) return json(res, 400, { error: validation.error });
+  const grantRequest = validation.value;
   // Real scoped viewing key (one-way TVK derived from the org MVK + scope) —
   // decrypt-only, never a signer. Not a random hash.
-  const vk = auditorGrantViewKey(body.scope?.label || body.tier || "audit");
+  const vk = auditorGrantViewKey(grantRequest.scope.label || grantRequest.tier);
   const grant = {
-    id: id("vg"), orgId: db.org.id, auditorName: body.auditorName, auditorPubKey: body.auditorPubKey,
-    tier: body.tier, scope: body.scope,
+    id: id("vg"), orgId: db.org.id, auditorName: grantRequest.auditorName, auditorPubKey: grantRequest.auditorPubKey,
+    tier: grantRequest.tier, scope: grantRequest.scope,
     onChainKeyHash: vk.viewKey ? vk.viewKey.slice(0, 24) : undefined,
-    viewKey: vk.viewKey || undefined, live: vk.live, expiry: body.expiry,
+    viewKey: vk.viewKey || undefined, live: vk.live, expiry: grantRequest.expiry,
     status: "active" as const, createdAt: now(),
   };
   db.grants.push(grant);

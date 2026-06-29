@@ -86,11 +86,12 @@ function walletRouteLink(link: string): string {
 }
 
 function operatorAdminSecret(): string | null {
-  return process.env.BENZO_OPERATOR_ADMIN_SECRET
+  const adminSecret = process.env.BENZO_OPERATOR_ADMIN_SECRET
     ?? process.env.BENZO_RAMP_ADMIN_SECRET
     ?? process.env.RAMP_ADMIN_SECRET
-    ?? process.env.DEPLOYER_SECRET
     ?? null;
+  if (hostedRuntime()) return adminSecret;
+  return adminSecret ?? process.env.DEPLOYER_SECRET ?? null;
 }
 
 function operatorAdminSource(): string {

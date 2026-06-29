@@ -21,6 +21,7 @@ export function Grants() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ auditorName: "", auditorPubKey: "", tier: "outgoing" as DisclosureTier, label: "2026-Q2", accountId: "" });
+  const [formError, setFormError] = useState<string | null>(null);
   const [period, setPeriod] = useState("2026-Q2");
   const [busyAtt, setBusyAtt] = useState(false);
   const [att, setAtt] = useState<PeriodTotal | null>(null);
@@ -82,11 +83,22 @@ export function Grants() {
   }
 
   async function create() {
+    const auditorName = form.auditorName.trim();
+    const auditorPubKey = form.auditorPubKey.trim();
+    if (!auditorName) {
+      setFormError("Enter the auditor's name before issuing a grant.");
+      return;
+    }
+    if (!auditorPubKey) {
+      setFormError("Enter the auditor's public key before issuing a grant.");
+      return;
+    }
     setBusy(true);
+    setFormError(null);
     try {
       await api.createGrant({
-        auditorName: form.auditorName || "External Auditor",
-        auditorPubKey: form.auditorPubKey || "0xaud",
+        auditorName,
+        auditorPubKey,
         tier: form.tier,
         scope: { accountIds: form.accountId ? [form.accountId] : [], from: null, to: null, label: form.label },
         expiry: new Date(Date.now() + 90 * 86_400_000).toISOString(),
@@ -271,7 +283,7 @@ export function Grants() {
 
       <Modal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => { setOpen(false); setFormError(null); }}
         title="Issue a viewing grant"
         footer={
           <>
@@ -285,8 +297,8 @@ export function Grants() {
         }
       >
         <div className="flex flex-col gap-4">
-          <Input label="Auditor name" placeholder="External Auditor" value={form.auditorName} onChange={(e) => setForm({ ...form, auditorName: e.target.value })} data-testid="grant-name" />
-          <Input label="Auditor public key" placeholder="0x…" value={form.auditorPubKey} onChange={(e) => setForm({ ...form, auditorPubKey: e.target.value })} />
+          <Input label="Auditor name" placeholder="External Auditor" value={form.auditorName} onChange={(e) => { setFormError(null); setForm({ ...form, auditorName: e.target.value }); }} data-testid="grant-name" error={formError?.includes("name") ? formError : undefined} />
+          <Input label="Auditor public key" placeholder="0x…" value={form.auditorPubKey} onChange={(e) => { setFormError(null); setForm({ ...form, auditorPubKey: e.target.value }); }} data-testid="grant-pubkey" error={formError?.includes("public key") ? formError : undefined} />
           <Select label="Disclosure tier" value={form.tier} onChange={(e) => setForm({ ...form, tier: e.target.value as DisclosureTier })}>
             <option value="outgoing">Outgoing only</option>
             <option value="incoming">Incoming only</option>
