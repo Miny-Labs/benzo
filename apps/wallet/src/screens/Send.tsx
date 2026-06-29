@@ -20,6 +20,7 @@ import { needsStepUp, stepUpMessage, sendCapUsd } from "../lib/tiers";
 import { useWallet } from "../lib/store";
 import { fmtUsd } from "../lib/format";
 import { isValidStellarAddress, shortAddress } from "../lib/strkey";
+import { classifyRecipientInput, hasBadHandleSyntax, looksLikeStellarAddressInput, type RecipientKind } from "../lib/recipient";
 import { Screen, motion } from "../ui/motion";
 import { ScreenHeader } from "../ui/chrome";
 import { AmountField, Avatar, Button, Input } from "../ui/primitives";
@@ -28,23 +29,7 @@ import { OnChainDetails } from "../ui/OnChainDetails";
 import { SendCeremony, type SendReceipt } from "../ui/send/SendCeremony";
 
 type Step = "form" | "confirm";
-type Kind = "handle" | "address" | "invite";
-
-function looksLikeStellarAddressInput(to: string): boolean {
-  const t = to.trim();
-  return /^G[A-Z2-7]+$/.test(t) && t.length > 20;
-}
-
-function classify(to: string): Kind {
-  const t = to.trim();
-  // Only a CHECKSUM-valid StrKey is a payable public address - a shape match isn't
-  // enough. A typo'd G-string is surfaced as a wallet-address error by
-  // `badAddress` below, never routed into the invite flow.
-  if (looksLikeStellarAddressInput(t)) return isValidStellarAddress(t) ? "address" : "invite";
-  if (t.startsWith("@")) return "handle";
-  if (/^[a-z0-9_.]{3,20}$/i.test(t)) return "handle";
-  return "invite";
-}
+type Kind = RecipientKind;
 
 function toStroopsSafe(amount: string): string {
   const n = Number(amount);
@@ -55,7 +40,7 @@ function toStroopsSafe(amount: string): string {
 export function Send() {
   const nav = useNavigate();
   const [params] = useSearchParams();
-  const { contacts: bffContacts, session, publicBalance, refresh } = useWallet();
+  const { contacts: bffContacts, session, balance, publicBalance, refresh } = useWallet();
   const contacts = useMemo(() => mergeContacts(bffContacts), [bffContacts]); // C6: BFF + saved
   const { state, receipt, run, reset } = useSendStream();
   const [to, setTo] = useState(() => params.get("to") ?? ""); // prefilled from Contacts / a request
@@ -77,7 +62,7 @@ export function Send() {
   // prove on-device; phones + weak desktops delegate to the enclave (TEE).
   const plan = useMemo(() => proverPlan(teeAvailable), [teeAvailable]);
   const recipient = to.trim();
-  const kind = useMemo(() => (recipient ? classify(recipient) : null), [recipient]);
+  const kind = useMemo(() => (recipient ? classifyRecipientInput(recipient) : null), [recipient]);
   const hostedPrivateSend = kind === "handle" && !!currentGoogleCredential();
   const effectivePrivatePlan = useMemo(
     () => hostedPrivateSend ? apiBoundaryProverPlan(plan, teeAvailable) : plan,
@@ -86,14 +71,17 @@ export function Send() {
   // Looks like a wallet address but the checksum doesn't add up - a typo'd key.
   // Surface this clearly instead of routing it to the "invite" flow or paying it.
   const badAddress = useMemo(() => looksLikeStellarAddressInput(recipient) && !isValidStellarAddress(recipient), [recipient]);
+  const badHandle = useMemo(() => hasBadHandleSyntax(recipient), [recipient]);
   const known = useMemo(() => contacts.find((c) => c.handle === recipient || c.handle === `@${recipient}`), [contacts, recipient]);
   const display = known?.name ?? recipient;
   // Public sends draw on the PUBLIC balance - flag "not enough" before we ever
   // reach confirm so the user gets a clear shortcut to top it up via Make public.
+  const privateStroops = BigInt(balance?.stroops ?? "0");
   const publicStroops = BigInt(publicBalance?.stroops ?? "0");
   const wantStroops = BigInt(toStroopsSafe(amount));
+  const lowPrivate = kind === "handle" && wantStroops > 0n && wantStroops > privateStroops;
   const lowPublic = kind === "address" && wantStroops > 0n && wantStroops > publicStroops;
-  const valid = recipient.length > 0 && Number(amount) > 0 && kind !== "invite" && !badAddress && !(kind === "address" && lowPublic);
+  const valid = recipient.length > 0 && Number(amount) > 0 && kind !== "invite" && !badAddress && !badHandle && !lowPrivate && !(kind === "address" && lowPublic);
 
   const inFlight = state.phase !== "idle";
   const pubInFlight = pubPhase !== "idle";
@@ -169,10 +157,15 @@ export function Send() {
               spellCheck={false}
             />
             {/* recipient kind chip (suppressed when the address looks mistyped) */}
-            {recipient && !badAddress ? <KindChip key={kind} kind={kind!} /> : null}
+            {recipient && !badAddress && !badHandle ? <KindChip key={kind} kind={kind!} /> : null}
             {badAddress ? (
               <div className="mt-2 flex items-center gap-1.5 rounded-full bg-danger/10 px-2.5 py-1 text-[11.5px] font-semibold text-danger" data-testid="send-bad-address">
                 <AlertTriangle size={12} /> This doesn't look like a valid wallet address. Double-check it.
+              </div>
+            ) : null}
+            {badHandle ? (
+              <div className="mt-2 flex items-center gap-1.5 rounded-full bg-danger/10 px-2.5 py-1 text-[11.5px] font-semibold text-danger" data-testid="send-bad-handle">
+                <AlertTriangle size={12} /> Handles are 3 to 20 characters: letters, numbers, dots, or underscores.
               </div>
             ) : null}
 
@@ -210,6 +203,11 @@ export function Send() {
                   >
                     <Globe size={12} /> Make public
                   </button>
+                </div>
+              ) : null}
+              {lowPrivate ? (
+                <div className="mx-auto mt-2 max-w-[300px] text-center text-[12px] text-[#9a6b12]" data-testid="send-low-private">
+                  Not enough private USDC. Add money or use a smaller amount.
                 </div>
               ) : null}
               <div className="mt-3 flex justify-center gap-2">

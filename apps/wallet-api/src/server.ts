@@ -121,6 +121,14 @@ function rampError(e: unknown, dir: "in" | "out"): { error: string; code: string
   if (e instanceof RampError) return { error: e.message, code: e.code };
   return { error: dir === "in" ? "Couldn't add money right now. Your money is safe. Please try again." : "Couldn't cash out right now. Your money is safe. Please try again.", code: "busy" };
 }
+function sendError(e: unknown): { error: string; code: string } {
+  if (e instanceof RampError) return { error: e.message, code: e.code };
+  return { error: "Couldn't send right now. Your money is safe. Please try again.", code: "busy" };
+}
+function malformedHandle(to: string): boolean {
+  const t = to.trim();
+  return t.startsWith("@") && !/^[a-z0-9_.]{3,20}$/i.test(t.slice(1));
+}
 /** HTTP status for a ramp failure: 409 for a known business condition, 503 for transient. */
 function rampStatus(e: unknown): number {
   if (e instanceof RampError) return e.code === "limit" ? 400 : e.code === "busy" ? 503 : 409;
@@ -414,6 +422,18 @@ route("POST", "/api/send", async (req, res, url) => {
   const body = await readJson<{ to?: string; handle?: string; amount: string; memo?: string; prover?: string; requestId?: string }>(req);
   const to = body.to ?? body.handle; // `handle` kept for back-compat
   if (!to || !body.amount) return json(res, 400, { error: "to and amount required" });
+  if (malformedHandle(to)) {
+    const error = "Handles are 3 to 20 characters: letters, numbers, dots, or underscores.";
+    if ((req.headers.accept ?? "").includes("text/event-stream")) {
+      cors(res);
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+      res.write(`event: phase\ndata: ${JSON.stringify({ phase: "failed", error })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({ status: "failed", prover: "tee", amount: "0", onChain: false, error })}\n\n`);
+      res.end();
+      return;
+    }
+    return json(res, 400, { error });
+  }
   const prover = proverOf(url, body);
 
   // Stream the 3-phase ceremony when the client asks for it (fetch + reader, not
@@ -431,7 +451,7 @@ route("POST", "/api/send", async (req, res, url) => {
       res.write(`event: done\ndata: ${JSON.stringify(r)}\n\n`);
     } catch (e) {
       logRouteError("send stream", e);
-      const safe = rampError(e, "out");
+      const safe = sendError(e);
       recordFailedMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", body.amount, e, "out");
       const amount =
         Number.isFinite(Number(body.amount)) && Number(body.amount) > 0
@@ -451,7 +471,7 @@ route("POST", "/api/send", async (req, res, url) => {
     json(res, 200, r);
   } catch (e) {
     recordFailedMovement(classifyRecipient(to) === "address" ? "send_public" : "send_private", body.amount, e, "out");
-    json(res, rampStatus(e), rampError(e, "out"));
+    json(res, rampStatus(e), sendError(e));
   }
 });
 
