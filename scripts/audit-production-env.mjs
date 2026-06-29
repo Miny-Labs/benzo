@@ -48,6 +48,7 @@ const forbiddenProductionNames = [
   "BENZO_DEV_EXPORT",
   "BENZO_INSECURE_INDEXER",
   "BENZO_TENANT_STORE_MEMORY",
+  "BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE",
   "RELAYER_STORE_MEMORY",
 ];
 
@@ -58,6 +59,7 @@ const invariantFiles = [
       "BENZO_DATA_ENCRYPTION_SECRET is required for hosted tenant storage",
       "DATABASE_URL is required for hosted tenant storage",
       "BENZO_TENANT_STORE_MEMORY is not allowed for hosted tenant storage",
+      "BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE is not allowed for hosted tenant storage",
       "benzo:tenant-doc:v1:",
       "benzo_request_limits",
     ],
@@ -68,6 +70,7 @@ const invariantFiles = [
       "BENZO_DATA_ENCRYPTION_SECRET is required for hosted tenant storage",
       "DATABASE_URL is required for hosted tenant storage",
       "BENZO_TENANT_STORE_MEMORY is not allowed for hosted tenant storage",
+      "BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE is not allowed for hosted tenant storage",
       "benzo:tenant-doc:v1:",
       "benzo_tenant_routes",
       "benzo:tenant-route:v1:",

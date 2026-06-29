@@ -2,10 +2,13 @@ import { afterEach, expect, test, vi } from "vitest";
 
 const ENV_KEYS = [
   "VERCEL",
+  "BENZO_HOSTED_RUNTIME",
   "BENZO_HOSTED_TENANT_TEST",
   "BENZO_TENANT_STORE_MEMORY",
+  "BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE",
   "BENZO_DATA_ENCRYPTION_SECRET",
   "BENZO_DISABLE_TENANT_LEGACY_DECRYPT",
+  "DATABASE_URL",
 ] as const;
 const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((k) => [k, process.env[k]]));
 
@@ -250,4 +253,15 @@ test("hosted wallet refuses the in-memory tenant store on Vercel", async () => {
 
   expect(tenantStorageMissing()).toContain("BENZO_TENANT_STORE_MEMORY");
   await expect(loadTenantDocument("wallet", "wallet:alice")).rejects.toThrow("BENZO_TENANT_STORE_MEMORY is not allowed");
+});
+
+test("hosted wallet refuses local memory override outside Vercel too", async () => {
+  process.env.BENZO_HOSTED_RUNTIME = "1";
+  process.env.BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE = "1";
+  process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
+  process.env.DATABASE_URL = "postgres://user:pass@example.neon.tech/db";
+  const { loadTenantDocument, tenantStorageMissing } = await import("./tenantData.js");
+
+  expect(tenantStorageMissing()).toContain("BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE");
+  await expect(loadTenantDocument("wallet", "wallet:alice")).rejects.toThrow("BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE is not allowed");
 });

@@ -8,9 +8,11 @@ const memoryDocuments = new Map<string, string>();
 const memoryRateLimits = new Map<string, { windowStart: number; count: number }>();
 
 function useMemoryStore(): boolean {
-  const localHostedMemory = process.env.BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE === "1" && process.env.VERCEL !== "1";
-  if (hostedRuntime() && process.env.BENZO_TENANT_STORE_MEMORY === "1" && !localHostedMemory) {
+  if (hostedRuntime() && process.env.BENZO_TENANT_STORE_MEMORY === "1") {
     throw new Error("BENZO_TENANT_STORE_MEMORY is not allowed for hosted tenant storage");
+  }
+  if (hostedRuntime() && process.env.BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE === "1") {
+    throw new Error("BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE is not allowed for hosted tenant storage");
   }
   return process.env.BENZO_TENANT_STORE_MEMORY === "1";
 }
@@ -114,12 +116,26 @@ function decrypt<T>(app: string, tenantKey: string, ciphertext: string): T {
 export function tenantStorageMissing(): string[] {
   const missing: string[] = [];
   if (hostedRuntime()) {
-    const localHostedMemory = process.env.BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE === "1" && process.env.VERCEL !== "1";
-    if (process.env.BENZO_TENANT_STORE_MEMORY === "1" && !localHostedMemory) missing.push("BENZO_TENANT_STORE_MEMORY");
-    if (!process.env.DATABASE_URL && !localHostedMemory) missing.push("DATABASE_URL");
+    if (process.env.BENZO_TENANT_STORE_MEMORY === "1") missing.push("BENZO_TENANT_STORE_MEMORY");
+    if (process.env.BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE === "1") missing.push("BENZO_ALLOW_LOCAL_MEMORY_TENANT_STORE");
+    if (!process.env.DATABASE_URL) missing.push("DATABASE_URL");
     if (!process.env.BENZO_DATA_ENCRYPTION_SECRET) missing.push("BENZO_DATA_ENCRYPTION_SECRET");
   }
   return missing;
+}
+
+export function tenantStorageStatus(): { hosted: boolean; durable: boolean; provider: "memory" | "neon" | "postgres" | "none" } {
+  if (process.env.BENZO_TENANT_STORE_MEMORY === "1") {
+    return { hosted: hostedRuntime(), durable: false, provider: "memory" };
+  }
+  const url = process.env.DATABASE_URL;
+  if (!url) return { hosted: hostedRuntime(), durable: false, provider: "none" };
+  try {
+    const host = new URL(url).hostname;
+    return { hosted: hostedRuntime(), durable: true, provider: host.endsWith(".neon.tech") ? "neon" : "postgres" };
+  } catch {
+    return { hosted: hostedRuntime(), durable: true, provider: "postgres" };
+  }
 }
 
 export async function loadTenantDocument<T>(app: string, tenantKey: string): Promise<T | null> {

@@ -35,7 +35,7 @@ import { validateInviteInput } from "./inviteValidation.js";
 import { validateNettingAmounts } from "./nettingValidation.js";
 import { validateGrantInput } from "./grantValidation.js";
 import { activateAcceptedMemberInvite, db, fmtUsd, id, now, parseRosterCsv, recoverySummary, RecoveryRequiredError, runWithConsoleTenant, runWithConsoleTenantKey, tenantDataMissing, currentConsoleTenantKey, type OrgInvite } from "./store.js";
-import { lookupTenantRoute, registerTenantRoute, takeTenantRateLimit } from "./tenantData.js";
+import { lookupTenantRoute, registerTenantRoute, takeTenantRateLimit, tenantStorageStatus } from "./tenantData.js";
 import { hostedRuntime, serverlessRuntime } from "./runtime.js";
 import { encodeBenzoLink } from "@benzo/links";
 import { auditPacketHash, buildAnchor, buildAuditPacket, createPrivateEvent, deriveEventKey, GENESIS_HASH, sha256Hex, verifyHashChain, type AuditPacket, type PrivateEventType } from "@benzo/private-events";
@@ -693,7 +693,7 @@ function appLiveStatus() {
   const s = liveStatus();
   const missing = [...new Set([...s.missing, ...tenantDataMissing()])];
   const live = s.live && missing.length === 0;
-  return { ...s, live, mode: live ? "live" as const : "unavailable" as const, missing };
+  return { ...s, live, mode: live ? "live" as const : "unavailable" as const, missing, tenantStorage: tenantStorageStatus() };
 }
 
 route("GET", "/api/live", (_req, res) => json(res, 200, appLiveStatus()));

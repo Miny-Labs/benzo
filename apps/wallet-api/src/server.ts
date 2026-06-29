@@ -63,7 +63,7 @@ import {
 } from "./store.js";
 import { accountBinding, authFromRequest, createTestAuthToken, runWithAuth } from "./auth.js";
 import { googleConfigured, verifyGoogleIdToken } from "./google-oidc.js";
-import { takeTenantRateLimit } from "./tenantData.js";
+import { takeTenantRateLimit, tenantStorageStatus } from "./tenantData.js";
 import { hostedRuntime, serverlessRuntime } from "./runtime.js";
 
 const PORT = Number(process.env.WALLET_API_PORT ?? 8791);
@@ -312,7 +312,7 @@ function appLiveStatus() {
   const s = liveStatus();
   const missing = [...new Set([...s.missing, ...tenantDataMissing()])];
   const live = s.live && missing.length === 0;
-  return { ...s, live, mode: live ? "live" as const : "unavailable" as const, missing };
+  return { ...s, live, mode: live ? "live" as const : "unavailable" as const, missing, tenantStorage: tenantStorageStatus() };
 }
 
 route("GET", "/api/live", (_q, res) => json(res, 200, appLiveStatus()));
