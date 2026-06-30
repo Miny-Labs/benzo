@@ -42,6 +42,7 @@ import {
   scvalForWriteArg,
   sponsoredOnboard,
   sponsoredTrustlineOps,
+  stroopsToUsdc,
   usdcToStroops,
   type AspMembershipWitness,
   type ChainClient,
@@ -1332,6 +1333,11 @@ export async function cashOut(amount: string, prover: ProverKind): Promise<Settl
     const privateBalance = await c.getBalance();
     if (stroops > privateBalance) {
       throw new RampError("balance", "That's more than your private balance.");
+    }
+    const largestPrivateNote = c.spendableNotes().reduce((max, n) => n.note.amount > max ? n.note.amount : max, 0n);
+    if (largestPrivateNote > 0n && stroops > largestPrivateNote) {
+      const maxSingle = Number(stroopsToUsdc(largestPrivateNote)).toFixed(2);
+      throw new RampError("busy", `Your private balance is split across notes. Cash out $${maxSingle} or less first, then try the rest.`);
     }
     // Unshield to the wallet's own public Stellar address (the off-ramp edge),
     // then hand that USDC to the on-chain ramp reserve (the anchor absorbs it;

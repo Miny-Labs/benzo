@@ -1187,6 +1187,12 @@ export class BenzoClient {
         (randomBytes(1)[0] & 1) === 1
           ? [changeBundle, mergedBundle] as const
           : [mergedBundle, changeBundle] as const;
+      const inputWitnesses = await Promise.all(
+        pair.map((input) => this.spendWitnessForSelectedNote(input)),
+      ) as [
+        Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>>,
+        Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>>,
+      ];
       const tr = await this.pool.transfer({
         source: this.opts.txSource,
         inputs: [pair[0], pair[1]],
@@ -1195,6 +1201,8 @@ export class BenzoClient {
         relayer: await this.opts.cli.keyAddress(this.opts.txSource),
         noteCts: [bundles[0].noteCt, bundles[1].noteCt],
         mvkCts: [bundles[0].mvkCt, bundles[1].mvkCt],
+        inputWitnesses,
+        outputMvkWitnesses: [opts.mvkWitness, opts.mvkWitness],
       });
       consolidationProvingMs += tr.provingMs;
       if (tr.txHash) consolidationTxs.push(tr.txHash);
