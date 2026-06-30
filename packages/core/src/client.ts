@@ -352,16 +352,18 @@ export class BenzoClient {
       // stale root if an older client crashed, missed a log window, or replayed
       // overlapping logs differently. Rebuild from genesis while RPC still has
       // events, then replace the durable snapshot.
+      const previousScanner = this.scanner;
       this.scanner = new NoteScanner(deployment.treeLevels, 1);
       await syncFromRpc(this.scanner, rpcUrl, [deployment.pool, deployment.viewkeyAnchor], 1);
-      await store.set(this.key("scan"), JSON.stringify(this.scanner.snapshot()));
       try {
         this.pool.poolRebuild(this.scanner.orderedLeaves());
         await this.pool.assertSynced();
+        await store.set(this.key("scan"), JSON.stringify(this.scanner.snapshot()));
         poolMirrorSynced = true;
       } catch (rebuildErr) {
         const rebuildMsg = String((rebuildErr as Error)?.message ?? rebuildErr);
         if (!opts.allowPoolMirrorGaps || !/commitment leaf \d+ missing from events|pool tree mirror out of sync/.test(rebuildMsg)) {
+          this.scanner = previousScanner;
           throw rebuildErr;
         }
         // RPC retention can omit very old commitment leaves on long-lived

@@ -755,6 +755,14 @@ async function orgTreasuryStroops(c: BenzoClient, opts: { allowPoolMirrorGaps?: 
   return stroops;
 }
 
+async function orgTreasuryFallbackStroops(c: BenzoClient): Promise<bigint> {
+  try {
+    return await orgTreasuryStroops(c, { allowPoolMirrorGaps: true });
+  } catch {
+    return 0n;
+  }
+}
+
 /** The org's dual-controlled TREASURY balance (stroops). */
 export async function payableBalance(): Promise<{ live: boolean; stroops: bigint }> {
   const c = getClient();
@@ -940,6 +948,7 @@ export async function proveBalance(
   const publics = [{ k: publicLabel, v: usdLabel(minStroops) }];
   const c = getClient();
   if (!c) throw new Error("Live console client unavailable. Balance proof was not generated.");
+  const fallbackBal = await orgTreasuryFallbackStroops(c);
   try {
     await c.sync();
     await wireMvkRegistry(c);
@@ -950,13 +959,7 @@ export async function proveBalance(
   } catch (e) {
     // Honest failure: fall back to the view-key figure without claiming a proof.
     console.warn("[console-api] balance proof failed; returning unverified fallback result", e instanceof Error ? e.message : e);
-    let bal = 0n;
-    try {
-      bal = await c.orgTreasuryBalance(await getOrg(c));
-    } catch {
-      bal = 0n;
-    }
-    return { holds: bal >= BigInt(minStroops), onChain: false, minStroops, ref: onChainRef(vkLabel, false, publics) };
+    return { holds: fallbackBal >= BigInt(minStroops), onChain: false, minStroops, ref: onChainRef(vkLabel, false, publics) };
   }
 }
 
@@ -1183,6 +1186,7 @@ export async function proveTotal(): Promise<{ total: string; onChain: boolean; s
   // (vk_id ORGSUM): reveals only the total, never an individual salary. Falls
   // back to the view-key figure only if no org notes exist yet.
   const org = await getOrg(c);
+  const fallbackTotal = await orgTreasuryFallbackStroops(c);
   try {
     const r = await c.proveOrgTotal({ org });
     return {
@@ -1195,7 +1199,7 @@ export async function proveTotal(): Promise<{ total: string; onChain: boolean; s
       ], { root: r.root?.toString() }),
     };
   } catch {
-    return { total: (await c.orgTreasuryBalance(org)).toString(), onChain: false };
+    return { total: fallbackTotal.toString(), onChain: false };
   }
 }
 
@@ -1222,6 +1226,7 @@ export async function proveTotalAttestation(period: string): Promise<{
   const c = getClient();
   if (!c) throw new Error("Live console client unavailable. Total attestation was not generated.");
   const org = await getOrg(c);
+  const fallbackTotal = await orgTreasuryFallbackStroops(c);
   try {
     await c.sync();
     await wireMvkRegistry(c);
@@ -1242,15 +1247,9 @@ export async function proveTotalAttestation(period: string): Promise<{
   } catch (e) {
     console.warn("[console-api] total attestation proof failed; returning unverified fallback result", e instanceof Error ? e.message : e);
   }
-  let total = "0";
-  try {
-    total = (await c.orgTreasuryBalance(org)).toString();
-  } catch {
-    total = "0";
-  }
   return {
     period,
-    total,
+    total: fallbackTotal.toString(),
     onChain: false,
     vkId: "ORGSUM",
     verifier: (deployment?.verifier as string) ?? "",
