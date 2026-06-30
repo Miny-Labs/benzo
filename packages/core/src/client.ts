@@ -250,6 +250,16 @@ export function selectSpendNotes(notes: SpendableNote[], amount: bigint): Spenda
   return [];
 }
 
+function sameSpendPlan(a: SpendableNote[], b: SpendableNote[]): boolean {
+  return a.length === b.length && a.every((n, i) => n.leafIndex === b[i]?.leafIndex);
+}
+
+function newestCoveringNote(notes: SpendableNote[], amount: bigint): SpendableNote | undefined {
+  return notes
+    .filter((n) => n.note.amount >= amount)
+    .sort((a, b) => b.leafIndex - a.leafIndex)[0];
+}
+
 export class BenzoClient {
   readonly pool: BenzoPoolClient;
   scanner: NoteScanner;
@@ -999,14 +1009,52 @@ export class BenzoClient {
 
       // Spend one covering note (+ a dummy), or two notes when no single note
       // covers the amount — the joinsplit circuit takes two inputs either way.
-      const selected = selectSpendNotes(this.spendableNotes(), opts.amount);
-      if (selected.length === 0) throw new Error("insufficient spendable balance");
+      //
+      // On long-lived testnet deployments RPC event retention can leave the
+      // local pool mirror gapped. The Merkle contract storage can recover a
+      // witness for the latest commitment leaf, not for arbitrary old leaves.
+      // So for single-note sends we try the newest covering note first, then
+      // fall back to the usual smallest-covering plan when the mirror is synced.
+      const spendable = this.spendableNotes();
+      const primary = selectSpendNotes(spendable, opts.amount);
+      if (primary.length === 0) throw new Error("insufficient spendable balance");
+      const newest = newestCoveringNote(spendable, opts.amount);
+      const plans: SpendableNote[][] = [];
+      if (newest) plans.push([newest]);
+      if (!plans.some((p) => sameSpendPlan(p, primary))) plans.push(primary);
+      let selected = primary;
+      let inputs: [SpendableNote, SpendableNote] =
+        primary.length === 2
+          ? [primary[0], primary[1]]
+          : [primary[0], this.pool.makeDummyInput(assetId)];
+      let inputWitnesses: [
+        Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>> | undefined,
+        Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>> | undefined,
+      ] | undefined;
+      let lastWitnessErr: unknown;
+      for (const plan of plans) {
+        const candidateInputs: [SpendableNote, SpendableNote] =
+          plan.length === 2
+            ? [plan[0], plan[1]]
+            : [plan[0], this.pool.makeDummyInput(assetId)];
+        try {
+          inputWitnesses = await Promise.all(
+            candidateInputs.map((input) => input.note.amount === 0n ? undefined : this.spendWitnessForSelectedNote(input)),
+          ) as [
+            Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>> | undefined,
+            Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>> | undefined,
+          ];
+          selected = plan;
+          inputs = candidateInputs;
+          break;
+        } catch (e) {
+          lastWitnessErr = e;
+          if (!/pool witness unavailable/i.test(String((e as Error)?.message ?? e))) throw e;
+        }
+      }
+      if (!inputWitnesses) throw lastWitnessErr instanceof Error ? lastWitnessErr : new Error("pool witness unavailable");
       const totalIn = selected.reduce((s, n) => s + n.note.amount, 0n);
       const change = totalIn - opts.amount;
-      const inputs: [SpendableNote, SpendableNote] =
-        selected.length === 2
-          ? [selected[0], selected[1]]
-          : [selected[0], this.pool.makeDummyInput(assetId)];
 
       const senderTvk = deriveTvk(this.account.mvkSecret, opts.scope ?? DISCLOSURE_SCOPE);
       const recipNote = newNote(opts.amount, opts.to.spendPub, assetId);
@@ -1036,12 +1084,6 @@ export class BenzoClient {
       handle._emit({ op: "send", status: "proving", detail: "generating Groth16 proof" });
 
       const relay = opts.useRelayer && this.opts.relayer ? this.makeRelay() : undefined;
-      const inputWitnesses = await Promise.all(
-        inputs.map((input) => input.note.amount === 0n ? undefined : this.spendWitnessForSelectedNote(input)),
-      ) as [
-        Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>> | undefined,
-        Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>> | undefined,
-      ];
       const tr = await this.pool.transfer({
         source: this.opts.relayer && opts.useRelayer ? this.opts.relayer.source : this.opts.txSource,
         relay,

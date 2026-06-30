@@ -527,6 +527,7 @@ async function ensureHostedPublicAccount(opts: { waitForRpc?: boolean } = {}): P
  * Fails loud if the mirror root diverges from the on-chain root.
  */
 const mvkWiredRoot = new WeakMap<BenzoClient, bigint>();
+const mvkStorageWitness = new WeakMap<BenzoClient, AspMembershipWitness>();
 async function fetchStorageBackedMvkWitness(
   c: BenzoClient,
   registry: string,
@@ -546,6 +547,7 @@ async function fetchStorageBackedMvkWitness(
     throw new Error(`mvk registry storage witness stale: witness=${witness.root} onchain=${onchain}`);
   }
   mvkWiredRoot.set(c, onchain);
+  mvkStorageWitness.set(c, witness);
   return witness;
 }
 
@@ -577,7 +579,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<AspMembershipWitness | u
   const myMvk = c.account.mvkScalar;
   const myLeaf = mvkRegistryLeaf(myMvk, 0n);
   let onchain = BigInt((await c.opts.cli.view(registry, TX_SOURCE, ["current_root"])) as string);
-  if (mvkWiredRoot.get(c) === onchain) return;
+  if (mvkWiredRoot.get(c) === onchain) return mvkStorageWitness.get(c);
   let leaves: bigint[];
   try {
     leaves = await fetchMvkRegistryLeaves(rpc, registry, 1);
@@ -605,6 +607,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<AspMembershipWitness | u
       if (reg.root() === onchain) {
         c.pool.useMvkRegistry(reg);
         mvkWiredRoot.set(c, onchain);
+        mvkStorageWitness.delete(c);
         return undefined;
       }
     }
@@ -629,6 +632,7 @@ async function wireMvkRegistry(c: BenzoClient): Promise<AspMembershipWitness | u
   }
   c.pool.useMvkRegistry(reg);
   mvkWiredRoot.set(c, onchain);
+  mvkStorageWitness.delete(c);
   return undefined;
 }
 
@@ -1280,7 +1284,7 @@ async function shieldLiquidUsdc(
         }
         throw new RampError("busy", "USDC is still settling to your wallet. Please try again in a moment.");
       }
-      if (/out of sync|ASP membership mirror|not synced to the on-chain root|unknown root|WrongAspRoot|Error\(Contract, #(5|8)\)/i.test(msg)) {
+      if (/out of sync|ASP membership mirror|not synced to the on-chain root|unknown root|WrongAspRoot|WrongMvkRoot|Error\(Contract, #(5|8|13)\)/i.test(msg)) {
         const txHash = await waitForShieldedBalanceIncrease(c, before, stroops);
         if (txHash !== undefined) {
           if (expectedLiquidAfter !== undefined) {
@@ -1291,15 +1295,19 @@ async function shieldLiquidUsdc(
         if (expectedLiquidAfter !== undefined && await waitForLiquidUsdcAtMost(c, from, expectedLiquidAfter)) {
           return { status: "settled", prover, amount: stroops.toString(), onChain: true };
         }
+        if (/WrongMvkRoot|Error\(Contract, #13\)/i.test(msg)) {
+          mvkWiredRoot.delete(c);
+          mvkStorageWitness.delete(c);
+        }
         last = e;
-        console.warn("[wallet-api] shield mirror lag before settlement; retrying shield", {
+        console.warn("[wallet-api] shield registry/root lag before settlement; retrying shield", {
           attempt: attempt + 1,
           message: msg,
         });
         await sleep(1_500 + attempt * 1_000);
         continue;
       }
-      if (!/insufficient USDC|trustline|still settling|Error\(Contract, #13\)/i.test(msg)) throw e;
+      if (!/insufficient USDC|trustline|still settling/i.test(msg)) throw e;
       last = e;
       console.warn("[wallet-api] shield waiting for liquid funded balance", {
         attempt: attempt + 1,

@@ -10,7 +10,7 @@
 import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Check, ExternalLink, FileSearch, Landmark, ShieldCheck, X } from "lucide-react";
+import { Check, ExternalLink, FileSearch, Globe2, Landmark, ShieldCheck, X } from "lucide-react";
 import { useWallet } from "../lib/store";
 import { fullDateTime } from "../lib/format";
 import { Screen } from "../ui/motion";
@@ -33,10 +33,43 @@ function isCashRow(row: ActivityRow): boolean {
   return row.type === "cashOut" || row.type === "unshield" || row.type === "shield" || row.type === "cashIn";
 }
 
+function isMakePublicRow(row: ActivityRow): boolean {
+  return row.type === "makePublic" || row.name === "Made public" || row.note.includes("Public balance");
+}
+
+function isPublicSendRow(row: ActivityRow): boolean {
+  return row.type === "publicSend" || row.note === "Public send";
+}
+
 /** Build the status timeline for a row - the steps + which one we're on. */
 function timeline(row: ActivityRow): Step[] {
   const failed = row.status === "failed";
   const settled = row.status === "settled";
+  if (isPublicSendRow(row)) {
+    return [
+      { label: "Public payment created", state: "done" },
+      {
+        label: failed ? "Public send failed" : settled ? "Sent on Stellar testnet" : "Sending on Stellar testnet",
+        hint: "Recipient and amount are public on-chain",
+        state: failed ? "failed" : settled ? "done" : "active",
+      },
+      {
+        label: settled ? "Settled" : "Settling",
+        state: failed ? "upcoming" : settled ? "done" : "active",
+      },
+    ];
+  }
+  if (isMakePublicRow(row)) {
+    return [
+      { label: "Make-public created", state: "done" },
+      { label: "Proved private", hint: "The source balance stayed hidden", state: failed ? "failed" : "done" },
+      {
+        label: settled ? "Moved to Public balance" : "Moving to Public balance",
+        hint: settled ? undefined : "Stellar testnet settlement",
+        state: failed ? "upcoming" : settled ? "done" : "active",
+      },
+    ];
+  }
   // Off-ramp simulation (cash out / unshield): created, proved private, returned to reserve.
   if (row.type === "cashOut" || row.type === "unshield") {
     return [
@@ -99,11 +132,13 @@ export function TxDetail() {
   }
 
   const cash = isCashRow(row);
+  const makePublic = isMakePublicRow(row);
+  const publicSend = isPublicSendRow(row);
   const steps = timeline(row);
   // Honest on-chain claim: a legacy local row never counts as "Verified on-chain",
   // even if it carries a txHash - otherwise we'd link a dead explorer tx.
   const onChain = !row.unverified && !!row.txHash;
-  const privatePayment = row.type !== "cashOut" && row.type !== "unshield";
+  const privatePayment = row.type !== "cashOut" && row.type !== "unshield" && !publicSend;
 
   return (
     <Screen>
@@ -130,9 +165,13 @@ export function TxDetail() {
             </span>
           ) : null}
           <div className="mt-3">
-            {privatePayment ? <PrivateChip label={cash ? "Your balance stayed private" : `Only you and ${row.name} can see this`} /> : (
+            {publicSend ? (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fbf1dd] px-3 py-1 text-[12px] font-semibold text-[#9a6b12]">
-                <Landmark size={13} /> Testnet reserve cash-out
+                <Globe2 size={13} /> Public Stellar payment
+              </span>
+            ) : privatePayment ? <PrivateChip label={cash ? "Your balance stayed private" : `Only you and ${row.name} can see this`} /> : (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fbf1dd] px-3 py-1 text-[12px] font-semibold text-[#9a6b12]">
+                <Landmark size={13} /> {makePublic ? "Made public" : "Testnet reserve cash-out"}
               </span>
             )}
           </div>
@@ -153,8 +192,8 @@ export function TxDetail() {
           <DRow
             k="Privacy"
             v={
-              <span className="inline-flex items-center gap-1.5 text-pos">
-                <ShieldCheck size={14} /> {privatePayment ? "Private" : "Amount private"}
+              <span className={`inline-flex items-center gap-1.5 ${publicSend ? "text-[#9a6b12]" : "text-pos"}`}>
+                {publicSend ? <Globe2 size={14} /> : <ShieldCheck size={14} />} {publicSend ? "Public" : privatePayment ? "Private" : "Amount private"}
               </span>
             }
           />
