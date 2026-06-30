@@ -341,6 +341,7 @@ export function getClient(prover: ProverKind = hostedRuntime() ? "tee" : "local"
       handleRegistry: d.handleRegistry as string,
       requestRegistry: d.requestRegistry as string,
       store: coreStateStore(),
+      initialScanLookbackLedgers: Number(process.env.BENZO_WALLET_INITIAL_SCAN_LOOKBACK_LEDGERS ?? 1_000),
     });
     c.useAccount(loadWalletAccount());
     clients.set(key, c);
@@ -641,14 +642,15 @@ export function toStroops(amount: string): bigint {
 export async function getBalanceStroops(): Promise<{ stroops: string; live: boolean }> {
   const verify = verifyWalletLedger();
   const ledgerBalances = walletLedgerBalances();
-  if (hostedRuntime() && verify.ok && (db.ledger?.length ?? 0) > 0) {
+  const hasLedgerRows = (db.ledger?.length ?? 0) > 0;
+  if (hostedRuntime() && verify.ok && hasLedgerRows) {
     return { stroops: ledgerBalances.private, live: true, source: "ledger", syncing: true } as { stroops: string; live: boolean };
   }
   try {
     return await getChainBalanceStroops({ timeoutMs: readSyncTimeoutMs() });
   } catch (e) {
     if (!isTimeoutError(e)) throw e;
-    if (!verify.ok) throw e;
+    if (!verify.ok || !hasLedgerRows) throw e;
     return { stroops: ledgerBalances.private, live: true, source: "ledger", syncing: true } as { stroops: string; live: boolean };
   }
 }
@@ -741,7 +743,7 @@ function ledgerActivityRows(): ActivityRow[] {
 }
 
 function readSyncTimeoutMs(): number {
-  const raw = Number(process.env.BENZO_WALLET_READ_SYNC_TIMEOUT_MS ?? 3_500);
+  const raw = Number(process.env.BENZO_WALLET_READ_SYNC_TIMEOUT_MS ?? 12_000);
   return Number.isFinite(raw) && raw > 0 ? raw : 3_500;
 }
 
@@ -761,7 +763,7 @@ export async function getActivity(): Promise<ActivityRow[]> {
     try {
       await withTimeout(c.sync(hostedSyncOpts()), readSyncTimeoutMs(), "activity sync");
     } catch (e) {
-      if (isTimeoutError(e) && verifyWalletLedger().ok) return ledgerRows;
+      if (isTimeoutError(e) && ledgerRows.length > 0 && verifyWalletLedger().ok) return ledgerRows;
       throw e;
     }
     const ledgerTxs = new Set(ledgerRows.map((r) => r.txHash).filter(Boolean));
@@ -915,12 +917,14 @@ async function privateSendToHandle(
   amount: bigint,
   memo: string | undefined,
   prover: ProverKind,
+  mvkWitness?: AspMembershipWitness,
   requestId?: string,
   onPhase?: PhaseSink,
 ): Promise<SettleResult> {
   const before = await c.getBalance();
   try {
-    const sh = await c.sendToHandle({ handle: handle.replace(/^@/, ""), amount, memo, useRelayer: false });
+    const to = await c.resolveHandle(handle.replace(/^@/, ""));
+    const sh = c.send({ amount, to, memo, useRelayer: false, mvkWitness });
     sh.onProgress((e: { status?: string }) => {
       if (e.status === "proving") onPhase?.({ phase: "proving" });
     });
@@ -999,7 +1003,7 @@ export async function send(
 
   // private shielded send to a @handle
   const chainMemo = requestId ? requestPaymentMemo(requestId, memo) : memo;
-  return privateSendToHandle(c, to, stroops, chainMemo, prover, requestId, onPhase);
+  return privateSendToHandle(c, to, stroops, chainMemo, prover, mvkWitness, requestId, onPhase);
 }
 
 export async function sendToHandle(
@@ -1014,9 +1018,9 @@ export async function sendToHandle(
   if (c) {
     await ensureHostedPublicAccount();
     await c.sync({ allowPoolMirrorGaps: true, allowAspMirrorGaps: true });
-    await wireMvkRegistry(c);
+    const mvkWitness = await wireMvkRegistry(c);
     const chainMemo = requestId ? requestPaymentMemo(requestId, memo) : memo;
-    return privateSendToHandle(c, handle, stroops, chainMemo, prover, requestId);
+    return privateSendToHandle(c, handle, stroops, chainMemo, prover, mvkWitness, requestId);
   }
   throw new RampError("busy", "Live testnet client unavailable. No funds were moved.");
 }
@@ -1523,7 +1527,7 @@ export async function publicBalance(): Promise<{ stroops: string; address: strin
 
 function makePublicRetryable(e: unknown): boolean {
   const m = String((e as Error)?.message ?? e);
-  return /insufficient spendable balance|out of sync|unknown root|ASP membership|MvkRegistryMirror|still settling/i.test(m);
+  return /insufficient spendable balance|out of sync|unknown root|ASP membership|MvkRegistryMirror|still settling|resulting balance is not within the allowed range|Error\(Contract, #(5|10)\)/i.test(m);
 }
 
 async function publicBalanceOf(c: BenzoClient, token: string, address: string): Promise<bigint> {
@@ -1549,6 +1553,7 @@ async function waitForPublicBalanceAtLeast(c: BenzoClient, token: string, addres
  *  proof. */
 export async function makePublic(amount: string, prover: ProverKind): Promise<SettleResult> {
   const stroops = toStroops(amount);
+  if (hostedRuntime()) evictClient(prover);
   const c = getClient(prover);
   if (c) {
     await ensureHostedPublicAccount();
@@ -1556,6 +1561,10 @@ export async function makePublic(amount: string, prover: ProverKind): Promise<Se
     const mvkWitness = await wireMvkRegistry(c);
     const to = await selfAddress(c);
     const token = deployment().token as string;
+    const privateBalance = await c.getBalance();
+    if (stroops > privateBalance) {
+      throw new RampError("balance", "That's more than your private balance.");
+    }
     const liquidBefore = await publicBalanceOf(c, token, to);
     const target = liquidBefore + stroops;
     let last: unknown;
@@ -1577,6 +1586,23 @@ export async function makePublic(amount: string, prover: ProverKind): Promise<Se
           const liquidAfter = await publicBalanceOf(c, token, to);
           if (liquidAfter >= target) return { status: "settled", prover, amount: stroops.toString(), onChain: true };
         } catch { /* fall through */ }
+        if (/UnknownRoot|is_known_root].*false|Error\(Contract, #5\)/is.test(String((e as Error).message ?? e))) {
+          try {
+            await sleep(2_000);
+            await c.sync(hostedSyncOpts());
+            const retryMvkWitness = await wireMvkRegistry(c);
+            const wd = await c.unshield({ amount: stroops, toAddress: to, mvkWitness: retryMvkWitness ?? mvkWitness });
+            try { await c.flush(); } catch { /* local persistence is best-effort; the withdraw already settled on-chain */ }
+            if (wd.txHash || await waitForPublicBalanceAtLeast(c, token, to, target)) {
+              return { status: "settled", txHash: wd.txHash, provingMs: wd.provingMs, prover, amount: stroops.toString(), onChain: true, sorobanPublics: wd.sorobanPublics };
+            }
+          } catch (retryError) {
+            last = retryError;
+          }
+        }
+        if (/shielded balance is too fragmented/i.test(String((e as Error).message ?? e))) {
+          throw new RampError("busy", "Your private balance is still consolidating. Try again in a moment, or move a smaller amount.");
+        }
         if (e instanceof RampError) throw e;
         if (!makePublicRetryable(e) || attempt === 5) break;
         await sleep(1800 + attempt * 700);

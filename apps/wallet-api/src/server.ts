@@ -230,8 +230,15 @@ function recordSettlementProof(action: string, vkId: WalletSettlementVk, r: Sett
   });
 }
 
-function recordFailedMovement(sourceType: WalletLedgerSource, requestedAmount: string | undefined, e: unknown, dir: "in" | "out", sourceId?: string) {
-  const safe = ledgerError(e, dir);
+function recordFailedMovement(
+  sourceType: WalletLedgerSource,
+  requestedAmount: string | undefined,
+  e: unknown,
+  dir: "in" | "out",
+  sourceId?: string,
+  safeOverride?: { error: string; code: string },
+) {
+  const safe = safeOverride ?? ledgerError(e, dir);
   appendWalletLedger({
     sourceType,
     sourceId,
@@ -509,7 +516,7 @@ route("POST", "/api/send", async (req, res, url) => {
     } catch (e) {
       logRouteError("send stream", e);
       const safe = sendError(e);
-      recordFailedMovement(recipientKind === "address" ? "send_public" : "send_private", body.amount, e, "out");
+      recordFailedMovement(recipientKind === "address" ? "send_public" : "send_private", body.amount, e, "out", undefined, safe);
       const amount =
         Number.isFinite(Number(body.amount)) && Number(body.amount) > 0
           ? String(BigInt(Math.round(Number(body.amount) * 10_000_000)))
@@ -527,8 +534,9 @@ route("POST", "/api/send", async (req, res, url) => {
     recordSettlementProof(recipientKind === "address" ? "wallet.send-public-from-private" : "wallet.send-private", recipientKind === "address" ? "UNSHIELD" : "TRANSFER", r);
     await jsonPersisted(res, 200, r);
   } catch (e) {
-    recordFailedMovement(recipientKind === "address" ? "send_public" : "send_private", body.amount, e, "out");
-    json(res, rampStatus(e), sendError(e));
+    const safe = sendError(e);
+    recordFailedMovement(recipientKind === "address" ? "send_public" : "send_private", body.amount, e, "out", undefined, safe);
+    json(res, rampStatus(e), safe);
   }
 });
 

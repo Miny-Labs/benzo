@@ -75,6 +75,7 @@ import {
 import type { ProveResult, ProverPort } from "./prover.js";
 import { encodeBenzoLink, parseBenzoLink } from "@benzo/links";
 import { randomBytes } from "./crypto/random.js";
+import { rpc } from "@stellar/stellar-sdk";
 
 /** A recipient's public, shareable address (no spend authority). */
 export interface BenzoRecipient {
@@ -207,6 +208,13 @@ export interface BenzoClientOptions {
    * from genesis each call (correct, just not incremental).
    */
   store?: KVStore;
+  /**
+   * Optional startup accelerator for hosted fresh accounts. If no scanner
+   * snapshot exists yet, begin at latestLedger - lookback instead of ledger 1.
+   * New accounts cannot have older notes; after the first scan, the durable
+   * cursor becomes the source of truth.
+   */
+  initialScanLookbackLedgers?: number;
 }
 
 /** 32-byte big-endian hex of a field element (guarded; for the registry record). */
@@ -323,6 +331,13 @@ export class BenzoClient {
     } catch (e) {
       const msg = String((e as Error)?.message ?? e);
       if (!/commitment leaf \d+ missing from events|pool tree mirror out of sync/.test(msg)) throw e;
+      if (opts.allowPoolMirrorGaps) {
+        // Hosted read paths can still decrypt fresh incoming notes from the
+        // partial scanner snapshot. Rebuilding from genesis is expensive and
+        // often impossible on long-lived testnet deployments after old events
+        // age out. Spending paths that need complete mirrors stay strict unless
+        // the caller explicitly opts into storage-backed witnesses.
+      } else {
       // A previously persisted incremental snapshot can contain a hole or a
       // stale root if an older client crashed, missed a log window, or replayed
       // overlapping logs differently. Rebuild from genesis while RPC still has
@@ -343,6 +358,7 @@ export class BenzoClient {
         // testnet deployments. Shielding a new note does not spend or witness
         // old leaves, so callers that opt in may continue after ASP sync below.
         // Spending paths keep the default strict behavior and still fail closed.
+      }
       }
     }
 
@@ -449,6 +465,18 @@ export class BenzoClient {
     return `benzo:global:${kind}`;
   }
 
+  private async initialScanStartLedger(): Promise<number> {
+    const lookback = Number(this.opts.initialScanLookbackLedgers ?? 0);
+    if (!Number.isFinite(lookback) || lookback <= 0) return 1;
+    try {
+      const server = new rpc.Server(this.opts.rpcUrl, { allowHttp: this.opts.rpcUrl.startsWith("http://") });
+      const latest = await server.getLatestLedger();
+      return Math.max(1, Number(latest.sequence) - Math.floor(lookback));
+    } catch {
+      return 1;
+    }
+  }
+
   /** Load persisted scanner snapshot, ASP set, and journal once per account. */
   private async loadStateOnce(): Promise<void> {
     const { store, deployment } = this.opts;
@@ -456,7 +484,7 @@ export class BenzoClient {
     const scanRaw = await store.get(this.key("scan"));
     this.scanner = scanRaw
       ? NoteScanner.restore(deployment.treeLevels, JSON.parse(scanRaw) as ScannerSnapshot)
-      : new NoteScanner(deployment.treeLevels, 1);
+      : new NoteScanner(deployment.treeLevels, await this.initialScanStartLedger());
     const aspRaw = await store.get(this.globalKey("asp"));
     if (aspRaw) {
       const snap = JSON.parse(aspRaw) as AspSnapshot;
@@ -952,6 +980,7 @@ export class BenzoClient {
     memo?: string;
     useRelayer?: boolean;
     scope?: string; // disclosure scope to seal the MVK ciphertexts under
+    mvkWitness?: AspMembershipWitness;
   }): SendHandle {
     const handle = new SendHandle(`send-${++opCounter}`);
     // Kick off async work without blocking the caller (optimistic UI).
@@ -961,11 +990,11 @@ export class BenzoClient {
 
   private async runSend(
     handle: SendHandle,
-    opts: { amount: bigint; to: BenzoRecipient; memo?: string; useRelayer?: boolean; scope?: string },
+    opts: { amount: bigint; to: BenzoRecipient; memo?: string; useRelayer?: boolean; scope?: string; mvkWitness?: AspMembershipWitness },
   ): Promise<void> {
     try {
       handle._emit({ op: "send", status: "pending", detail: "selecting note" });
-      await this.sync();
+      await this.sync({ allowPoolMirrorGaps: true, allowAspMirrorGaps: true });
       const assetId = await this.assetId();
 
       // Spend one covering note (+ a dummy), or two notes when no single note
@@ -1007,6 +1036,12 @@ export class BenzoClient {
       handle._emit({ op: "send", status: "proving", detail: "generating Groth16 proof" });
 
       const relay = opts.useRelayer && this.opts.relayer ? this.makeRelay() : undefined;
+      const inputWitnesses = await Promise.all(
+        inputs.map((input) => input.note.amount === 0n ? undefined : this.spendWitnessForSelectedNote(input)),
+      ) as [
+        Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>> | undefined,
+        Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>> | undefined,
+      ];
       const tr = await this.pool.transfer({
         source: this.opts.relayer && opts.useRelayer ? this.opts.relayer.source : this.opts.txSource,
         relay,
@@ -1016,6 +1051,8 @@ export class BenzoClient {
         relayer: this.opts.relayer?.address ?? (await this.opts.cli.keyAddress(this.opts.txSource)),
         noteCts: [b0.noteCt, b1.noteCt],
         mvkCts: [b0.mvkCt, b1.mvkCt],
+        inputWitnesses,
+        outputMvkWitnesses: [opts.mvkWitness, opts.mvkWitness],
       });
 
       this.record({
@@ -1852,9 +1889,10 @@ export class BenzoClient {
     amount: bigint;
     memo?: string;
     useRelayer?: boolean;
+    mvkWitness?: AspMembershipWitness;
   }): Promise<SendHandle> {
     const to = await this.resolveHandle(opts.handle);
-    return this.send({ amount: opts.amount, to, memo: opts.memo, useRelayer: opts.useRelayer });
+    return this.send({ amount: opts.amount, to, memo: opts.memo, useRelayer: opts.useRelayer, mvkWitness: opts.mvkWitness });
   }
 
   // ----------------------------------------------------- claim-links -----

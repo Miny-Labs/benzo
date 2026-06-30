@@ -354,6 +354,14 @@ export class BenzoPoolClient {
     relayer: string; // G-address receiving the fee
     noteCts: [Uint8Array, Uint8Array];
     mvkCts: [Uint8Array, Uint8Array];
+    inputWitnesses?: [
+      { pathElements: bigint[]; pathIndices: bigint; root: bigint } | undefined,
+      { pathElements: bigint[]; pathIndices: bigint; root: bigint } | undefined,
+    ];
+    outputMvkWitnesses?: [
+      { pathElements: bigint[]; pathIndices: bigint; root: bigint } | undefined,
+      { pathElements: bigint[]; pathIndices: bigint; root: bigint } | undefined,
+    ];
     /**
      * Optional gasless-relay hook. When provided, the proven transfer is
      * handed to the relayer for submission instead of being submitted by this
@@ -388,7 +396,11 @@ export class BenzoPoolClient {
     provingMs: number;
   }> {
     const assetId = await this.assetId();
-    const root = this.poolTree.root();
+    const witnessRoots = opts.inputWitnesses?.flatMap((w) => (w ? [w.root] : [])) ?? [];
+    const root = witnessRoots[0] ?? this.poolTree.root();
+    if (witnessRoots.some((r) => r !== root)) {
+      throw new Error("pool storage witnesses disagree on transfer root");
+    }
 
     const outNotes = opts.outputs.map((o) => o.note) as [Note, Note];
     const outCommitments = outNotes.map(noteCommitment) as [bigint, bigint];
@@ -400,14 +412,30 @@ export class BenzoPoolClient {
       noteNullifier(inp.spendSk, BigInt(inp.leafIndex)),
     ) as [bigint, bigint];
 
-    const paths = opts.inputs.map((inp) =>
-      inp.note.amount === 0n
-        ? {
-            pathElements: new Array<bigint>(this.dep.treeLevels).fill(0n),
-            pathIndices: BigInt(inp.leafIndex),
-          }
-        : this.poolTree.path(inp.leafIndex),
-    );
+    const paths = opts.inputs.map((inp, i) => {
+      const witness = opts.inputWitnesses?.[i];
+      if (inp.note.amount === 0n) {
+        return {
+          pathElements: new Array<bigint>(this.dep.treeLevels).fill(0n),
+          pathIndices: BigInt(inp.leafIndex),
+        };
+      }
+      if (!witness) return this.poolTree.path(inp.leafIndex);
+      if (witness.pathIndices !== BigInt(inp.leafIndex)) {
+        throw new Error("pool storage witness index mismatch");
+      }
+      const commitment = noteCommitment(inp.note);
+      let folded = commitment;
+      let idx = witness.pathIndices;
+      for (const sibling of witness.pathElements) {
+        folded = (idx & 1n) === 1n ? compress(sibling, folded) : compress(folded, sibling);
+        idx >>= 1n;
+      }
+      if (folded !== root) {
+        throw new Error("pool storage witness does not match the transfer root");
+      }
+      return { pathElements: witness.pathElements, pathIndices: witness.pathIndices };
+    });
 
     // Authorized-MVK registry membership for each output's MVK (closes the audit
     // P0 — see shield). A shared synced registry (if set) yields an on-chain-known
@@ -420,7 +448,25 @@ export class BenzoPoolClient {
       mvkReg = new MvkRegistryMirror();
       for (const o of opts.outputs) mvkReg.register(o.mvkPubScalar, mvkKeyMeta);
     }
-    const mvkRegPaths = opts.outputs.map((o) => mvkReg.pathFor(o.mvkPubScalar));
+    const mvkWitnessRoots = opts.outputMvkWitnesses?.flatMap((w) => (w ? [w.root] : [])) ?? [];
+    const registeredMvkRoot = mvkWitnessRoots[0] ?? mvkReg.root();
+    if (mvkWitnessRoots.some((r) => r !== registeredMvkRoot)) {
+      throw new Error("MVK storage witnesses disagree on transfer root");
+    }
+    const mvkRegPaths = opts.outputs.map((o, i) => {
+      const witness = opts.outputMvkWitnesses?.[i];
+      if (!witness) return mvkReg.pathFor(o.mvkPubScalar);
+      let folded = mvkRegistryLeaf(o.mvkPubScalar, mvkKeyMeta);
+      let idx = witness.pathIndices;
+      for (const sibling of witness.pathElements) {
+        folded = (idx & 1n) === 1n ? compress(sibling, folded) : compress(folded, sibling);
+        idx >>= 1n;
+      }
+      if (folded !== registeredMvkRoot) {
+        throw new Error("MVK storage witness does not match the transfer root");
+      }
+      return { pathElements: witness.pathElements, pathIndices: witness.pathIndices };
+    });
 
     const extHash = await this.cli.view(this.dep.pool, this.viewSource, [
       "transfer_ext_hash",
@@ -440,7 +486,7 @@ export class BenzoPoolClient {
       fee: opts.fee,
       extDataHash: BigInt(extHash as string),
       mvkTag: outTags,
-      registeredMvkRoot: mvkReg.root(),
+      registeredMvkRoot,
       mvkKeyMeta: opts.outputs.map(() => mvkKeyMeta),
       mvkPathElements: mvkRegPaths.map((p) => p.pathElements),
       mvkPathIndices: mvkRegPaths.map((p) => p.pathIndices),
@@ -475,7 +521,7 @@ export class BenzoPoolClient {
         noteCt1: hexBytes(opts.noteCts[1]),
         mvkCt0: hexBytes(opts.mvkCts[0]),
         mvkCt1: hexBytes(opts.mvkCts[1]),
-        registeredMvkRoot: mvkReg.root().toString(),
+        registeredMvkRoot: registeredMvkRoot.toString(),
         proof: JSON.stringify(proof.sorobanProof),
       });
       txHash = r.txHash;
@@ -499,7 +545,7 @@ export class BenzoPoolClient {
           noteCt1: hexBytes(opts.noteCts[1]),
           mvkCt0: hexBytes(opts.mvkCts[0]),
           mvkCt1: hexBytes(opts.mvkCts[1]),
-          registeredMvkRoot: mvkReg.root().toString(),
+          registeredMvkRoot: registeredMvkRoot.toString(),
           proof: JSON.stringify(proof.sorobanProof),
         }),
       });
@@ -507,7 +553,12 @@ export class BenzoPoolClient {
     }
     const i0 = this.poolTree.insert(outCommitments[0]);
     const i1 = this.poolTree.insert(outCommitments[1]);
-    await this.assertSynced();
+    try {
+      await this.assertSynced();
+    } catch (e) {
+      if (!/out of sync/i.test(String((e as Error)?.message ?? e))) throw e;
+      console.warn("[benzo-core] pool mirror lag after transfer submit", (e as Error).message);
+    }
     return {
       txHash,
       outNotes,

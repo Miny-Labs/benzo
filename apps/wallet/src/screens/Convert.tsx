@@ -14,7 +14,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, Check, Eye, Globe, Lock, ShieldCheck, Smartphone } from "lucide-react";
 import { api, type SettleResult } from "../lib/api";
-import { apiProverKind, proverPlan } from "../lib/proverPolicy";
+import { apiBoundaryProverPlan, apiProverKind, proverPlan } from "../lib/proverPolicy";
 import { useWallet } from "../lib/store";
 import { fmtUsd } from "../lib/format";
 import { Screen } from "../ui/motion";
@@ -41,7 +41,8 @@ export function Convert() {
   // The DEVICE decides the proving path. These shield/unshield operations still
   // cross the API boundary, so they delegate to the attested enclave (TEE).
   const teeAvailable = !!session?.prover.available.includes("tee");
-  const plan = proverPlan(teeAvailable);
+  const devicePlan = proverPlan(teeAvailable);
+  const plan = apiBoundaryProverPlan(devicePlan, teeAvailable);
 
   // Source = where the money comes FROM. Make private pulls from Public; make
   // public pulls from Private. We cap the entry to the source balance.
