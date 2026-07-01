@@ -13,6 +13,7 @@ import { sendCeremonyView, SEND_RAIL_LABELS } from "@benzo/ui/send-sequence";
 import { type PaymentState } from "@benzo/ui/payment-state";
 import { EASE, spring } from "../motion";
 import { Button, SuccessCheck } from "../primitives";
+import { copyTextToClipboard } from "../../lib/clipboard";
 import { fmtUsd } from "../../lib/format";
 import { explorerTx } from "../OnChainDetails";
 
@@ -301,8 +302,7 @@ function CopyChip({ text }: { text: string }) {
   return (
     <button
       onClick={() => {
-        void navigator.clipboard?.writeText(text);
-        setCopied(true);
+        void copyTextToClipboard(text).then(setCopied);
         setTimeout(() => setCopied(false), 1500);
       }}
       className="inline-flex items-center gap-1 rounded-full bg-ink/[0.05] px-2.5 py-1 text-[11px] font-semibold text-ink hover:bg-ink/10"

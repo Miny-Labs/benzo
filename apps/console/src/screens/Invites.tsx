@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Copy, Check, Send, Upload, X } from "lucide-react";
 import { api, type OrgInvite } from "../lib/api";
+import { copyTextToClipboard } from "../lib/clipboard";
 import { friendlyError } from "../lib/format";
 import { Page, EASE } from "../ui/motion";
 import { PageHeader, Card, Button, Modal, Pill, EmptyState, Skeleton } from "../ui/primitives";
@@ -245,18 +246,18 @@ export function Invites() {
 }
 
 function CopyBtn({ value }: { value: string }) {
-  const [done, setDone] = useState(false);
+  const [done, setDone] = useState<"idle" | "copied" | "blocked">("idle");
   return (
     <button
       onClick={() => {
-        void navigator.clipboard?.writeText(value);
-        setDone(true);
-        setTimeout(() => setDone(false), 1400);
+        void copyTextToClipboard(value).then((ok) => setDone(ok ? "copied" : "blocked"));
+        setTimeout(() => setDone("idle"), 1400);
       }}
       className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11.5px] font-semibold text-ink outline-none transition hover:bg-[#f4f3ef] focus-visible:ring-2 focus-visible:ring-primary/40"
       data-testid="invite-copy"
+      title={done === "blocked" ? "Copy blocked. Select the link manually." : undefined}
     >
-      {done ? <Check size={12} /> : <Copy size={12} />} {done ? "Copied" : "Copy"}
+      {done === "copied" ? <Check size={12} /> : <Copy size={12} />} {done === "copied" ? "Copied" : done === "blocked" ? "Select link" : "Copy"}
     </button>
   );
 }

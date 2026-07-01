@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bell, Check, Copy, Inbox, Link2, X } from "lucide-react";
 import { api } from "../lib/api";
+import { copyTextToClipboard } from "../lib/clipboard";
 import { friendlyError } from "../lib/errors";
 import { fmtUsd } from "../lib/format";
 import { addRequest, listRequests, cancelRequest, markReminded, remindedToday, updateRequestStatus, type MoneyRequest } from "../lib/requests";
@@ -81,17 +82,16 @@ export function Request() {
     }
   }
 
-  function copy(text: string) {
-    void navigator.clipboard?.writeText(text);
-    setCopied(true);
-    toast({ title: "Link copied", tone: "success" });
+  async function copy(text: string) {
+    const ok = await copyTextToClipboard(text);
+    setCopied(ok);
+    toast({ title: ok ? "Link copied" : "Copy blocked. Select the link.", tone: ok ? "success" : "danger" });
     setTimeout(() => setCopied(false), 1500);
   }
 
   function remind(r: MoneyRequest) {
-    copy(r.link);
+    void copy(r.link);
     markReminded(r.id);
-    toast({ title: "Reminder link copied. Send it over.", tone: "success" });
     bump((n) => n + 1);
   }
 
@@ -136,7 +136,7 @@ export function Request() {
               <div className="rounded-2xl border border-hair bg-card p-4" data-testid="request-link">
                 <div className="text-[12px] font-bold uppercase tracking-[0.05em] text-muted">Share to get paid</div>
                 <div className="mt-1 break-all font-mono text-[12.5px] text-ink">{link}</div>
-                <Button full className="mt-3" variant="secondary" onClick={() => copy(link)}>
+                <Button full className="mt-3" variant="secondary" onClick={() => void copy(link)}>
                   {copied ? <Check size={16} className="text-pos" /> : <Copy size={16} />} {copied ? "Copied" : "Copy link"}
                 </Button>
               </div>

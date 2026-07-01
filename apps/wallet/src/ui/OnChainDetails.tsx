@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, Copy, ExternalLink } from "lucide-react";
+import { copyTextToClipboard } from "../lib/clipboard";
 import { DEPLOYMENT, NETWORK, NETWORK_LABEL } from "../lib/network";
 
 const EXPLORER = `https://stellar.expert/explorer/${NETWORK}`;
@@ -101,7 +102,7 @@ function LinkRow({ k, id, href }: { k: string; id: string; href: string }) {
       <span className="flex-none text-muted">{k}</span>
       <span className="flex items-center gap-1.5">
         <a href={href} target="_blank" rel="noreferrer" className="font-mono text-[11.5px] text-accent hover:underline">{short(id)}</a>
-        <button type="button" onClick={() => navigator.clipboard?.writeText(id).catch(() => {})} title="Copy" className="text-muted hover:text-ink"><Copy size={12} /></button>
+        <button type="button" onClick={() => { void copyTextToClipboard(id); }} title="Copy" className="text-muted hover:text-ink"><Copy size={12} /></button>
         <a href={href} target="_blank" rel="noreferrer" title="Open in Stellar Expert" className="text-muted hover:text-ink"><ExternalLink size={12} /></a>
       </span>
     </div>

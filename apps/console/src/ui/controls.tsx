@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Check, ChevronDown, Copy, Loader2, X, ShieldCheck } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+import { copyTextToClipboard } from "../lib/clipboard";
 
 // ---------------------------------------------------------------- form fields
 
@@ -190,15 +191,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 // ---------------------------------------------------------------- address + copy
 
 export function CopyButton({ value }: { value: string }) {
-  const [done, setDone] = useState(false);
+  const [done, setDone] = useState<"idle" | "copied" | "blocked">("idle");
   return (
     <button
       type="button"
-      onClick={() => { void navigator.clipboard?.writeText(value); setDone(true); setTimeout(() => setDone(false), 1200); }}
+      onClick={() => {
+        void copyTextToClipboard(value).then((ok) => setDone(ok ? "copied" : "blocked"));
+        setTimeout(() => setDone("idle"), 1200);
+      }}
       className="rounded p-1 text-muted outline-none transition hover:bg-border/50 focus-visible:ring-2 focus-visible:ring-primary/40"
-      aria-label="Copy"
+      aria-label={done === "blocked" ? "Copy blocked" : done === "copied" ? "Copied" : "Copy"}
+      title={done === "blocked" ? "Copy blocked. Select the value manually." : done === "copied" ? "Copied" : "Copy"}
     >
-      {done ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+      {done === "copied" ? <Check size={14} className="text-success" /> : <Copy size={14} className={done === "blocked" ? "text-danger" : undefined} />}
     </button>
   );
 }

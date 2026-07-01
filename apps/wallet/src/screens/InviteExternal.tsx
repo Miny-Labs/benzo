@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Check, Copy, Gift, RotateCcw, Share2 } from "lucide-react";
 import { api, type InviteResult, type InviteSummary } from "../lib/api";
+import { copyTextToClipboard } from "../lib/clipboard";
 import { friendlyError } from "../lib/errors";
 import { useWallet } from "../lib/store";
 import { fmtUsd } from "../lib/format";
@@ -139,15 +140,16 @@ function ShareLink({ result, onAnother }: { result: InviteResult; onAnother: () 
   const toast = useToast();
   const [copied, setCopied] = useState(false);
 
-  function copy() {
-    void navigator.clipboard?.writeText(result.link);
-    setCopied(true);
+  async function copy() {
+    const ok = await copyTextToClipboard(result.link);
+    setCopied(ok);
+    toast({ title: ok ? "Link copied" : "Copy blocked. Select the link above.", tone: ok ? "success" : "danger" });
     setTimeout(() => setCopied(false), 1500);
   }
   async function share() {
     try {
       if (navigator.share) await navigator.share({ title: "Money for you on Benzo", text: "Claim the money I sent you:", url: result.link });
-      else copy();
+      else void copy();
     } catch {
       /* user dismissed */
     }

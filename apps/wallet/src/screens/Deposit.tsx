@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { QRCodeSVG } from "qrcode.react";
 import { ArrowDownToLine, Check, Copy, ShieldCheck } from "lucide-react";
 import { api, type SettleResult } from "../lib/api";
+import { copyTextToClipboard } from "../lib/clipboard";
 import { useWallet } from "../lib/store";
 import { fmtUsd } from "../lib/format";
 import { NETWORK_LABEL } from "../lib/network";
@@ -27,7 +28,7 @@ export function Deposit() {
   const { refresh } = useWallet();
   const [info, setInfo] = useState<Info | null>(null);
   const [infoErr, setInfoErr] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "blocked">("idle");
   const [phase, setPhase] = useState<Phase>("show");
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<SettleResult | null>(null);
@@ -57,9 +58,9 @@ export function Deposit() {
 
   async function copy() {
     if (!info?.address) return;
-    await navigator.clipboard?.writeText(info.address).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    const ok = await copyTextToClipboard(info.address);
+    setCopyState(ok ? "copied" : "blocked");
+    setTimeout(() => setCopyState("idle"), ok ? 1500 : 3000);
   }
 
   async function shieldIt() {
@@ -101,10 +102,15 @@ export function Deposit() {
           )}
           <div className="w-full">
             <div className="text-center text-[11px] font-semibold uppercase tracking-wide text-muted">Your USDC address (Stellar)</div>
-            <button onClick={copy} className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-xl bg-canvas px-3 py-2.5 font-mono text-[12px] leading-tight text-ink transition outline-none hover:bg-canvas/70 focus-visible:ring-2 focus-visible:ring-accent/40" data-testid="deposit-address">
+            <button onClick={copy} aria-label={info?.address ? `Copy receive address ${info.address}` : "Receive address loading"} className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-xl bg-canvas px-3 py-2.5 font-mono text-[12px] leading-tight text-ink transition outline-none hover:bg-canvas/70 focus-visible:ring-2 focus-visible:ring-accent/40" data-testid="deposit-address">
               <span className="break-all text-left">{info?.address ?? "…"}</span>
-              {copied ? <Check size={14} className="flex-none text-pos" /> : <Copy size={14} className="flex-none text-muted" />}
+              {copyState === "copied" ? <Check size={14} className="flex-none text-pos" /> : <Copy size={14} className="flex-none text-muted" />}
             </button>
+            {copyState !== "idle" ? (
+              <div className={`mt-1 text-center text-[11.5px] font-semibold ${copyState === "copied" ? "text-pos" : "text-danger"}`} data-testid="deposit-copy-status">
+                {copyState === "copied" ? "Address copied" : "Copy blocked. Select the address above."}
+              </div>
+            ) : null}
           </div>
           <div className="w-full rounded-xl bg-canvas/60 px-3 py-2 text-[11.5px] text-muted">
             <Row k="Asset" v={info?.asset ?? "USDC"} />
