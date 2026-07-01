@@ -63,6 +63,7 @@ import {
   type WalletLedgerSource,
 } from "./store.js";
 import { accountBinding, authFromRequest, createTestAuthToken, runWithAuth } from "./auth.js";
+import { walletContactsFromDb } from "./contacts.js";
 import { googleConfigured, verifyGoogleIdToken } from "./google-oidc.js";
 import { takeTenantRateLimit, tenantStorageStatus } from "./tenantData.js";
 import { hostedRuntime, serverlessRuntime } from "./runtime.js";
@@ -472,9 +473,7 @@ route("DELETE", "/api/account", async (_q, res) => {
   await deleteCurrentWalletTenant();
   json(res, 200, { deleted: true });
 });
-// Contacts are device-local in the wallet UI; the hosted API never provides
-// hosted people.
-route("GET", "/api/contacts", (_q, res) => json(res, 200, []));
+route("GET", "/api/contacts", (_q, res) => json(res, 200, walletContactsFromDb(db)));
 
 route("POST", "/api/send", async (req, res, url) => {
   const body = await readJson<{ to?: string; handle?: string; amount: string; memo?: string; prover?: string; requestId?: string }>(req);
