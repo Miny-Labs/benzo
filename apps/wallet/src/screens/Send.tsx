@@ -40,7 +40,7 @@ function toStroopsSafe(amount: string): string {
 export function Send() {
   const nav = useNavigate();
   const [params] = useSearchParams();
-  const { contacts: bffContacts, session, balance, publicBalance, refresh } = useWallet();
+  const { contacts: bffContacts, session, balance, publicBalance, refresh, refreshBalance } = useWallet();
   const contacts = useMemo(() => mergeContacts(bffContacts), [bffContacts]); // C6: BFF + saved
   const { state, receipt, run, reset } = useSendStream();
   const [to, setTo] = useState(() => params.get("to") ?? ""); // prefilled from Contacts / a request
@@ -97,6 +97,9 @@ export function Send() {
       window.clearTimeout(id);
     };
   }, [handleLookupValue, shouldLookupHandle]);
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
   const handleChecking = shouldLookupHandle && handleStatus.value === handleLookupValue && handleStatus.checking;
   const handleLookupError = shouldLookupHandle && handleStatus.value === handleLookupValue && handleStatus.error;
   const unclaimedHandle = shouldLookupHandle && handleStatus.value === handleLookupValue && handleStatus.available === true;
@@ -108,9 +111,10 @@ export function Send() {
   const publicStroops = BigInt(publicBalance?.stroops ?? "0");
   const wantStroops = BigInt(toStroopsSafe(amount));
   const checkingPrivateBalance = kind === "handle" && wantStroops > 0n && balance == null && !unclaimedHandle;
+  const checkingPublicBalance = kind === "address" && wantStroops > 0n && publicBalance == null;
   const lowPrivate = kind === "handle" && wantStroops > 0n && balance != null && wantStroops > privateStroops;
-  const lowPublic = kind === "address" && wantStroops > 0n && wantStroops > publicStroops;
-  const valid = recipient.length > 0 && Number(amount) > 0 && kind !== "invite" && !badAddress && !badHandle && !handleChecking && !handleLookupError && !unclaimedHandle && !checkingPrivateBalance && !lowPrivate && !(kind === "address" && lowPublic);
+  const lowPublic = kind === "address" && wantStroops > 0n && publicBalance != null && wantStroops > publicStroops;
+  const valid = recipient.length > 0 && Number(amount) > 0 && kind !== "invite" && !badAddress && !badHandle && !handleChecking && !handleLookupError && !unclaimedHandle && !checkingPrivateBalance && !checkingPublicBalance && !lowPrivate && !(kind === "address" && lowPublic);
 
   const inFlight = state.phase !== "idle";
   const pubInFlight = pubPhase !== "idle";
@@ -240,6 +244,11 @@ export function Send() {
                   >
                     <Globe size={12} /> Make public
                   </button>
+                </div>
+              ) : null}
+              {checkingPublicBalance ? (
+                <div className="mx-auto mt-2 max-w-[300px] text-center text-[12px] text-muted" data-testid="send-public-balance-checking">
+                  Checking public balance...
                 </div>
               ) : null}
               {lowPrivate ? (
