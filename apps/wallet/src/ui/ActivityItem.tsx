@@ -21,6 +21,7 @@ export function ActivityItem({ row, last }: { row: ActivityRow; last?: boolean }
   const nav = useNavigate();
   const isCash = row.type === "cashOut" || row.type === "unshield" || row.type === "shield" || row.type === "cashIn";
   const pill = STATUS_PILL[row.status];
+  const amountDirection = row.status === "failed" ? undefined : row.direction;
   return (
     <motion.button
       type="button"
@@ -52,7 +53,7 @@ export function ActivityItem({ row, last }: { row: ActivityRow; last?: boolean }
       </div>
       <div className="flex items-center gap-1">
         <div className="flex flex-col items-end">
-          <AmountText stroops={row.amount} direction={row.direction} className="text-base" />
+          <AmountText stroops={row.amount} direction={amountDirection} className="text-base" />
           <span className="mt-0.5 text-xs text-muted">{relativeTime(row.timestamp)}</span>
         </div>
         <ChevronRight size={15} className="flex-none text-hair transition group-hover:text-muted" />

@@ -40,6 +40,10 @@ function writeSet(s: Set<string>): void {
 /** Turn one activity row into a human notification line. */
 function lineFor(row: ActivityRow): { title: string; body: string; kind: Notif["kind"] } {
   const amt = fmtUsd(row.amount);
+  if (row.status === "failed") {
+    if (row.direction === "in") return { title: `${row.name} did not settle`, body: `${amt} failed`, kind: "info" };
+    return { title: `Couldn't pay ${row.name}`, body: `${amt} was not settled`, kind: "info" };
+  }
   if (row.type === "cashOut") {
     return { title: "Cash out", body: row.status === "settled" ? `${amt} returned to the testnet reserve` : `${amt} returning to the testnet reserve`, kind: "out" };
   }

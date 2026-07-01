@@ -65,6 +65,12 @@ describe("ActivityItem", () => {
     expect(screen.getByText(/Arriving/)).toBeInTheDocument();
     expect(screen.getByText("−$200.00")).toBeInTheDocument();
   });
+  it("shows failed outgoing attempts without a debit sign", () => {
+    render(<MemoryRouter><ActivityItem row={{ ...base, type: "send", name: "Alex", direction: "out", status: "failed" }} /></MemoryRouter>);
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("$200.00")).toBeInTheDocument();
+    expect(screen.queryByText("−$200.00")).not.toBeInTheDocument();
+  });
 });
 
 describe("OnChainDetails", () => {

@@ -97,6 +97,17 @@ function timeline(row: ActivityRow): Step[] {
     ];
   }
   // Outgoing private payment - the ZK story, told plainly.
+  if (failed) {
+    return [
+      { label: "Payment attempt created", state: "done" },
+      {
+        label: "Private proof did not complete",
+        hint: "No on-chain settlement was recorded",
+        state: "failed",
+      },
+      { label: "Not settled", state: "upcoming" },
+    ];
+  }
   return [
     { label: "Payment created", state: "done" },
     {
@@ -139,6 +150,13 @@ export function TxDetail() {
   // even if it carries a txHash - otherwise we'd link a dead explorer tx.
   const onChain = !row.unverified && !!row.txHash;
   const privatePayment = row.type !== "cashOut" && row.type !== "unshield" && !publicSend;
+  const amountDirection = row.status === "failed" ? undefined : row.direction;
+  const counterpartyPrefix =
+    row.status === "failed" && row.direction === "out"
+      ? "attempted to"
+      : row.direction === "in"
+        ? "from"
+        : "to";
 
   return (
     <Screen>
@@ -154,10 +172,10 @@ export function TxDetail() {
             <Avatar name={row.name} tone={row.tone} size={56} />
           )}
           <div className="mt-3" data-testid="txdetail-amount">
-            <AmountText stroops={hidden ? "0" : row.amount} direction={row.direction} className="text-[40px]" />
+            <AmountText stroops={hidden ? "0" : row.amount} direction={amountDirection} className="text-[40px]" />
           </div>
           <div className="mt-1 max-w-full px-4 text-[14px] text-muted">
-            {row.direction === "in" ? "from" : "to"} <span className="font-semibold text-ink">{row.name}</span>
+            {counterpartyPrefix} <span className="font-semibold text-ink">{row.name}</span>
           </div>
           {row.unverified ? (
             <span className="mt-2 inline-flex items-center rounded-full bg-muted/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted" title="Not verified on-chain" data-testid="txdetail-unverified">
@@ -169,7 +187,11 @@ export function TxDetail() {
               <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fbf1dd] px-3 py-1 text-[12px] font-semibold text-[#9a6b12]">
                 <Globe2 size={13} /> Public Stellar payment
               </span>
-            ) : privatePayment ? <PrivateChip label={cash ? "Your balance stayed private" : `Only you and ${row.name} can see this`} /> : (
+            ) : row.status === "failed" ? (
+              <PrivateChip label="No on-chain transfer recorded" />
+            ) : privatePayment ? (
+              <PrivateChip label={cash ? "Your balance stayed private" : `Only you and ${row.name} can see this`} />
+            ) : (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fbf1dd] px-3 py-1 text-[12px] font-semibold text-[#9a6b12]">
                 <Landmark size={13} /> {makePublic ? "Made public" : "Testnet reserve cash-out"}
               </span>

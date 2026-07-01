@@ -62,4 +62,22 @@ describe("notifications (C8 - client-side, derived from history)", () => {
     expect(deriveNotifications([settled], { live: false })[0].verified).toBe(false);
     expect(deriveNotifications([settled])[0].verified).toBe(false); // default = demo
   });
+
+  it("does not describe failed outgoing rows as paid", () => {
+    const failed: ActivityRow = {
+      id: "failed-send",
+      type: "send",
+      name: "Alex",
+      note: "",
+      amount: "500000000",
+      direction: "out",
+      status: "failed",
+      timestamp: 400,
+    };
+
+    const [notif] = deriveNotifications([failed], { live: true });
+    expect(notif.title).toBe("Couldn't pay Alex");
+    expect(notif.body).toBe("$50.00 was not settled");
+    expect(notif.verified).toBe(false);
+  });
 });

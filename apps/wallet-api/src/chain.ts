@@ -709,9 +709,6 @@ export async function getBalanceStroops(): Promise<{ stroops: string; live: bool
   const ledgerBalances = walletLedgerBalances();
   const hasLedgerRows = hasSettledWalletLedgerEntries();
   const ledgerPrivate = BigInt(ledgerBalances.private);
-  if (hostedRuntime() && verify.ok && hasLedgerRows && ledgerPrivate >= 0n) {
-    return { stroops: ledgerBalances.private, live: true, source: "ledger", syncing: true } as { stroops: string; live: boolean };
-  }
   try {
     return await getChainBalanceStroops({ timeoutMs: readSyncTimeoutMs() });
   } catch (e) {
