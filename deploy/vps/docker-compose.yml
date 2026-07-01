@@ -31,6 +31,8 @@ services:
         APP_DIR: apps/landing
         VITE_WALLET_URL: "https://wallet.benzo.space"
         VITE_CONSOLE_URL: "https://console.benzo.space"
+        BENZO_ARTIFACTS_BASE_URL: "${BENZO_ARTIFACTS_BASE_URL:-}"
+        BENZO_ARTIFACTS_TOKEN: "${BENZO_ARTIFACTS_TOKEN:-}"
     command: sh -c "cp -a /srv/. /out/ && tail -f /dev/null"
     volumes:
       - landing-static:/out
@@ -44,6 +46,8 @@ services:
         APP_DIR: apps/wallet
         VITE_CONSOLE_ORIGIN: "https://console.benzo.space"
         VITE_GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
+        BENZO_ARTIFACTS_BASE_URL: "${BENZO_ARTIFACTS_BASE_URL:-}"
+        BENZO_ARTIFACTS_TOKEN: "${BENZO_ARTIFACTS_TOKEN:-}"
     command: sh -c "cp -a /srv/. /out/ && tail -f /dev/null"
     volumes:
       - wallet-static:/out
@@ -55,6 +59,8 @@ services:
       args:
         PACKAGE: "@benzo/console"
         APP_DIR: apps/console
+        BENZO_ARTIFACTS_BASE_URL: "${BENZO_ARTIFACTS_BASE_URL:-}"
+        BENZO_ARTIFACTS_TOKEN: "${BENZO_ARTIFACTS_TOKEN:-}"
     command: sh -c "cp -a /srv/. /out/ && tail -f /dev/null"
     volumes:
       - console-static:/out
