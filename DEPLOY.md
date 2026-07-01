@@ -20,8 +20,9 @@ writes (proof + public inputs, never the witness) and pays gas. Nothing custodia
 ## 0. One-time prerequisites
 - Node 20+, `pnpm` (or corepack), Docker, the `vercel` CLI, and (for the host) the `fly` CLI.
 - A funded testnet Stellar key for the operator/relayer (the `DEPLOYER_SECRET`).
-- `deployments/testnet.json` is already populated (current contract addresses + the
-  re-wired `tee` block). `circuits/build/` holds the proving keys the BFF reads.
+- `deployments/testnet.json` is already populated with current contract addresses
+  and local proof metadata. `circuits/build/` holds the proving keys the browser
+  and local BFF proof helpers read.
 
 ## 1. Deploy the two BFFs (do this first — the frontends point at them)
 
