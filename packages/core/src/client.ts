@@ -27,6 +27,7 @@ import {
   fetchAspLeavesSince,
   fetchLatestAspWitnessFromStorage,
   fetchLatestPoolWitnessFromStorage,
+  fetchPoolWitnessFromStorageWithKnownSuffix,
   type ScannerSnapshot,
   type AspSnapshot,
   type AspMembershipWitness,
@@ -341,20 +342,28 @@ export class BenzoClient {
     } catch (e) {
       const msg = String((e as Error)?.message ?? e);
       if (!/commitment leaf \d+ missing from events|pool tree mirror out of sync/.test(msg)) throw e;
-      if (opts.allowPoolMirrorGaps) {
-        // Hosted read paths can still decrypt fresh incoming notes from the
-        // partial scanner snapshot. Rebuilding from genesis is expensive and
-        // often impossible on long-lived testnet deployments after old events
-        // age out. Spending paths that need complete mirrors stay strict unless
-        // the caller explicitly opts into storage-backed witnesses.
-      } else {
       // A previously persisted incremental snapshot can contain a hole or a
       // stale root if an older client crashed, missed a log window, or replayed
       // overlapping logs differently. Rebuild from genesis while RPC still has
-      // events, then replace the durable snapshot.
+      // events. If the oldest events already aged out, keep the retained suffix
+      // as a public commitment index for storage-frontier witnesses.
       const previousScanner = this.scanner;
-      this.scanner = new NoteScanner(deployment.treeLevels, 1);
-      await syncFromRpc(this.scanner, rpcUrl, [deployment.pool, deployment.viewkeyAnchor], 1);
+      const retainedScanner = new NoteScanner(deployment.treeLevels, 1);
+      await syncFromRpc(retainedScanner, rpcUrl, [deployment.pool, deployment.viewkeyAnchor], 1);
+      for (const rec of previousScanner.commitments) {
+        if (rec && !retainedScanner.commitments[rec.leafIndex]) retainedScanner.commitments[rec.leafIndex] = rec;
+      }
+      for (const n of previousScanner.nullifiers) retainedScanner.nullifiers.add(n);
+      for (const [key, value] of previousScanner.nullifierRecords) {
+        if (!retainedScanner.nullifierRecords.has(key)) retainedScanner.nullifierRecords.set(key, value);
+      }
+      const seenBindings = new Set(retainedScanner.mvkBindings.map((b) => `${b.tag}:${toHex(b.mvkCt)}:${b.ledger}`));
+      for (const binding of previousScanner.mvkBindings) {
+        const key = `${binding.tag}:${toHex(binding.mvkCt)}:${binding.ledger}`;
+        if (!seenBindings.has(key)) retainedScanner.mvkBindings.push(binding);
+      }
+      retainedScanner.cursorLedger = Math.max(retainedScanner.cursorLedger, previousScanner.cursorLedger);
+      this.scanner = retainedScanner;
       try {
         this.pool.poolRebuild(this.scanner.orderedLeaves());
         await this.pool.assertSynced();
@@ -362,15 +371,15 @@ export class BenzoClient {
         poolMirrorSynced = true;
       } catch (rebuildErr) {
         const rebuildMsg = String((rebuildErr as Error)?.message ?? rebuildErr);
-        if (!opts.allowPoolMirrorGaps || !/commitment leaf \d+ missing from events|pool tree mirror out of sync/.test(rebuildMsg)) {
+        if (!/commitment leaf \d+ missing from events|pool tree mirror out of sync/.test(rebuildMsg)) {
           this.scanner = previousScanner;
           throw rebuildErr;
         }
-        // RPC retention can omit very old commitment leaves on long-lived
-        // testnet deployments. Shielding a new note does not spend or witness
-        // old leaves, so callers that opt in may continue after ASP sync below.
-        // Spending paths keep the default strict behavior and still fail closed.
-      }
+        if (!opts.allowPoolMirrorGaps) {
+          this.scanner = previousScanner;
+          throw rebuildErr;
+        }
+        await store.set(this.key("scan"), JSON.stringify(this.scanner.snapshot()));
       }
     }
 
@@ -1155,6 +1164,21 @@ export class BenzoClient {
       );
       if (witness.leafIndex === input.leafIndex) return witness;
       storageErr = new Error(`latest pool leaf is ${witness.leafIndex}, selected note is ${input.leafIndex}`);
+    } catch (e) {
+      storageErr = e;
+    }
+
+    try {
+      return await fetchPoolWitnessFromStorageWithKnownSuffix(
+        this.opts.rpcUrl,
+        this.opts.deployment.merkle,
+        this.opts.deployment.treeLevels,
+        commitment,
+        input.leafIndex,
+        this.scanner.commitments.flatMap((rec) =>
+          rec ? [{ leafIndex: rec.leafIndex, commitment: rec.commitment }] : [],
+        ),
+      );
     } catch (e) {
       storageErr = e;
     }

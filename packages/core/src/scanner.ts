@@ -89,6 +89,11 @@ export interface AspMembershipWitness {
   root: bigint;
 }
 
+export interface KnownPoolLeaf {
+  leafIndex: number;
+  commitment: bigint;
+}
+
 function hexToBytes(hex: string): Uint8Array {
   return fromHex(hex);
 }
@@ -506,6 +511,129 @@ function foldMerklePath(leaf: bigint, pathElements: bigint[], pathIndices: bigin
   return current;
 }
 
+export interface PoolStorageFrontier {
+  nextIndex: number;
+  root: bigint;
+  filledSubtrees: bigint[];
+  zeroes: bigint[];
+}
+
+async function fetchPoolStorageFrontier(
+  rpcUrl: string,
+  merkleContractId: string,
+  levels: number,
+): Promise<PoolStorageFrontier> {
+  const server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith("http://") });
+  const requests: Array<{ name: string; key: xdr.LedgerKey }> = [
+    { name: "NextIndex", key: contractStorageKey(merkleContractId, dataKey([scvSymbol("NextIndex")])) },
+    { name: "CurrentRootIndex", key: contractStorageKey(merkleContractId, dataKey([scvSymbol("CurrentRootIndex")])) },
+  ];
+  for (let level = 0; level < levels; level++) {
+    requests.push({
+      name: `FilledSubtree:${level}`,
+      key: contractStorageKey(merkleContractId, dataKey([scvSymbol("FilledSubtree"), scvU32(level)])),
+    });
+    requests.push({
+      name: `Zeroes:${level}`,
+      key: contractStorageKey(merkleContractId, dataKey([scvSymbol("Zeroes"), scvU32(level)])),
+    });
+  }
+
+  const response = await server.getLedgerEntries(...requests.map((r) => r.key));
+  if (response.entries.length !== requests.length) {
+    throw new Error(`pool storage witness unavailable: expected ${requests.length} entries, got ${response.entries.length}`);
+  }
+
+  const values = response.entries.map((entry) => scValToNative(entry.val.contractData().val()));
+  const nextIndex = Number(toBig(values[0]));
+  const rootIndex = Number(toBig(values[1]));
+  if (!Number.isSafeInteger(nextIndex) || nextIndex <= 0) {
+    throw new Error("pool storage witness unavailable: no inserted leaves");
+  }
+  if (!Number.isSafeInteger(rootIndex) || rootIndex < 0) {
+    throw new Error("pool storage witness unavailable: invalid current root index");
+  }
+
+  const rootResponse = await server.getLedgerEntries(
+    contractStorageKey(merkleContractId, dataKey([scvSymbol("Root"), scvU32(rootIndex)])),
+  );
+  if (rootResponse.entries.length !== 1) {
+    throw new Error("pool storage witness unavailable: current root missing");
+  }
+
+  const filledSubtrees: bigint[] = [];
+  const zeroes: bigint[] = [];
+  for (let level = 0; level < levels; level++) {
+    filledSubtrees.push(toBig(values[2 + level * 2]));
+    zeroes.push(toBig(values[2 + level * 2 + 1]));
+  }
+  return {
+    nextIndex,
+    root: toBig(scValToNative(rootResponse.entries[0].val.contractData().val())),
+    filledSubtrees,
+    zeroes,
+  };
+}
+
+function filledSubtreeStart(nextIndex: number, level: number): number {
+  const width = 2 ** level;
+  const pos = Math.floor((nextIndex - 1) / width) & ~1;
+  return pos * width;
+}
+
+function nodeFromKnownSuffix(
+  level: number,
+  start: number,
+  frontier: PoolStorageFrontier,
+  known: Map<number, bigint>,
+): bigint | undefined {
+  const width = 2 ** level;
+  if (start >= frontier.nextIndex) return frontier.zeroes[level];
+  if (start === filledSubtreeStart(frontier.nextIndex, level)) return frontier.filledSubtrees[level];
+  if (level === 0) return known.get(start);
+
+  const left = nodeFromKnownSuffix(level - 1, start, frontier, known);
+  const right = nodeFromKnownSuffix(level - 1, start + width / 2, frontier, known);
+  if (left === undefined || right === undefined) return undefined;
+  return compress(left, right);
+}
+
+export function reconstructPoolWitnessFromKnownSuffix(
+  levels: number,
+  commitment: bigint,
+  leafIndex: number,
+  knownLeaves: KnownPoolLeaf[],
+  frontier: PoolStorageFrontier,
+): AspMembershipWitness {
+  if (!Number.isSafeInteger(leafIndex) || leafIndex < 0 || leafIndex >= frontier.nextIndex) {
+    throw new Error("pool suffix witness unavailable: selected leaf is outside the live tree");
+  }
+  const known = new Map<number, bigint>();
+  for (const leaf of knownLeaves) known.set(leaf.leafIndex, leaf.commitment);
+  const knownSelected = known.get(leafIndex);
+  if (knownSelected !== undefined && knownSelected !== commitment) {
+    throw new Error("pool suffix witness unavailable: selected leaf commitment mismatch");
+  }
+
+  const pathElements: bigint[] = [];
+  for (let level = 0; level < levels; level++) {
+    const width = 2 ** level;
+    const siblingStart = ((leafIndex >> level) ^ 1) * width;
+    const sibling = nodeFromKnownSuffix(level, siblingStart, frontier, known);
+    if (sibling === undefined) {
+      throw new Error(`pool suffix witness unavailable: missing sibling subtree at level ${level}`);
+    }
+    pathElements.push(sibling);
+  }
+
+  const pathIndices = BigInt(leafIndex);
+  const folded = foldMerklePath(commitment, pathElements, pathIndices);
+  if (folded !== frontier.root) {
+    throw new Error("pool suffix witness does not match the live root");
+  }
+  return { leafIndex, pathElements, pathIndices, root: frontier.root };
+}
+
 /**
  * Reconstruct the witness for the latest ASP membership leaf from contract
  * storage. This is used when a long-lived testnet deployment has older ASP
@@ -643,51 +771,13 @@ export async function fetchLatestPoolWitnessFromStorage(
   levels: number,
   commitment: bigint,
 ): Promise<AspMembershipWitness> {
-  const server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith("http://") });
-  const requests: Array<{ name: string; key: xdr.LedgerKey }> = [
-    { name: "NextIndex", key: contractStorageKey(merkleContractId, dataKey([scvSymbol("NextIndex")])) },
-    { name: "CurrentRootIndex", key: contractStorageKey(merkleContractId, dataKey([scvSymbol("CurrentRootIndex")])) },
-  ];
-  for (let level = 0; level < levels; level++) {
-    requests.push({
-      name: `FilledSubtree:${level}`,
-      key: contractStorageKey(merkleContractId, dataKey([scvSymbol("FilledSubtree"), scvU32(level)])),
-    });
-    requests.push({
-      name: `Zeroes:${level}`,
-      key: contractStorageKey(merkleContractId, dataKey([scvSymbol("Zeroes"), scvU32(level)])),
-    });
-  }
-
-  const response = await server.getLedgerEntries(...requests.map((r) => r.key));
-  if (response.entries.length !== requests.length) {
-    throw new Error(`pool storage witness unavailable: expected ${requests.length} entries, got ${response.entries.length}`);
-  }
-
-  const values = response.entries.map((entry) => scValToNative(entry.val.contractData().val()));
-  const nextIndex = Number(toBig(values[0]));
-  const rootIndex = Number(toBig(values[1]));
-  if (!Number.isSafeInteger(nextIndex) || nextIndex <= 0) {
-    throw new Error("pool storage witness unavailable: no inserted leaves");
-  }
-  if (!Number.isSafeInteger(rootIndex) || rootIndex < 0) {
-    throw new Error("pool storage witness unavailable: invalid current root index");
-  }
-
-  const rootResponse = await server.getLedgerEntries(
-    contractStorageKey(merkleContractId, dataKey([scvSymbol("Root"), scvU32(rootIndex)])),
-  );
-  if (rootResponse.entries.length !== 1) {
-    throw new Error("pool storage witness unavailable: current root missing");
-  }
-  const root = toBig(scValToNative(rootResponse.entries[0].val.contractData().val()));
-
+  const { nextIndex, root, filledSubtrees, zeroes } = await fetchPoolStorageFrontier(rpcUrl, merkleContractId, levels);
   const leafIndex = nextIndex - 1;
   const pathElements: bigint[] = [];
   let cursor = leafIndex;
   for (let level = 0; level < levels; level++) {
-    const filled = toBig(values[2 + level * 2]);
-    const zero = toBig(values[2 + level * 2 + 1]);
+    const filled = filledSubtrees[level];
+    const zero = zeroes[level];
     pathElements.push((cursor & 1) === 1 ? filled : zero);
     cursor >>= 1;
   }
@@ -697,6 +787,18 @@ export async function fetchLatestPoolWitnessFromStorage(
     throw new Error("pool storage witness does not match the live root");
   }
   return { leafIndex, pathElements, pathIndices, root };
+}
+
+export async function fetchPoolWitnessFromStorageWithKnownSuffix(
+  rpcUrl: string,
+  merkleContractId: string,
+  levels: number,
+  commitment: bigint,
+  leafIndex: number,
+  knownLeaves: KnownPoolLeaf[],
+): Promise<AspMembershipWitness> {
+  const frontier = await fetchPoolStorageFrontier(rpcUrl, merkleContractId, levels);
+  return reconstructPoolWitnessFromKnownSuffix(levels, commitment, leafIndex, knownLeaves, frontier);
 }
 
 /**
