@@ -159,4 +159,33 @@ describe("TxDetail", () => {
     expect(screen.queryByTestId("txdetail-share")).not.toBeInTheDocument();
     expect(screen.queryByTestId("txdetail-explorer")).not.toBeInTheDocument();
   });
+
+  it("treats a legacy nonfailed row with failure copy and no tx as failed", () => {
+    state.history = [{
+      id: "h_legacy_failed_private",
+      type: "send",
+      name: "You sent",
+      note: "Sent privately · Couldn't send right now. Your money is safe. Please try again.",
+      amount: "50000000",
+      direction: "out",
+      status: "proving",
+      timestamp: 1782926977,
+      tone: "neutral",
+    }];
+
+    render(
+      <MemoryRouter initialEntries={["/activity/h_legacy_failed_private"]}>
+        <Routes>
+          <Route path="/activity/:id" element={<TxDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("$5.00")).toBeInTheDocument();
+    expect(screen.queryByText("−$5.00")).not.toBeInTheDocument();
+    expect(screen.getByText("attempted to")).toBeInTheDocument();
+    expect(screen.getByText("Private proof did not complete")).toBeInTheDocument();
+    expect(screen.getByText("No on-chain transfer recorded")).toBeInTheDocument();
+    expect(screen.queryByText("Proved private")).not.toBeInTheDocument();
+  });
 });

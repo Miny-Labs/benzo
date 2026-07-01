@@ -47,6 +47,8 @@ services:
         APP_DIR: apps/wallet
         VITE_CONSOLE_ORIGIN: "https://console.benzo.space"
         VITE_GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
+        VITE_SOROBAN_RPC_URL: "${SOROBAN_RPC_URL}"
+        VITE_NETWORK_PASSPHRASE: "${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
         BENZO_ARTIFACTS_BASE_URL: "${BENZO_ARTIFACTS_BASE_URL:-https://github.com/akash-mondal/benzo/releases/download/artifacts}"
       secrets:
         - benzo_artifacts_token
@@ -61,6 +63,8 @@ services:
       args:
         PACKAGE: "@benzo/console"
         APP_DIR: apps/console
+        VITE_SOROBAN_RPC_URL: "${SOROBAN_RPC_URL}"
+        VITE_NETWORK_PASSPHRASE: "${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
         BENZO_ARTIFACTS_BASE_URL: "${BENZO_ARTIFACTS_BASE_URL:-https://github.com/akash-mondal/benzo/releases/download/artifacts}"
       secrets:
         - benzo_artifacts_token

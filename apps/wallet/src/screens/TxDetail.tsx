@@ -41,9 +41,16 @@ function isPublicSendRow(row: ActivityRow): boolean {
   return row.type === "publicSend" || row.note === "Public send";
 }
 
+function isFailedLikeRow(row: ActivityRow): boolean {
+  if (row.status === "failed") return true;
+  if (row.txHash) return false;
+  const note = row.note ?? "";
+  return /couldn'?t send|could not send|couldn'?t add|could not add|failed|not submitted|no on-chain settlement/i.test(note);
+}
+
 /** Build the status timeline for a row - the steps + which one we're on. */
 function timeline(row: ActivityRow): Step[] {
-  const failed = row.status === "failed";
+  const failed = isFailedLikeRow(row);
   const settled = row.status === "settled";
   if (isPublicSendRow(row)) {
     return [
@@ -145,14 +152,15 @@ export function TxDetail() {
   const cash = isCashRow(row);
   const makePublic = isMakePublicRow(row);
   const publicSend = isPublicSendRow(row);
+  const failed = isFailedLikeRow(row);
   const steps = timeline(row);
   // Honest on-chain claim: a legacy local row never counts as "Verified on-chain",
   // even if it carries a txHash - otherwise we'd link a dead explorer tx.
   const onChain = !row.unverified && !!row.txHash;
   const privatePayment = row.type !== "cashOut" && row.type !== "unshield" && !publicSend;
-  const amountDirection = row.status === "failed" ? undefined : row.direction;
+  const amountDirection = failed ? undefined : row.direction;
   const counterpartyPrefix =
-    row.status === "failed" && row.direction === "out"
+    failed && row.direction === "out"
       ? "attempted to"
       : row.direction === "in"
         ? "from"
@@ -187,7 +195,7 @@ export function TxDetail() {
               <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fbf1dd] px-3 py-1 text-[12px] font-semibold text-[#9a6b12]">
                 <Globe2 size={13} /> Public Stellar payment
               </span>
-            ) : row.status === "failed" ? (
+            ) : failed ? (
               <PrivateChip label="No on-chain transfer recorded" />
             ) : privatePayment ? (
               <PrivateChip label={cash ? "Your balance stayed private" : `Only you and ${row.name} can see this`} />
