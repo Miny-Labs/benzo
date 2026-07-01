@@ -113,7 +113,9 @@ export function Send() {
   const checkingPublicBalance = kind === "address" && wantStroops > 0n && publicBalance == null;
   const lowPrivate = kind === "handle" && wantStroops > 0n && balance != null && wantStroops > privateStroops;
   const lowPublic = kind === "address" && wantStroops > 0n && publicBalance != null && wantStroops > publicStroops;
-  const valid = recipient.length > 0 && Number(amount) > 0 && kind !== "invite" && !badAddress && !badHandle && !handleChecking && !handleLookupError && !unclaimedHandle && !checkingPrivateBalance && !checkingPublicBalance && !lowPrivate && !(kind === "address" && lowPublic);
+  const recipientReady = recipient.length > 0 && Number(amount) > 0 && kind !== "invite" && !badAddress && !badHandle && !handleChecking && !handleLookupError && !unclaimedHandle;
+  const canOpenStepUp = overCap && recipientReady;
+  const valid = recipientReady && !checkingPrivateBalance && !checkingPublicBalance && !lowPrivate && !(kind === "address" && lowPublic);
 
   const inFlight = state.phase !== "idle";
   const pubInFlight = pubPhase !== "idle";
@@ -232,7 +234,7 @@ export function Send() {
                   Sends over ${sendCapUsd(session?.kycTier).toLocaleString()} need a quick one-time ID check.
                 </div>
               ) : null}
-              {lowPublic ? (
+              {lowPublic && !canOpenStepUp ? (
                 <div className="mx-auto mt-2 flex max-w-[300px] flex-col items-center gap-1.5 text-center text-[12px] text-[#9a6b12]" data-testid="send-low-public">
                   <span>Not enough public USDC - Make public first.</span>
                   <button
@@ -250,7 +252,7 @@ export function Send() {
                   Checking public balance...
                 </div>
               ) : null}
-              {lowPrivate ? (
+              {lowPrivate && !canOpenStepUp ? (
                 <div className="mx-auto mt-2 max-w-[300px] text-center text-[12px] text-[#9a6b12]" data-testid="send-low-private">
                   Not enough private USDC. Add money or use a smaller amount.
                 </div>
@@ -294,8 +296,8 @@ export function Send() {
             ) : null}
 
             {kind !== "invite" && !unclaimedHandle ? (
-              <Button full size="lg" className="mt-6" disabled={!valid} onClick={() => (overCap ? setStepUp(true) : setStep("confirm"))} data-testid="send-submit">
-                {amount && valid ? `Review · ${fmtUsd(toStroopsSafe(amount))}` : "Review"}
+              <Button full size="lg" className="mt-6" disabled={!valid && !canOpenStepUp} onClick={() => (overCap ? setStepUp(true) : setStep("confirm"))} data-testid="send-submit">
+                {amount && (valid || canOpenStepUp) ? `${overCap ? "Verify" : "Review"} · ${fmtUsd(toStroopsSafe(amount))}` : "Review"}
               </Button>
             ) : null}
           </>
