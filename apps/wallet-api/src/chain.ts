@@ -51,6 +51,7 @@ import { encodeBenzoLink } from "@benzo/links";
 import {
   currentWalletTenantKey,
   db,
+  hasSettledWalletLedgerEntries,
   isRequestTxReconciled,
   markRequestTxReconciled,
   nowSec,
@@ -706,7 +707,7 @@ export function toStroops(amount: string): bigint {
 export async function getBalanceStroops(): Promise<{ stroops: string; live: boolean }> {
   const verify = verifyWalletLedger();
   const ledgerBalances = walletLedgerBalances();
-  const hasLedgerRows = (db.ledger?.length ?? 0) > 0;
+  const hasLedgerRows = hasSettledWalletLedgerEntries();
   const ledgerPrivate = BigInt(ledgerBalances.private);
   if (hostedRuntime() && verify.ok && hasLedgerRows && ledgerPrivate >= 0n) {
     return { stroops: ledgerBalances.private, live: true, source: "ledger", syncing: true } as { stroops: string; live: boolean };

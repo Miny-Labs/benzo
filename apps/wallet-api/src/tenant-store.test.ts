@@ -230,6 +230,35 @@ test("read-only hosted wallet requests do not overwrite a saved write", async ()
   });
 });
 
+test("failed wallet ledger entries do not become spendable balance fallback", async () => {
+  process.env.BENZO_HOSTED_TENANT_TEST = "1";
+  process.env.BENZO_TENANT_STORE_MEMORY = "1";
+  process.env.BENZO_DATA_ENCRYPTION_SECRET = "tenant-store-test-secret";
+  process.env.BENZO_DISABLE_TENANT_LEGACY_DECRYPT = "1";
+  const {
+    appendWalletLedger,
+    hasSettledWalletLedgerEntries,
+    runWithWalletTenant,
+    verifyWalletLedger,
+    walletLedgerBalances,
+  } = await import("./store.js");
+
+  await runWithWalletTenant("failed-only", { name: "Failed Only" }, { accountFingerprint: "wallet_failed", subjectKey: "failed-only" }, async () => {
+    appendWalletLedger({
+      sourceType: "offramp",
+      status: "failed",
+      requestedAmount: "3",
+      lines: [],
+      errorCode: "limit",
+      error: "Cash-out must be between $5 and $2,500.",
+    });
+
+    expect(verifyWalletLedger()).toMatchObject({ ok: true, length: 1 });
+    expect(hasSettledWalletLedgerEntries()).toBe(false);
+    expect(walletLedgerBalances()).toMatchObject({ private: "0", public: "0", ramp_reserve: "0" });
+  });
+});
+
 test("hosted wallet account deletion clears only the current tenant document", async () => {
   process.env.BENZO_HOSTED_TENANT_TEST = "1";
   process.env.BENZO_TENANT_STORE_MEMORY = "1";

@@ -316,6 +316,10 @@ export function verifyWalletLedger(): { ok: boolean; length: number; brokenAt?: 
   return verifyWalletLedgerEntries(db.ledger);
 }
 
+export function hasSettledWalletLedgerEntries(): boolean {
+  return (db.ledger ?? []).some((entry) => entry.status === "settled");
+}
+
 export function walletLedgerBalances(): Record<WalletLedgerAccount, string> {
   db.ledger ??= [];
   const balances: Record<WalletLedgerAccount, bigint> = {
