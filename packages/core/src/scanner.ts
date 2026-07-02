@@ -518,7 +518,7 @@ export interface PoolStorageFrontier {
   zeroes: bigint[];
 }
 
-async function fetchPoolStorageFrontier(
+export async function fetchPoolStorageFrontier(
   rpcUrl: string,
   merkleContractId: string,
   levels: number,
@@ -573,6 +573,42 @@ async function fetchPoolStorageFrontier(
     filledSubtrees,
     zeroes,
   };
+}
+
+export function appendPoolWitnessesFromFrontier(
+  levels: number,
+  frontier: PoolStorageFrontier,
+  commitments: bigint[],
+): AspMembershipWitness[] {
+  const filledSubtrees = frontier.filledSubtrees.slice();
+  const zeroes = frontier.zeroes.slice();
+  if (filledSubtrees.length < levels || zeroes.length < levels) {
+    throw new Error("pool append witness unavailable: incomplete frontier");
+  }
+
+  let nextIndex = frontier.nextIndex;
+  return commitments.map((commitment) => {
+    if (!Number.isSafeInteger(nextIndex) || nextIndex < 0) {
+      throw new Error("pool append witness unavailable: invalid next_index");
+    }
+    const leafIndex = nextIndex;
+    const pathElements: bigint[] = [];
+    let current = commitment;
+    let cursor = nextIndex;
+    for (let level = 0; level < levels; level++) {
+      if ((cursor & 1) === 0) {
+        pathElements.push(zeroes[level]);
+        filledSubtrees[level] = current;
+        current = compress(current, zeroes[level]);
+      } else {
+        pathElements.push(filledSubtrees[level]);
+        current = compress(filledSubtrees[level], current);
+      }
+      cursor >>= 1;
+    }
+    nextIndex += 1;
+    return { leafIndex, pathElements, pathIndices: BigInt(leafIndex), root: current };
+  });
 }
 
 function filledSubtreeStart(nextIndex: number, level: number): number {

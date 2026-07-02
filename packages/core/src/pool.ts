@@ -166,6 +166,15 @@ export class BenzoPoolClient {
     return BigInt(v as string);
   }
 
+  async isKnownPoolRoot(root: bigint): Promise<boolean> {
+    const v = await this.cli.view(this.dep.merkle, this.viewSource, [
+      "is_known_root",
+      "--root",
+      root.toString(),
+    ]);
+    return v === true || v === "true";
+  }
+
   async onchainPoolNextIndex(): Promise<number> {
     const v = await this.cli.view(this.dep.merkle, this.viewSource, ["next_index"]);
     const n = Number(v);
@@ -974,6 +983,7 @@ export class BenzoPoolClient {
     nullifier: bigint;
     changeNote: Note;
     changeCommitment: bigint;
+    changeLeafIndex: number;
     proof: ProveResult;
     provingMs: number;
   }> {
@@ -1085,6 +1095,7 @@ export class BenzoPoolClient {
     const _pw = Date.now();
     const proof = await this.prover.prove(this.circuits.unshield, witness);
     const provingMs = Date.now() - _pw;
+    const chainI0 = await this.onchainPoolNextIndex();
 
     const res = await this.cli.invoke({
       contractId: this.dep.pool,
@@ -1113,6 +1124,6 @@ export class BenzoPoolClient {
       if (!/out of sync/i.test(String((e as Error)?.message ?? e))) throw e;
       console.warn("[benzo-core] pool mirror lag after withdraw submit", (e as Error).message);
     }
-    return { txHash: res.txHash, nullifier, changeNote, changeCommitment, proof, provingMs };
+    return { txHash: res.txHash, nullifier, changeNote, changeCommitment, changeLeafIndex: chainI0, proof, provingMs };
   }
 }

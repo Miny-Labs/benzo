@@ -25,9 +25,11 @@ import {
   syncFromRpc,
   fetchAspLeaves,
   fetchAspLeavesSince,
+  fetchPoolStorageFrontier,
   fetchLatestAspWitnessFromStorage,
   fetchLatestPoolWitnessFromStorage,
   fetchPoolWitnessFromStorageWithKnownSuffix,
+  appendPoolWitnessesFromFrontier,
   type ScannerSnapshot,
   type AspSnapshot,
   type AspMembershipWitness,
@@ -218,6 +220,17 @@ export interface BenzoClientOptions {
   initialScanLookbackLedgers?: number;
 }
 
+interface PoolWitnessSnapshot {
+  v: 1;
+  witnesses: Array<{
+    leafIndex: number;
+    commitment: string;
+    root: string;
+    pathIndices: string;
+    pathElements: string[];
+  }>;
+}
+
 /** 32-byte big-endian hex of a field element (guarded; for the registry record). */
 const feHex32 = feHex;
 function bytesHex(b: Uint8Array): string {
@@ -266,6 +279,7 @@ export class BenzoClient {
   scanner: NoteScanner;
   account!: BenzoAccount;
   private journal: HistoryItem[] = [];
+  private poolWitnesses = new Map<string, AspMembershipWitness>();
   private assetIdCache?: bigint;
 
   constructor(readonly opts: BenzoClientOptions) {
@@ -279,6 +293,7 @@ export class BenzoClient {
   private resetAccountState(): void {
     this.stateLoaded = false;
     this.journal = [];
+    this.poolWitnesses = new Map();
     this.aspLeaves = [];
     this.aspCursor = 0;
     this.scanner = new NoteScanner(this.opts.deployment.treeLevels, 1);
@@ -533,12 +548,99 @@ export class BenzoClient {
     }
     const journalRaw = await store.get(this.key("journal"));
     if (journalRaw) this.journal = JSON.parse(journalRaw) as HistoryItem[];
+    const witnessesRaw = await store.get(this.key("pool-witnesses"));
+    if (witnessesRaw) {
+      const snap = JSON.parse(witnessesRaw) as PoolWitnessSnapshot;
+      if (snap.v === 1) {
+        this.poolWitnesses = new Map(
+          snap.witnesses.map((w) => [
+            this.poolWitnessKey(w.leafIndex, BigInt(w.commitment)),
+            {
+              leafIndex: w.leafIndex,
+              root: BigInt(w.root),
+              pathIndices: BigInt(w.pathIndices),
+              pathElements: w.pathElements.map((p) => BigInt(p)),
+            },
+          ]),
+        );
+      }
+    }
     this.stateLoaded = true;
   }
 
   /** Await all pending durable writes (call before process exit). */
   async flush(): Promise<void> {
     await this.persistChain;
+  }
+
+  private poolWitnessKey(leafIndex: number, commitment: bigint): string {
+    return `${leafIndex}:${commitment.toString()}`;
+  }
+
+  private rememberPoolWitness(leafIndex: number, commitment: bigint, witness: AspMembershipWitness): void {
+    if (witness.leafIndex !== leafIndex || witness.pathIndices !== BigInt(leafIndex)) return;
+    this.poolWitnesses.set(this.poolWitnessKey(leafIndex, commitment), witness);
+    const store = this.opts.store;
+    if (!store) return;
+    const snap: PoolWitnessSnapshot = {
+      v: 1,
+      witnesses: [...this.poolWitnesses.entries()].map(([key, w]) => {
+        const [leafIndexPart, commitment] = key.split(":");
+        return {
+          leafIndex: Number(leafIndexPart),
+          commitment,
+          root: w.root.toString(),
+          pathIndices: w.pathIndices.toString(),
+          pathElements: w.pathElements.map((p) => p.toString()),
+        };
+      }),
+    };
+    this.persistChain = this.persistChain
+      .then(() => store.set(this.key("pool-witnesses"), JSON.stringify(snap)))
+      .catch((e: unknown) => {
+        this.lastPersistError = e instanceof Error ? e : new Error(String(e));
+      });
+  }
+
+  private async cachedPoolWitness(input: SpendableNote): Promise<AspMembershipWitness | undefined> {
+    const witness = this.poolWitnesses.get(this.poolWitnessKey(input.leafIndex, noteCommitment(input.note)));
+    if (!witness) return undefined;
+    try {
+      if (await this.pool.isKnownPoolRoot(witness.root)) return witness;
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  private async preAppendPoolFrontier() {
+    return fetchPoolStorageFrontier(
+      this.opts.rpcUrl,
+      this.opts.deployment.merkle,
+      this.opts.deployment.treeLevels,
+    );
+  }
+
+  private cacheAppendedPoolWitnesses(
+    frontier: Awaited<ReturnType<BenzoClient["preAppendPoolFrontier"]>> | undefined,
+    leafIndices: number[],
+    commitments: bigint[],
+  ): void {
+    if (!frontier || leafIndices.length !== commitments.length || commitments.length === 0) return;
+    try {
+      const witnesses = appendPoolWitnessesFromFrontier(
+        this.opts.deployment.treeLevels,
+        frontier,
+        commitments,
+      );
+      for (let i = 0; i < witnesses.length; i++) {
+        if (witnesses[i].leafIndex === leafIndices[i]) {
+          this.rememberPoolWitness(leafIndices[i], commitments[i], witnesses[i]);
+        }
+      }
+    } catch {
+      /* best effort: the normal storage/suffix paths still apply */
+    }
   }
 
   // ----------------------------------------------------- balance/history --
@@ -646,6 +748,7 @@ export class BenzoClient {
     const tvk = deriveTvk(this.account.mvkSecret, opts.scope ?? DISCLOSURE_SCOPE);
     const noteCt = seal(plain, this.account.viewPub).bytes;
     const mvkCt = seal(plain, tvk.publicKey).bytes;
+    const poolFrontier = await this.preAppendPoolFrontier().catch(() => undefined);
     const res = await this.shieldWithFreshAspRoot(leaf, (aspLeafIndex, aspWitness) => ({
       source: opts.fromSource,
       from: opts.fromAddress,
@@ -658,6 +761,7 @@ export class BenzoClient {
       noteCt,
       mvkCt,
     }));
+    this.cacheAppendedPoolWitnesses(poolFrontier, [res.leafIndex], [res.commitment]);
     this.record({
       type: "shield",
       amount: opts.amount.toString(),
@@ -985,6 +1089,7 @@ export class BenzoClient {
     const tvk = deriveTvk(this.account.mvkSecret, opts.scope ?? DISCLOSURE_SCOPE);
     const noteCt = seal(plain, this.account.viewPub).bytes;
     const mvkCt = seal(plain, tvk.publicKey).bytes;
+    const poolFrontier = await this.preAppendPoolFrontier().catch(() => undefined);
     const res = await this.shieldWithFreshAspRoot(leaf, (aspLeafIndex, aspWitness) => ({
       source: opts.fromSource,
       from: opts.fromAddress,
@@ -997,6 +1102,7 @@ export class BenzoClient {
       noteCt,
       mvkCt,
     }));
+    this.cacheAppendedPoolWitnesses(poolFrontier, [res.leafIndex], [res.commitment]);
     this.record({
       type: "shield",
       amount: opts.amount.toString(),
@@ -1114,6 +1220,7 @@ export class BenzoClient {
       handle._emit({ op: "send", status: "proving", detail: "generating Groth16 proof" });
 
       const relay = opts.useRelayer && this.opts.relayer ? this.makeRelay() : undefined;
+      const poolFrontier = await this.preAppendPoolFrontier().catch(() => undefined);
       const tr = await this.pool.transfer({
         source: this.opts.relayer && opts.useRelayer ? this.opts.relayer.source : this.opts.txSource,
         relay,
@@ -1126,6 +1233,7 @@ export class BenzoClient {
         inputWitnesses,
         outputMvkWitnesses: [opts.mvkWitness, opts.mvkWitness],
       });
+      this.cacheAppendedPoolWitnesses(poolFrontier, tr.outLeafIndices, tr.outCommitments);
 
       this.record({
         type: "send",
@@ -1154,6 +1262,9 @@ export class BenzoClient {
 
   private async spendWitnessForSelectedNote(input: SpendableNote): Promise<AspMembershipWitness | undefined> {
     const commitment = noteCommitment(input.note);
+    const cached = await this.cachedPoolWitness(input);
+    if (cached) return cached;
+
     let storageErr: unknown;
     try {
       const witness = await fetchLatestPoolWitnessFromStorage(
@@ -1162,14 +1273,17 @@ export class BenzoClient {
         this.opts.deployment.treeLevels,
         commitment,
       );
-      if (witness.leafIndex === input.leafIndex) return witness;
+      if (witness.leafIndex === input.leafIndex) {
+        this.rememberPoolWitness(input.leafIndex, commitment, witness);
+        return witness;
+      }
       storageErr = new Error(`latest pool leaf is ${witness.leafIndex}, selected note is ${input.leafIndex}`);
     } catch (e) {
       storageErr = e;
     }
 
     try {
-      return await fetchPoolWitnessFromStorageWithKnownSuffix(
+      const witness = await fetchPoolWitnessFromStorageWithKnownSuffix(
         this.opts.rpcUrl,
         this.opts.deployment.merkle,
         this.opts.deployment.treeLevels,
@@ -1179,6 +1293,8 @@ export class BenzoClient {
           rec ? [{ leafIndex: rec.leafIndex, commitment: rec.commitment }] : [],
         ),
       );
+      this.rememberPoolWitness(input.leafIndex, commitment, witness);
+      return witness;
     } catch (e) {
       storageErr = e;
     }
@@ -1281,6 +1397,7 @@ export class BenzoClient {
         Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>>,
         Awaited<ReturnType<BenzoClient["spendWitnessForSelectedNote"]>>,
       ];
+      const poolFrontier = await this.preAppendPoolFrontier().catch(() => undefined);
       const tr = await this.pool.transfer({
         source: this.opts.txSource,
         inputs: [pair[0], pair[1]],
@@ -1292,6 +1409,7 @@ export class BenzoClient {
         inputWitnesses,
         outputMvkWitnesses: [opts.mvkWitness, opts.mvkWitness],
       });
+      this.cacheAppendedPoolWitnesses(poolFrontier, tr.outLeafIndices, tr.outCommitments);
       consolidationProvingMs += tr.provingMs;
       if (tr.txHash) consolidationTxs.push(tr.txHash);
 
@@ -1321,6 +1439,7 @@ export class BenzoClient {
     const changePlain = encodeNotePlain({ ...changeNote });
     const tvk = deriveTvk(this.account.mvkSecret, scope);
     const inputWitness = await this.spendWitnessForSelectedNote(input);
+    const poolFrontier = await this.preAppendPoolFrontier().catch(() => undefined);
     const wd = await this.pool.withdraw({
       source: this.opts.txSource,
       input,
@@ -1333,6 +1452,7 @@ export class BenzoClient {
       changeMvkWitness: opts.mvkWitness,
       inputWitness,
     });
+    this.cacheAppendedPoolWitnesses(poolFrontier, [wd.changeLeafIndex], [wd.changeCommitment]);
     this.record({
       type: "unshield",
       amount: opts.amount.toString(),

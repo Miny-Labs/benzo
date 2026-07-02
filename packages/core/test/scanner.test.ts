@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { compress, merkleZeros } from "../src/crypto/poseidon2.js";
 import { MerkleTreeMirror } from "../src/merkle.js";
-import { collectEvents, reconstructPoolWitnessFromKnownSuffix, type PoolStorageFrontier, type RpcEvent } from "../src/scanner.js";
+import {
+  appendPoolWitnessesFromFrontier,
+  collectEvents,
+  reconstructPoolWitnessFromKnownSuffix,
+  type PoolStorageFrontier,
+  type RpcEvent,
+} from "../src/scanner.js";
 
 // collectEvents talks to Soroban RPC via the global `fetch`; mock it with a
 // queue of canned JSON-RPC envelopes so the two most failure-prone branches —
@@ -83,6 +89,28 @@ describe("collectEvents pagination", () => {
 });
 
 describe("pool suffix witness reconstruction", () => {
+  it("builds witnesses for newly appended leaves from the pre-submit frontier", () => {
+    const levels = 10;
+    const before = Array.from({ length: 391 }, (_, i) => BigInt(i + 10_000));
+    const appended = [99_001n, 99_002n];
+    const afterFirst = new MerkleTreeMirror(levels);
+    for (const leaf of [...before, appended[0]]) afterFirst.insert(leaf);
+    const mirror = new MerkleTreeMirror(levels);
+    for (const leaf of [...before, ...appended]) mirror.insert(leaf);
+
+    const witnesses = appendPoolWitnessesFromFrontier(
+      levels,
+      storageFrontier(levels, before),
+      appended,
+    );
+
+    expect(witnesses.map((w) => w.leafIndex)).toEqual([391, 392]);
+    expect(witnesses[0].root).toBe(afterFirst.root());
+    expect(witnesses[0].pathElements).toEqual(afterFirst.path(391).pathElements);
+    expect(witnesses[1].root).toBe(mirror.root());
+    expect(witnesses[1].pathElements).toEqual(mirror.path(392).pathElements);
+  });
+
   it("builds a witness for a retained recent leaf when older RPC events aged out", () => {
     const levels = 10;
     const leaves = Array.from({ length: 393 }, (_, i) => BigInt(i + 10_000));
