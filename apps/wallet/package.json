@@ -16,6 +16,7 @@
     "@benzo/links": "workspace:*",
     "@benzo/types": "workspace:*",
     "@benzo/ui": "workspace:*",
+    "@benzo/wallet": "workspace:*",
     "@benzo/wallet-api": "workspace:*",
     "buffer": "^6.0.3",
     "framer-motion": "^11.3.0",

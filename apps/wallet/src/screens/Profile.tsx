@@ -14,13 +14,14 @@ import { getLockSettings, setLockSettings, lockCapable, requireUnlock } from "..
 import { tierInfo, sendCapUsd } from "../lib/tiers";
 import { Screen, Stagger } from "../ui/motion";
 import { Avatar, Button, Card } from "../ui/primitives";
+import { getLocalAccountSummary } from "../lib/localWallet";
 
 export function Profile() {
   const nav = useNavigate();
   const { session, balance, publicBalance, hidden, toggleHidden } = useWallet();
   const live = session?.live;
-  const rawHandle = session?.handle ?? session?.profile.handle ?? "@you";
-  const displayHandle = rawHandle.startsWith("@") ? rawHandle : `@${rawHandle}`;
+  const summary = getLocalAccountSummary();
+  const displayHandle = summary ? `${summary.address.slice(0, 8)}…${summary.address.slice(-8)}` : "Local Wallet";
 
   // Read the chain's latest ledger DIRECTLY from the browser (no BFF) - the
   // first real "blockchain is the backend" data path. Degrades silently.

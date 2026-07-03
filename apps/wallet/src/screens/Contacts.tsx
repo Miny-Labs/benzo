@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Trash2, Send as SendIcon } from "lucide-react";
 import { useWallet } from "../lib/store";
-import { listLocal, saveContact, removeContact, mergeContacts, isSaved, normHandle } from "../lib/contacts";
+import { listLocal, saveContact, removeContact, mergeContacts, isSaved, normAddress } from "../lib/contacts";
 import { Screen, Stagger } from "../ui/motion";
 import { ScreenHeader } from "../ui/chrome";
 import { Avatar, Button, Card, Input } from "../ui/primitives";
@@ -18,18 +18,18 @@ export function Contacts() {
   const [localVersion, bump] = useState(0);
   const merged = useMemo(() => mergeContacts(bff), [bff, localVersion]);
   const [adding, setAdding] = useState(false);
-  const [handle, setHandle] = useState("");
+  const [address, setAddress] = useState("");
   const [name, setName] = useState("");
-  const validHandle = normHandle(handle);
+  const validAddress = normAddress(address);
 
   function add() {
-    if (!validHandle) return;
-    saveContact(handle, name);
-    setHandle(""); setName(""); setAdding(false);
+    if (!validAddress) return;
+    saveContact(address, name);
+    setAddress(""); setName(""); setAdding(false);
     bump((n) => n + 1);
   }
-  function remove(h: string) {
-    removeContact(h);
+  function remove(addr: string) {
+    removeContact(addr);
     bump((n) => n + 1);
   }
 
@@ -43,16 +43,16 @@ export function Contacts() {
           </Button>
         ) : (
           <Card className="space-y-3 p-4" data-testid="contacts-add-form">
-            <Input label="Handle" placeholder="@handle" value={handle} onChange={(e) => setHandle(e.target.value)} data-testid="contacts-handle" />
-            {handle && !validHandle ? (
+            <Input label="Address or Receive Code" placeholder="G... or bzr_..." value={address} onChange={(e) => setAddress(e.target.value)} data-testid="contacts-handle" />
+            {address && !validAddress ? (
               <div className="-mt-2 text-[12px] font-medium text-danger" data-testid="contacts-handle-error">
-                Use 3 to 20 letters, numbers, dots, or underscores.
+                Please enter a valid Stellar G-address or Benzo receive code.
               </div>
             ) : null}
             <Input label="Name (optional)" placeholder="Contact name" value={name} onChange={(e) => setName(e.target.value)} data-testid="contacts-name" />
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" onClick={() => setAdding(false)}>Cancel</Button>
-              <Button size="sm" onClick={add} disabled={!validHandle} data-testid="contacts-save">Save</Button>
+              <Button size="sm" onClick={add} disabled={!validAddress} data-testid="contacts-save">Save</Button>
             </div>
           </Card>
         )}
@@ -70,7 +70,13 @@ export function Contacts() {
                 <Avatar name={c.name} size={42} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[15px] font-semibold">{c.name}</div>
-                  <div className="truncate text-[13px] text-muted">{c.handle}</div>
+                  <div className="truncate text-[13px] text-muted">
+                    {c.handle.startsWith("bzr_")
+                      ? `${c.handle.slice(0, 10)}...${c.handle.slice(-8)}`
+                      : c.handle.length > 24
+                      ? `${c.handle.slice(0, 8)}...${c.handle.slice(-8)}`
+                      : c.handle}
+                  </div>
                 </div>
                 <button
                   onClick={() => nav(`/send?to=${encodeURIComponent(c.handle)}`)}

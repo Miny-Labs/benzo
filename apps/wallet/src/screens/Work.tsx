@@ -46,6 +46,8 @@ function invoiceHandoffLink(inv: OrgInvoice, opts: { org: string; counterpartyNa
   return `${consoleOrigin()}/invoices#import=${b64url(JSON.stringify(packet))}`;
 }
 
+import { getLocalAccountSummary } from "../lib/localWallet";
+
 export function Work() {
   const [params] = useSearchParams();
   const toast = useToast();
@@ -100,7 +102,9 @@ export function Work() {
     setBusy(true);
     try {
       const inv = await orgApi.submitInvoice(cp, amount, desc.trim(), inviteToken);
-      setHandoff(invoiceHandoffLink(inv, { org, counterpartyName: session?.profile.name ?? session?.handle, handle: session?.handle ?? session?.profile.handle }));
+      const summary = getLocalAccountSummary();
+      const contractorHandle = summary?.address || "";
+      setHandoff(invoiceHandoffLink(inv, { org, counterpartyName: session?.profile.name ?? "Contractor", handle: contractorHandle }));
       setAmount("");
       setDesc("");
       await load();
