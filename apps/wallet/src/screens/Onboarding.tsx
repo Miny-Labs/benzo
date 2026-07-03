@@ -78,7 +78,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 function Pane({ children, onBack }: { children: React.ReactNode; onBack?: () => void }) {
   return (
     <motion.div
-      className="relative flex flex-1 flex-col px-7 pb-10 pt-16"
+      className="relative flex flex-1 flex-col px-7 pb-10 pt-16 min-h-0 overflow-y-auto no-scrollbar"
       initial={{ opacity: 0, x: 16 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -16 }}
@@ -102,7 +102,7 @@ function Pane({ children, onBack }: { children: React.ReactNode; onBack?: () => 
 function Welcome({ onNext }: { onNext: () => void }) {
   return (
     <Pane>
-      <div className="flex flex-1 flex-col items-center justify-center text-center">
+      <div className="my-auto flex flex-col items-center text-center w-full">
         <div className="text-accent">
           <LogoMark size={64} />
         </div>
@@ -240,7 +240,7 @@ function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
 
   return (
     <Pane onBack={onBack}>
-      <div className="flex flex-1 flex-col items-center justify-center text-center">
+      <div className="my-auto flex flex-col items-center text-center w-full pb-6">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/10 text-accent">
           <Fingerprint size={30} />
         </div>
@@ -326,8 +326,8 @@ function HandleStep({ onDone, onBack }: { onDone: () => void; onBack: () => void
 
   return (
     <Pane onBack={onBack}>
-      <div className="flex flex-1 flex-col">
-        <h1 className="font-display mt-6 text-[26px] leading-tight">Pick your handle</h1>
+      <div className="my-auto flex flex-col w-full pb-6">
+        <h1 className="font-display text-[26px] leading-tight">Pick your handle</h1>
         <p className="mt-2 text-[14px] text-muted">A username for money. It's how people pay you.</p>
 
         <div className="mt-7">
