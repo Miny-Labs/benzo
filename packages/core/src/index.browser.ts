@@ -18,6 +18,7 @@ export * from "./prover.js";
 export * from "./browser-prover.js";
 export * from "./viewkeys.js";
 export * from "./stellar-rpc.js";
+export * from "./tx-signer.js";
 export type { ChainClient, InvokeResult, StellarConfig } from "./stellar.js";
 export * from "./reserves.js";
 export * from "./onboard.js";
