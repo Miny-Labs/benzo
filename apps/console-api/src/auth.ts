@@ -52,8 +52,9 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 function testAuthSecret(): string | null {
-  return hostedRuntime() ? process.env.BENZO_TEST_AUTH_SECRET || null : null;
+  return process.env.BENZO_TEST_AUTH_SECRET || null;
 }
+
 
 export function createTestAuthToken(input: { subject?: string; email?: string; name?: string; ttlSeconds?: number } = {}): string {
   const secret = testAuthSecret();

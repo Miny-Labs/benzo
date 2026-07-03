@@ -15,6 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { execSync } from "node:child_process";
 import type { Money, PaymentOrder, TreasuryView } from "@benzo/types";
 import {
   BenzoClient,
@@ -117,9 +118,54 @@ function statePath(): string {
   return STATE;
 }
 
+function hasStellarCli(): boolean {
+  try {
+    execSync("stellar --version", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function chainClientForRuntime(): ChainClient {
   const cfg = configFromEnv();
-  if (!hostedRuntime()) return new StellarCli(cfg);
+  if (!hostedRuntime()) {
+    if (hasStellarCli()) {
+      return new StellarCli(cfg);
+    }
+    const relayerSecret = process.env.RELAYER_SECRET;
+    if (!relayerSecret) throw new Error("RELAYER_SECRET is required for local relayer signing fallback");
+    const deployerSecret = process.env.DEPLOYER_SECRET;
+    if (!deployerSecret) throw new Error("DEPLOYER_SECRET is required for local signing fallback");
+    const adminSecret = operatorAdminSecret() || deployerSecret;
+    const relayerAddress = Keypair.fromSecret(relayerSecret).publicKey();
+    const deployerAddress = Keypair.fromSecret(deployerSecret).publicKey();
+    const adminAddress = Keypair.fromSecret(adminSecret).publicKey();
+    const server = new rpc.Server(cfg.rpcUrl, { allowHttp: cfg.rpcUrl.startsWith("http://") });
+    const signerFor = (source: string) => {
+      if (source === RELAY_SOURCE) return LocalKeypairSigner.fromSecret(relayerSecret);
+      if (source === OPERATOR_ADMIN_SOURCE) return LocalKeypairSigner.fromSecret(adminSecret);
+      return LocalKeypairSigner.fromSecret(deployerSecret);
+    };
+    const addressFor = (source: string) => {
+      if (source === RELAY_SOURCE) return relayerAddress;
+      if (source === OPERATOR_ADMIN_SOURCE) return adminAddress;
+      return deployerAddress;
+    };
+    const submitWrite = async (opts: { contractId: string; source: string; fnArgs: string[] }) =>
+      makeClientSubmitWrite({
+        server,
+        signer: signerFor(opts.source),
+        networkPassphrase: cfg.networkPassphrase,
+        addressFor,
+      })(opts);
+    return new StellarRpcClient({
+      rpcUrl: cfg.rpcUrl,
+      networkPassphrase: cfg.networkPassphrase,
+      addressFor,
+      submitWrite,
+    });
+  }
   const auth = currentAuth();
   const orgSecret = auth?.account.stellarSecret;
   const orgAddress = auth?.account.stellarAddress;
