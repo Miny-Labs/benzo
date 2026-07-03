@@ -41,6 +41,7 @@ const TESTNET_DEPLOYMENT = {
   treeLevels: testnetDeployment.treeLevels,
   aspLevels: testnetDeployment.aspLevels,
   smtLevels: testnetDeployment.smtLevels,
+  usdcAsset: testnetDeployment.usdcAsset,
 };
 
 /** Deployment coordinates. A mainnet build sets VITE_BENZO_DEPLOYMENT (the JSON
@@ -49,6 +50,7 @@ export const DEPLOYMENT: typeof TESTNET_DEPLOYMENT = env.VITE_BENZO_DEPLOYMENT
   ? { ...TESTNET_DEPLOYMENT, ...(JSON.parse(env.VITE_BENZO_DEPLOYMENT) as Partial<typeof TESTNET_DEPLOYMENT>) }
   : TESTNET_DEPLOYMENT;
 
+export const USDC_ASSET = DEPLOYMENT.usdcAsset;
 export const VERIFIER_ID = DEPLOYMENT.verifier;
 
 /** Funded G-address used only as a read/simulation footprint source (never signs). */

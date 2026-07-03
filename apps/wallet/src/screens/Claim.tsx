@@ -47,6 +47,8 @@ function linkFromHash(hash: string): string | null {
   }
 }
 
+import { claimLinkClientSide } from "../lib/benzoClient";
+
 export function Claim() {
   const [params] = useSearchParams();
   const loc = useLocation();
@@ -135,7 +137,8 @@ export function Claim() {
     setPhase("claiming");
     setErr(null);
     try {
-      const r = await api.claim(secret, undefined, claimAmount);
+      const r = await claimLinkClientSide(secret);
+      if (!r) throw new Error("Could not claim link.");
       setAmount(r.amount);
       setPhase("done");
       void refresh();
@@ -187,6 +190,8 @@ export function Claim() {
 
 /** Payer side of a money request (C7). Accept / pay-a-different-amount / decline.
  *  Settlement reuses the existing ZK transfer (Send); no new money path. */
+import { listLocalHistory } from "../lib/history";
+
 function PayRequest({ link }: { link: Extract<BenzoLink, { type: "request" }> }) {
   const nav = useNavigate();
   const [declined, setDeclined] = useState(false);
@@ -213,32 +218,29 @@ function PayRequest({ link }: { link: Extract<BenzoLink, { type: "request" }> })
     }
     const now = Math.floor(Date.now() / 1000);
     const expiry = Number(link.expiry ?? 0);
-    const local = findRequest(requestId);
     if (expiry && now >= expiry) {
       setUnavailable("expired");
       setChecking(false);
       return () => { cancelled = true; };
     }
-    if (local && local.status !== "pending" && local.status !== "partially_paid") {
-      setUnavailable(local.status);
-      setChecking(false);
-      return () => { cancelled = true; };
+    
+    // Check if we've already paid this request locally
+    const history = listLocalHistory();
+    const alreadyPaid = history.find((h) => {
+      if (h.direction !== "out") return false;
+      const memoMatch = link.memo && h.note.toLowerCase().includes(link.memo.toLowerCase());
+      const idMatch = h.note.includes(requestId);
+      return memoMatch || idMatch;
+    });
+
+    if (alreadyPaid) {
+      setUnavailable("paid");
+    } else {
+      setUnavailable(null);
     }
-    setChecking(true);
-    api.requestStatus(requestId)
-      .then((r) => {
-        if (cancelled) return;
-        if (r.status === "open" || r.status === "partially_paid") setUnavailable(null);
-        else setUnavailable(r.status);
-      })
-      .catch(() => {
-        if (!cancelled) setUnavailable("missing");
-      })
-      .finally(() => {
-        if (!cancelled) setChecking(false);
-      });
+    setChecking(false);
     return () => { cancelled = true; };
-  }, [link.expiry, requestId]);
+  }, [link.expiry, link.memo, requestId]);
 
   if (declined) {
     return (
@@ -328,9 +330,10 @@ function realWalletHandle(handle?: string): string | undefined {
   return normalized.startsWith("@") ? normalized : `@${normalized}`;
 }
 
+import { getLocalAccountSummary } from "../lib/localWallet";
+
 function ContractorInvite({ link }: { link: OrgInviteLink }) {
   const nav = useNavigate();
-  const { session } = useWallet();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const org = link.orgName ?? "A company";
@@ -339,13 +342,9 @@ function ContractorInvite({ link }: { link: OrgInviteLink }) {
     setBusy(true);
     setErr(null);
     try {
-      const freshSession = await api.session().catch(() => session);
-      const handle =
-        realWalletHandle(freshSession?.handle) ??
-        realWalletHandle(freshSession?.profile.handle) ??
-        realWalletHandle(session?.handle) ??
-        realWalletHandle(session?.profile.handle);
-      if (!handle) throw new Error("Claim your wallet handle before accepting this invite.");
+      const summary = getLocalAccountSummary();
+      const handle = summary?.address;
+      if (!handle) throw new Error("Initialize your wallet before accepting this invite.");
       const r = await orgApi.acceptInvite({
         token: link.token,
         handle,

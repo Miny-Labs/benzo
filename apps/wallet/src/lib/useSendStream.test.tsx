@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   sendStream: vi.fn(),
   clientSideReadsAvailable: vi.fn(),
   sendClientSide: vi.fn(),
+  decodeRecipient: vi.fn(),
+  saveLocalHistory: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -18,6 +20,14 @@ vi.mock("./benzoClient", () => ({
   sendClientSide: mocks.sendClientSide,
 }));
 
+vi.mock("./recipient", () => ({
+  decodeRecipient: mocks.decodeRecipient,
+}));
+
+vi.mock("./history", () => ({
+  saveLocalHistory: mocks.saveLocalHistory,
+}));
+
 import { useSendStream } from "./useSendStream";
 
 describe("useSendStream", () => {
@@ -25,73 +35,52 @@ describe("useSendStream", () => {
     vi.clearAllMocks();
   });
 
-  it("uses the streamed API path for hosted Google sessions", async () => {
-    const settled = { status: "settled", txHash: "tx_api", prover: "local", amount: "25000000", onChain: true };
-    mocks.currentGoogleCredential.mockReturnValue("google.jwt");
-    mocks.sendStream.mockResolvedValue(settled);
-    const { result } = renderHook(() => useSendStream());
-
-    let r: unknown;
-    await act(async () => {
-      r = await result.current.run("@mara", "2.5", "memo", "local");
-    });
-
-    expect(r).toEqual(settled);
-    expect(mocks.clientSideReadsAvailable).not.toHaveBeenCalled();
-    expect(mocks.sendClientSide).not.toHaveBeenCalled();
-    expect(mocks.sendStream).toHaveBeenCalledWith(
-      { to: "@mara", amount: "2.5", memo: "memo", prover: "local" },
-      expect.any(Function),
-    );
-  });
-
-  it("keeps hosted API-bound plans on the local prover", async () => {
-    const settled = { status: "settled", txHash: "tx_api", prover: "local", amount: "25000000", onChain: true };
-    mocks.currentGoogleCredential.mockReturnValue("google.jwt");
-    mocks.sendStream.mockResolvedValue(settled);
-    const { result } = renderHook(() => useSendStream());
-
-    await act(async () => {
-      await result.current.run("@mara", "2.5", undefined, "local", true);
-    });
-
-    expect(mocks.sendStream).toHaveBeenCalledWith(
-      { to: "@mara", amount: "2.5", memo: undefined, prover: "local" },
-      expect.any(Function),
-    );
-  });
-
-  it("passes request ids through the API path for request payments", async () => {
-    const settled = { status: "settled", txHash: "tx_api", prover: "local", amount: "25000000", onChain: true, requestId: "rq_1" };
-    mocks.currentGoogleCredential.mockReturnValue("google.jwt");
-    mocks.sendStream.mockResolvedValue(settled);
-    const { result } = renderHook(() => useSendStream());
-
-    await act(async () => {
-      await result.current.run("@mara", "2.5", "memo", "local", true, "rq_1");
-    });
-
-    expect(mocks.sendStream).toHaveBeenCalledWith(
-      { to: "@mara", amount: "2.5", memo: "memo", prover: "local", requestId: "rq_1" },
-      expect.any(Function),
-    );
-    expect(mocks.clientSideReadsAvailable).not.toHaveBeenCalled();
-  });
-
-  it("keeps the client-side path for local device accounts", async () => {
-    mocks.currentGoogleCredential.mockReturnValue(null);
-    mocks.clientSideReadsAvailable.mockResolvedValue(true);
+  it("runs client-side send flow successfully", async () => {
+    mocks.decodeRecipient.mockReturnValue({ type: "address", address: "G..." });
     mocks.sendClientSide.mockResolvedValue({ txHash: "tx_local", prover: "local" });
     const { result } = renderHook(() => useSendStream());
 
     let r: unknown;
     await act(async () => {
-      r = await result.current.run("@mara", "2.5", undefined, "local");
+      r = await result.current.run("bzr_recipient", "2.5", "memo", "local");
     });
 
-    expect(r).toMatchObject({ status: "settled", txHash: "tx_local", prover: "local", amount: "25000000", onChain: true });
-    expect(mocks.clientSideReadsAvailable).toHaveBeenCalled();
-    expect(mocks.sendClientSide).toHaveBeenCalledWith("@mara", "25000000");
-    expect(mocks.sendStream).not.toHaveBeenCalled();
+    expect(r).toEqual({
+      status: "settled",
+      txHash: "tx_local",
+      prover: "local",
+      amount: "25000000",
+      onChain: true,
+    });
+    expect(mocks.decodeRecipient).toHaveBeenCalledWith("bzr_recipient");
+    expect(mocks.sendClientSide).toHaveBeenCalledWith({ type: "address", address: "G..." }, "25000000");
+    expect(mocks.saveLocalHistory).toHaveBeenCalled();
+  });
+
+  it("fails if the recipient code is invalid", async () => {
+    mocks.decodeRecipient.mockReturnValue(null);
+    const { result } = renderHook(() => useSendStream());
+
+    let r: unknown;
+    await act(async () => {
+      r = await result.current.run("invalid_recipient", "2.5", "memo", "local");
+    });
+
+    expect(r).toBeNull();
+    expect(result.current.state.error).toBe("Invalid private recipient code.");
+  });
+
+  it("handles client-side send failure", async () => {
+    mocks.decodeRecipient.mockReturnValue({ type: "address", address: "G..." });
+    mocks.sendClientSide.mockRejectedValue(new Error("RPC timeout"));
+    const { result } = renderHook(() => useSendStream());
+
+    let r: unknown;
+    await act(async () => {
+      r = await result.current.run("bzr_recipient", "2.5", "memo", "local");
+    });
+
+    expect(r).toBeNull();
+    expect(result.current.state.error).toBe("RPC timeout");
   });
 });

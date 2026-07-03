@@ -155,9 +155,15 @@ importers:
       '@benzo/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@benzo/wallet':
+        specifier: workspace:*
+        version: link:../../packages/wallet
       '@benzo/wallet-api':
         specifier: workspace:*
         version: link:../wallet-api
+      '@stellar/stellar-sdk':
+        specifier: ^15.1.0
+        version: 15.1.0
       buffer:
         specifier: ^6.0.3
         version: 6.0.3

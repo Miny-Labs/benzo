@@ -28,8 +28,8 @@ import { InviteExternal } from "./screens/InviteExternal";
 import { Claim } from "./screens/Claim";
 import { Work } from "./screens/Work";
 import { Onboarding } from "./screens/Onboarding";
-import { AUTH_REQUIRED_EVENT, clearGoogleCredential, clearHostedAuthState, credentialLooksWellFormed, currentGoogleCredential } from "./lib/api";
-import { hasPasskey } from "./lib/passkey";
+import { AUTH_REQUIRED_EVENT } from "./lib/api";
+import { walletExists, isWalletUnlocked } from "./lib/localWallet";
 
 const TABS = [
   { to: "/", label: "Home", icon: HomeIcon },
@@ -101,26 +101,42 @@ function useIsDesktop() {
 export function App() {
   const loc = useLocation();
   const isDesktop = useIsDesktop();
-  const shellCredentialReady = () => credentialLooksWellFormed() || hasPasskey();
-  const [onboarded, setOnboarded] = useState(() => localStorage.getItem("benzo.onboarded") === "1" && shellCredentialReady());
-  // App lock (C4): if "require unlock on open" is set, gate the whole shell until
-  // the on-device passkey check passes.
-  const [locked, setLocked] = useState(() => shouldLockOnOpen());
+  const [onboarded, setOnboarded] = useState(false);
+  const [locked, setLocked] = useState(true);
+  const [checking, setChecking] = useState(true);
+
   useEffect(() => {
-    if (!credentialLooksWellFormed() && currentGoogleCredential()) clearGoogleCredential();
-    if (!shellCredentialReady()) clearHostedAuthState();
+    async function checkWallet() {
+      const exists = await walletExists();
+      setOnboarded(exists);
+      setLocked(!isWalletUnlocked());
+      setChecking(false);
+    }
+    checkWallet();
+
     const onAuthRequired = () => {
-      setLocked(false);
+      setLocked(true);
       setOnboarded(false);
     };
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
   }, []);
+
   function finishOnboarding() {
-    localStorage.setItem("benzo.onboarded", "1");
     setOnboarded(true);
+    setLocked(false);
   }
+
   const showShell = onboarded && !locked;
+
+  if (checking) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-canvas">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+      </div>
+    );
+  }
+
   // Send/Request/Share are presented as sheets over Home in real use, but each is
   // also a routable screen so deep-links + back work. The shell stays mounted.
   return (

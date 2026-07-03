@@ -1,22 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { classifyRecipientInput, hasBadHandleSyntax, isValidHandleRecipient } from "./recipient";
+import { classifyRecipientInput, encodeRecipient, decodeRecipient } from "./recipient";
+import { type BenzoRecipient } from "@benzo/core";
+
+const VALID_STELLAR = "GBRMUZELYDNXSBYF5KOLLSV4XLQYNZJQNLXQ3HTFCWNRIBS3I6EUBCMP";
 
 describe("recipient classification", () => {
-  it("accepts valid Benzo handles with or without @", () => {
-    expect(isValidHandleRecipient("@mara_1")).toBe(true);
-    expect(isValidHandleRecipient("mara.1")).toBe(true);
-    expect(classifyRecipientInput("@mara_1")).toBe("handle");
-    expect(classifyRecipientInput("mara.1")).toBe("handle");
+  it("classifies Stellar addresses", () => {
+    expect(classifyRecipientInput(VALID_STELLAR)).toBe("address");
+    expect(classifyRecipientInput("  " + VALID_STELLAR + "  ")).toBe("address");
+    // Invalid Stellar address but looks like one
+    expect(classifyRecipientInput("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")).toBe("invite");
   });
 
-  it("flags malformed @handles before review", () => {
-    expect(hasBadHandleSyntax("@bad!")).toBe(true);
-    expect(hasBadHandleSyntax("@ab")).toBe(true);
-    expect(hasBadHandleSyntax("@thishandleistoolongforbenzo")).toBe(true);
-    expect(hasBadHandleSyntax("@valid_name")).toBe(false);
+  it("classifies bzr_ receive codes", () => {
+    const rec: BenzoRecipient = {
+      spendPub: 12345n,
+      viewPub: new Uint8Array([1, 2, 3]),
+      label: "Test",
+    };
+    const code = encodeRecipient(rec);
+    expect(classifyRecipientInput(code)).toBe("private");
+    expect(classifyRecipientInput("bzr_invalidcode")).toBe("invite");
   });
 
-  it("keeps freeform non-handle recipients in invite flow", () => {
-    expect(classifyRecipientInput("not an account yet")).toBe("invite");
+  it("classifies other inputs as invite", () => {
+    expect(classifyRecipientInput("alice")).toBe("invite");
+    expect(classifyRecipientInput("")).toBe("invite");
+  });
+
+  it("roundtrips encode and decode", () => {
+    const rec: BenzoRecipient = {
+      spendPub: 9876543210n,
+      viewPub: new Uint8Array(Array.from({ length: 32 }, (_, i) => i)),
+      mvkScalar: 123n,
+      label: "Contractor",
+    };
+    const code = encodeRecipient(rec);
+    const decoded = decodeRecipient(code);
+    expect(decoded).not.toBeNull();
+    expect(decoded?.spendPub).toBe(rec.spendPub);
+    expect(decoded?.viewPub).toEqual(rec.viewPub);
+    expect(decoded?.mvkScalar).toBe(rec.mvkScalar);
+    expect(decoded?.label).toBe(rec.label);
   });
 });

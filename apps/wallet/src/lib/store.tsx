@@ -1,13 +1,10 @@
-/**
- * Wallet state: one provider that loads session/balance/history/contacts from the
- * BFF and exposes refreshers. Screens call actions on `api` and then `refresh()`
- * so the UI always reflects real on-chain state after a settle.
- */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, AUTH_CHANGED_EVENT, credentialLooksWellFormed, type ActivityRow, type Balance, type Contact, type Session } from "./api";
-import { readShieldedBalanceClientSide } from "./benzoClient";
+import { type ActivityRow, type Balance, type Contact, type Session } from "./api";
+import { readShieldedBalanceClientSide, readPublicBalanceClientSide, getClient } from "./benzoClient";
+import { getLocalAccount, isWalletUnlocked, getLocalAccountSummary } from "./localWallet";
+import { listLocalHistory } from "./history";
+import { listLocal } from "./contacts";
 
-/** The "Public" balance: plain liquid USDC on the account (send to / receive from any wallet). */
 export interface PublicBalance {
   stroops: string;
   address: string;
@@ -18,20 +15,15 @@ export interface PublicBalance {
 
 interface WalletState {
   session: Session | null;
-  /** The "Private" balance - shielded in the privacy pool. Only you can see it. */
   balance: Balance | null;
-  /** The "Public" balance - plain liquid USDC. What external wallets/exchanges pay to. */
   publicBalance: PublicBalance | null;
   history: ActivityRow[];
   contacts: Contact[];
   loading: boolean;
   error: string | null;
-  /** display-mask the balance (eye toggle) - UI-only, never changes protection */
   hidden: boolean;
   toggleHidden: () => void;
-  /** the displayed balance was read+computed on THIS device, straight from chain */
   deviceVerified: boolean;
-  /** Reload all read models; resolves true when the critical (balance) slice loaded. */
   refresh: () => Promise<boolean>;
   refreshBalance: () => Promise<void>;
 }
@@ -48,7 +40,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<boolean>(() => localStorage.getItem("benzo.hidden") === "1");
   const [deviceVerified, setDeviceVerified] = useState(false);
-  const [authenticated, setAuthenticated] = useState(() => credentialLooksWellFormed());
+  const [authenticated, setAuthenticated] = useState(() => isWalletUnlocked());
 
   const toggleHidden = useCallback(() => {
     setHidden((h) => {
@@ -59,59 +51,97 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshBalance = useCallback(async () => {
-    // Independent loads: a transient history/public-balance miss must not drop a
-    // good private balance - each settles on its own.
-    const balanceP = api.balance().then((value) => {
-      setBalance(value);
-      return value;
-    });
-    const publicP = api.publicBalance().then((value) => {
-      setPublicBalance(value);
-      return value;
-    });
-    const historyP = api.history().then((value) => {
-      setHistory(value);
-      return value;
-    });
-    const [b] = await Promise.allSettled([balanceP, publicP, historyP]);
-    if (b.status === "rejected") setError((b.reason as Error)?.message ?? "Failed to load");
+    if (!isWalletUnlocked()) return;
+    try {
+      const pBalVal = await readPublicBalanceClientSide();
+      const summary = getLocalAccountSummary();
+      if (pBalVal && summary && summary.address) {
+        setPublicBalance({
+          stroops: pBalVal,
+          address: summary.address,
+          asset: "USDC",
+          issuer: "",
+          live: true,
+        });
+      }
+      const sBalVal = await readShieldedBalanceClientSide();
+      if (sBalVal) {
+        setBalance({
+          stroops: sBalVal,
+          live: true,
+          source: "chain",
+        });
+        setDeviceVerified(true);
+      }
+      
+      let coreHistory: ActivityRow[] = [];
+      const c = await getClient();
+      if (c) {
+        coreHistory = c.getHistory().map((item) => ({
+          id: item.txHash || Math.random().toString(),
+          type: item.type,
+          name: item.counterparty || "External",
+          note: item.memo || "",
+          amount: item.amount,
+          direction: item.type === "shield" || item.type === "receive" ? "in" : "out",
+          status: item.status as any,
+          timestamp: item.timestamp,
+          txHash: item.txHash,
+        }));
+      }
+      const local = listLocalHistory();
+      const merged = [...local];
+      for (const item of coreHistory) {
+        if (!merged.some((x) => x.txHash === item.txHash)) {
+          merged.push(item);
+        }
+      }
+      setHistory(merged.sort((a, b) => b.timestamp - a.timestamp));
+
+      setError(null);
+    } catch (e) {
+      console.error("refreshBalance error:", e);
+      setError((e as Error)?.message ?? "Failed to refresh balance");
+    }
   }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    // Each read model loads independently - one transient failure can't blank
-    // the whole wallet (Promise.all rejected atomically; allSettled degrades).
-    const sessionP = api.session().then((value) => {
-      setSession(value);
-      return value;
-    });
-    const balanceP = api.balance().then((value) => {
-      setBalance(value);
-      return value;
-    });
-    const publicP = api.publicBalance().then((value) => {
-      setPublicBalance(value);
-      return value;
-    });
-    const historyP = api.history().then((value) => {
-      setHistory(value);
-      return value;
-    });
-    const contactsP = api.contacts().then((value) => {
-      setContacts(value);
-      return value;
-    });
-    const results = await Promise.allSettled([sessionP, balanceP, publicP, historyP, contactsP]);
-    const b = results[1];
-    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
-    setError(failed.length === results.length ? (failed[0]?.reason as Error)?.message ?? "Failed to load" : null);
-    setLoading(false);
-    return b.status === "fulfilled"; // balance is the critical slice
-  }, []);
+    try {
+      if (!isWalletUnlocked()) {
+        setSession(null);
+        setBalance(null);
+        setPublicBalance(null);
+        setHistory([]);
+        setContacts([]);
+        setLoading(false);
+        return false;
+      }
+      const summary = getLocalAccountSummary();
+      if (summary && summary.address) {
+        const addr = summary.address;
+        const shortAddr = `${addr.slice(0, 4)}...${addr.slice(-4)}`;
+        setSession({
+          profile: { handle: "", name: shortAddr },
+          live: true,
+          mode: "live",
+          missing: [],
+          prover: { available: ["local"], mode: "local", location: "local" },
+          kycTier: 2,
+        });
+      }
+      await refreshBalance();
+      setContacts(listLocal());
+      setLoading(false);
+      return true;
+    } catch (e) {
+      setError((e as Error)?.message ?? "Failed to load wallet state");
+      setLoading(false);
+      return false;
+    }
+  }, [refreshBalance]);
 
   useEffect(() => {
-    let cancelled = false;
-    let retry: ReturnType<typeof setTimeout> | undefined;
     if (!authenticated) {
       setSession(null);
       setBalance(null);
@@ -120,42 +150,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setContacts([]);
       setError(null);
       setLoading(false);
-      return () => {
-        cancelled = true;
-        if (retry) clearTimeout(retry);
-      };
+      return;
     }
-    // First load; if the balance lost a race with a cold-starting backend, retry once.
-    void refresh().then((ok) => {
-      if (!ok && !cancelled) retry = setTimeout(() => void refresh(), 1500);
-    });
-    // The chain is the source of truth - keep balance + history live while open.
+
+    void refresh();
+
     const interval = setInterval(() => {
       if (typeof document !== "undefined" && !document.hidden) void refreshBalance();
-    }, 25_000);
-    // Client-side confirmation: once, read+compute the shielded balance ON THIS
-    // DEVICE straight from chain (no BFF in the compute path). It's slower than
-    // the BFF read, so it runs in the background; on success it becomes the
-    // displayed truth and we mark the balance device-verified. No-op when the
-    // account isn't provisioned to the device (falls back to the BFF value).
-    void readShieldedBalanceClientSide()
-      .then((stroops) => {
-        if (stroops == null || cancelled) return;
-        setBalance((prev) => ({ stroops, live: prev?.live ?? true }));
-        setDeviceVerified(true);
-      })
-      .catch(() => {});
+    }, 15_000);
+
     return () => {
-      cancelled = true;
-      if (retry) clearTimeout(retry);
       clearInterval(interval);
     };
   }, [authenticated, refresh, refreshBalance]);
 
   useEffect(() => {
-    const onAuthChanged = () => setAuthenticated(credentialLooksWellFormed());
-    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
-    return () => window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
+    const onAuthChanged = () => setAuthenticated(isWalletUnlocked());
+    window.addEventListener("benzo:auth-changed", onAuthChanged);
+    return () => window.removeEventListener("benzo:auth-changed", onAuthChanged);
   }, []);
 
   return (

@@ -1,13 +1,7 @@
-/**
- * InviteExternal (P0-3) - send money to someone with NO Benzo account. We fund a
- * fresh claim-account and hand back a shareable link; they onboard and claim it.
- * Unclaimed funds return to you (self-claim refund) after the countdown. The link
- * is consumer-scoped - it can't be redeemed in the business app.
- */
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Check, Copy, Gift, RotateCcw, Share2 } from "lucide-react";
-import { api, type InviteResult, type InviteSummary } from "../lib/api";
+import { type InviteResult, type InviteSummary } from "../lib/api";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { friendlyError } from "../lib/errors";
 import { useWallet } from "../lib/store";
@@ -16,6 +10,8 @@ import { inviteAmountToStroops, validateFundedInviteAmount } from "../lib/invite
 import { Screen } from "../ui/motion";
 import { ScreenHeader } from "../ui/chrome";
 import { AmountField, Button, Card, Input, Skeleton, useToast } from "../ui/primitives";
+import { addLocalInvite, listLocalInvites, updateLocalInviteStatus } from "../lib/invites";
+import { createInviteClientSide, refundInviteClientSide } from "../lib/benzoClient";
 
 function daysLeft(expiresAt: number): number {
   return Math.max(0, Math.ceil((expiresAt * 1000 - Date.now()) / 86_400_000));
@@ -32,7 +28,10 @@ export function InviteExternal() {
   const [invites, setInvites] = useState<InviteSummary[] | null>(null);
   const recipient = params.get("to") ?? "";
 
-  const load = () => api.invites().then(setInvites).catch(() => setInvites((v) => v ?? []));
+  const load = () => {
+    setInvites(listLocalInvites());
+    return Promise.resolve();
+  };
   useEffect(() => {
     void load();
   }, []);
@@ -47,8 +46,24 @@ export function InviteExternal() {
     }
     setCreating(true);
     try {
-      const r = await api.invite(amount, note || undefined);
-      setCreated(r);
+      const stroops = inviteAmountToStroops(amount);
+      const res = await createInviteClientSide(stroops);
+      if (!res) throw new Error("Could not create claim link.");
+      addLocalInvite({
+        localId: res.claimSecretHex,
+        amount: stroops,
+        note: note || undefined,
+        claimSecretHex: res.claimSecretHex,
+        link: res.link,
+      });
+      setCreated({
+        link: res.link,
+        amount: stroops,
+        expiresAt: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+        localId: res.claimSecretHex,
+        claimAccountPub: "",
+        onChain: !!res.txHash,
+      });
       await load();
       void refresh();
     } catch (e) {
@@ -60,7 +75,8 @@ export function InviteExternal() {
 
   async function refund(localId: string) {
     try {
-      await api.refundInvite(localId);
+      await refundInviteClientSide(localId);
+      updateLocalInviteStatus(localId, "refunded");
       toast({ title: "Refunded to your wallet", tone: "success" });
       await load();
       void refresh();

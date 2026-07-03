@@ -1,24 +1,10 @@
-/**
- * useSendStream - drives the 3-phase send ceremony from real BFF phase events.
- * It feeds the shared payment state machine (@benzo/ui) so the animation is a
- * slave to the machine, never a timer. Event mapping is prefix-idempotent: each
- * incoming phase dispatches the whole prefix it implies, so a missing
- * intermediate event (e.g. a fast path that skips "proving") never strands the
- * machine.
- */
 import { useCallback, useReducer, useState } from "react";
 import { paymentReducer, initialPaymentState, type PaymentState } from "@benzo/ui/payment-state";
-import { api, currentGoogleCredential, type ProverKind, type SettleResult, type SendPhaseEvent } from "./api";
+import { type ProverKind, type SettleResult, type SendPhaseEvent } from "./api";
 import { clientSideReadsAvailable, sendClientSide } from "./benzoClient";
 import { usdcToStroops } from "./format";
-import { apiProverKind } from "./proverPolicy";
-
-/** A bare @handle send (not a G-address or an off-Benzo invite) can settle fully client-side. */
-function isHandleSend(to: string): boolean {
-  const t = to.trim();
-  if (/^G[A-Z2-7]{55}$/.test(t)) return false; // public address → unshield (BFF)
-  return t.startsWith("@") || /^[a-z0-9_.]{3,20}$/i.test(t);
-}
+import { decodeRecipient } from "./recipient";
+import { saveLocalHistory } from "./history";
 
 export function useSendStream() {
   const [state, dispatch] = useReducer(paymentReducer, initialPaymentState);
@@ -29,7 +15,6 @@ export function useSendStream() {
       dispatch({ type: "FAIL", error: e.error ?? "Couldn't send" });
       return;
     }
-    // prefix-idempotent advance (reducer guards make re-dispatch safe)
     dispatch({ type: "START" });
     if (e.phase === "building") return;
     dispatch({ type: "WITNESS_READY" });
@@ -44,33 +29,32 @@ export function useSendStream() {
     async (to: string, amount: string, memo: string | undefined, prover: ProverKind, _proverAvailable = false, requestId?: string) => {
       dispatch({ type: "RESET" });
       setReceipt(null);
-      dispatch({ type: "START" }); // building immediately (snappy first frame)
+      dispatch({ type: "START" });
       try {
-        // Preferred: prove + submit the shielded transfer from the browser
-        // client. Capable desktops use local WASM; the relay only receives
-        // already-proven writes.
-        if (isHandleSend(to) && !currentGoogleCredential() && !requestId) {
-          try {
-            if (await clientSideReadsAvailable()) {
-              apply({ phase: "proving" });
-              const cs = await sendClientSide(to, usdcToStroops(amount).toString());
-              if (cs?.txHash) {
-                const r: SettleResult = { status: "settled", txHash: cs.txHash, prover: cs.prover, amount: usdcToStroops(amount).toString(), onChain: true };
-                setReceipt(r);
-                apply({ phase: "confirmed", txHash: cs.txHash, onChain: true });
-                return r;
-              }
-            }
-          } catch {
-            /* fall through to the BFF send path */
-          }
+        const recipient = decodeRecipient(to);
+        if (!recipient) {
+          throw new Error("Invalid private recipient code.");
         }
-        const r = await api.sendStream({ to, amount, memo, prover: apiProverKind(prover), ...(requestId ? { requestId } : {}) }, apply);
-        setReceipt(r);
-        // ensure terminal even if the done event raced ahead of the last phase
-        if (r.status !== "failed") apply({ phase: "confirmed", txHash: r.txHash, provingMs: r.provingMs, onChain: r.onChain });
-        else dispatch({ type: "FAIL", error: r.error ?? "Couldn't send" });
-        return r;
+        apply({ phase: "proving" });
+        const cs = await sendClientSide(recipient, usdcToStroops(amount).toString());
+        if (cs?.txHash) {
+          const r: SettleResult = { status: "settled", txHash: cs.txHash, prover: cs.prover, amount: usdcToStroops(amount).toString(), onChain: true };
+          saveLocalHistory({
+            id: cs.txHash,
+            type: "send",
+            name: to.startsWith("bzr_") ? `${to.slice(0, 10)}...${to.slice(-8)}` : to,
+            note: memo || "",
+            amount: usdcToStroops(amount).toString(),
+            direction: "out",
+            status: "settled",
+            timestamp: Math.floor(Date.now() / 1000),
+            txHash: cs.txHash,
+          });
+          setReceipt(r);
+          apply({ phase: "confirmed", txHash: cs.txHash, onChain: true });
+          return r;
+        }
+        throw new Error("Local-first send failed to return transaction hash.");
       } catch (err) {
         dispatch({ type: "FAIL", error: (err as Error).message });
         return null;

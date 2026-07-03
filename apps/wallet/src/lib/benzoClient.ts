@@ -28,6 +28,8 @@ import { RPC_URL, NETWORK_PASSPHRASE, SIM_SOURCE, DEPLOYMENT, RELAYER_ADDRESS } 
 import { prepareApiRequest } from "./api";
 import { hasPasskey, loginWithPasskey } from "./passkey";
 
+import { getLocalAccount } from "./localWallet";
+
 function b64(b: Uint8Array): string {
   let s = "";
   for (let i = 0; i < b.length; i += 0x8000) {
@@ -149,38 +151,11 @@ async function submitWrite(opts: { contractId: string; source: string; fnArgs: s
 let cached: BenzoClient | null | undefined;
 const RELAXED_SYNC = { allowPoolMirrorGaps: true, allowAspMirrorGaps: true };
 
-function canUseDevAccountExport(): boolean {
-  if (typeof window === "undefined") return false;
-  const host = window.location.hostname;
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".local");
-}
-
-async function accountFromDevExport(): Promise<{ spendSk: string; viewSecret: string; mvkSecret: string } | null> {
-  if (!canUseDevAccountExport()) return null;
-  try {
-    const prepared = prepareApiRequest("/dev/account");
-    const r = await fetch(prepared.url, prepared.init);
-    return r.ok ? await r.json() : null;
-  } catch {
-    return null;
-  }
-}
-
-async function getClient(opts: { interactive?: boolean } = {}): Promise<BenzoClient | null> {
-  if (cached !== undefined && (cached !== null || !opts.interactive)) return cached;
-  const exported = await accountFromDevExport();
-  const account = exported
-    ? createAccount({
-        label: "wallet",
-        spendSk: BigInt(exported.spendSk),
-        viewSecret: fromHex(exported.viewSecret),
-        mvkSecret: fromHex(exported.mvkSecret),
-      })
-    : opts.interactive && hasPasskey()
-      ? await loginWithPasskey()
-      : null;
-  if (!account) {
-    return null;
+export async function getClient(opts: { interactive?: boolean } = {}): Promise<BenzoClient | null> {
+  const account = getLocalAccount();
+  if (!account) return null;
+  if (cached && cached.account.stellarAddress === account.stellarAddress) {
+    return cached;
   }
   const cli = new StellarRpcClient({
     rpcUrl: RPC_URL,
@@ -232,15 +207,17 @@ async function wireMvkRegistry(client: BenzoClient): Promise<boolean> {
  * for submission. Returns the tx hash, or null if the device can't do it
  * (account not provisioned / MVK not registered) so the caller falls back.
  */
+import { type BenzoRecipient } from "@benzo/core";
+
 export async function sendClientSide(
-  handle: string,
+  to: BenzoRecipient,
   amountStroops: string,
 ): Promise<{ txHash?: string; prover: "local" } | null> {
   const c = await getClient({ interactive: true });
   if (!c) return null;
   await c.sync(RELAXED_SYNC);
   if (!(await wireMvkRegistry(c))) return null;
-  const sh = await c.sendToHandle({ handle: handle.replace(/^@/, ""), amount: BigInt(amountStroops), useRelayer: true });
+  const sh = await c.send({ to, amount: BigInt(amountStroops), useRelayer: true });
   const r = await sh.settled();
   return { txHash: r?.txHash, prover: "local" };
 }
@@ -259,6 +236,22 @@ export async function readShieldedBalanceClientSide(): Promise<string | null> {
   if (!c) return null;
   await c.sync(RELAXED_SYNC);
   return (await c.getBalance()).toString();
+}
+
+import { getLocalAccountSummary } from "./localWallet";
+
+export async function readPublicBalanceClientSide(): Promise<string | null> {
+  const c = await getClient();
+  if (!c) return null;
+  const summary = getLocalAccountSummary();
+  if (!summary || !summary.address) return null;
+  try {
+    const bal = await c.opts.cli.view(DEPLOYMENT.token, "sim", ["balance", "--id", summary.address]);
+    return String(bal);
+  } catch (e) {
+    console.warn("Failed to read public balance from chain:", e);
+    return "0";
+  }
 }
 
 /**
@@ -285,3 +278,60 @@ export async function proveBalanceClientSide(
   console.info(`[benzo] client-side proof_of_balance: prove=${provingMs}ms verify(on-chain)=${verifyMs}ms`);
   return { holds: true, onChain, provingMs, verifyMs };
 }
+
+export async function createInviteClientSide(amountStroops: string): Promise<{ link: string; claimSecretHex: string; txHash?: string } | null> {
+  const c = await getClient({ interactive: true });
+  if (!c) return null;
+  await c.sync(RELAXED_SYNC);
+  if (!(await wireMvkRegistry(c))) return null;
+  const res = await c.createClaimLink({ amount: BigInt(amountStroops), useRelayer: true });
+  return {
+    link: res.link,
+    claimSecretHex: res.claimSecretHex,
+    txHash: res.sendTx,
+  };
+}
+
+export async function refundInviteClientSide(claimSecretHex: string): Promise<{ txHash?: string } | null> {
+  const c = await getClient({ interactive: true });
+  if (!c) return null;
+  await c.sync(RELAXED_SYNC);
+  const summary = getLocalAccountSummary();
+  if (!summary || !summary.address) return null;
+  const toAddress = summary.address;
+  const claimSecret = fromHex(claimSecretHex);
+  const res = await c.claim({ claimSecret, toAddress });
+  const originalAccount = getLocalAccount();
+  if (originalAccount) c.useAccount(originalAccount);
+  return res;
+}
+
+function fromBase64Url(s: string): Uint8Array {
+  const base64 = s.replace(/-/g, "+").replace(/_/g, "/");
+  return unb64(base64);
+}
+
+export async function claimLinkClientSide(claimSecretHexOrBase64: string): Promise<{ txHash?: string; amount: string } | null> {
+  const c = await getClient({ interactive: true });
+  if (!c) return null;
+  await c.sync(RELAXED_SYNC);
+  const summary = getLocalAccountSummary();
+  if (!summary || !summary.address) return null;
+  const toAddress = summary.address;
+  
+  let claimSecret: Uint8Array;
+  if (claimSecretHexOrBase64.length === 64 && !/[^0-9a-fA-F]/.test(claimSecretHexOrBase64)) {
+    claimSecret = fromHex(claimSecretHexOrBase64);
+  } else {
+    claimSecret = fromBase64Url(claimSecretHexOrBase64);
+  }
+
+  const res = await c.claim({ claimSecret, toAddress });
+  const originalAccount = getLocalAccount();
+  if (originalAccount) c.useAccount(originalAccount);
+  return {
+    txHash: res.txHash,
+    amount: res.amount.toString(),
+  };
+}
+

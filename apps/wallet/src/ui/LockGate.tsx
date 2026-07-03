@@ -1,24 +1,50 @@
-/**
- * The app-open lock screen (C4). Shown over everything when "require unlock on
- * open" is set, until the on-device passkey check passes. Mirrors Cash
- * App's Security Lock: nothing is readable until you authenticate.
- */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Lock, Fingerprint } from "lucide-react";
-import { requireUnlock } from "../lib/lock";
+import { Lock, Fingerprint, KeyRound } from "lucide-react";
+import { Input, Button } from "./primitives";
+import { unlockWallet, unlockWalletWithPasskey } from "../lib/localWallet";
 
 export function LockGate({ onUnlock }: { onUnlock: () => void }) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [walletType, setWalletType] = useState<string | null>(null);
+  const [passphrase, setPassphrase] = useState("");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  async function unlock() {
+  useEffect(() => {
+    const type = localStorage.getItem("benzo.wallet.type");
+    setWalletType(type || "passkey");
+  }, []);
+
+  async function unlockWithPasskey() {
     setBusy(true);
     setFailed(false);
-    const ok = await requireUnlock();
-    setBusy(false);
-    if (ok) onUnlock();
-    else setFailed(true);
+    setErrorMsg(null);
+    try {
+      await unlockWalletWithPasskey();
+      onUnlock();
+    } catch (e) {
+      setFailed(true);
+      setErrorMsg((e as Error).message.includes("cancel") ? "Unlock cancelled." : "Could not unlock with passkey.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlockWithPassphrase() {
+    if (!passphrase) return;
+    setBusy(true);
+    setFailed(false);
+    setErrorMsg(null);
+    try {
+      await unlockWallet(passphrase);
+      onUnlock();
+    } catch (e) {
+      setFailed(true);
+      setErrorMsg("Incorrect passcode.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -36,20 +62,53 @@ export function LockGate({ onUnlock }: { onUnlock: () => void }) {
       >
         <Lock size={34} />
       </motion.div>
-      <div className="px-8 text-center">
+
+      <div className="px-8 text-center w-full max-w-[280px]">
         <h2 className="font-display text-xl">Benzo is locked</h2>
-        <p className="mt-1.5 text-[14px] text-muted">Unlock with your device passkey to continue.</p>
-        {failed ? <p className="mt-2 text-[13px] text-danger" data-testid="lock-failed">Couldn't verify. Try again.</p> : null}
+        <p className="mt-1.5 text-[14px] text-muted">
+          {walletType === "passphrase"
+            ? "Enter your passcode to unlock your wallet."
+            : "Unlock with your device passkey to continue."}
+        </p>
+        {failed && errorMsg ? (
+          <p className="mt-2 text-[13px] text-danger" data-testid="lock-failed">
+            {errorMsg}
+          </p>
+        ) : null}
       </div>
-      <button
-        onClick={unlock}
-        disabled={busy}
-        data-testid="lock-unlock"
-        className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-3 text-[15px] font-semibold text-white shadow-[var(--shadow-glow)] transition outline-none active:scale-95 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
-      >
-        <Fingerprint size={18} />
-        {busy ? "Verifying…" : "Unlock"}
-      </button>
+
+      {walletType === "passphrase" ? (
+        <div className="w-full max-w-[280px] space-y-4 px-4">
+          <Input
+            type="password"
+            placeholder="Enter passcode"
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && unlockWithPassphrase()}
+            data-testid="lock-passcode-input"
+            autoFocus
+          />
+          <Button
+            full
+            onClick={unlockWithPassphrase}
+            disabled={busy || !passphrase}
+            data-testid="lock-unlock-passcode"
+          >
+            <KeyRound size={18} />
+            {busy ? "Unlocking…" : "Unlock"}
+          </Button>
+        </div>
+      ) : (
+        <button
+          onClick={unlockWithPasskey}
+          disabled={busy}
+          data-testid="lock-unlock"
+          className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-3 text-[15px] font-semibold text-white shadow-[var(--shadow-glow)] transition outline-none active:scale-95 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:opacity-60"
+        >
+          <Fingerprint size={18} />
+          {busy ? "Verifying…" : "Unlock"}
+        </button>
+      )}
     </motion.div>
   );
 }

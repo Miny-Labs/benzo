@@ -55,8 +55,9 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 function testAuthSecret(): string | null {
-  return hostedRuntime() ? process.env.BENZO_TEST_AUTH_SECRET || null : null;
+  return process.env.BENZO_TEST_AUTH_SECRET || null;
 }
+
 
 function deviceAuthSecret(): string {
   const secret = process.env.BENZO_DATA_ENCRYPTION_SECRET || process.env.BENZO_ACCOUNT_SALT || process.env.BENZO_AUTH_SALT;

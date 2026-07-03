@@ -1,17 +1,13 @@
-/**
- * Contacts (C6 - Wise/Cash recipient management). Local-first: the BFF supplies
- * recent contacts, and THIS module adds device-local saved contacts + nicknames
- * in localStorage. Used to surface saved recipients on Send and to power the
- * first-time-recipient nudge (C11) / approved-contacts.
- */
-import type { Contact } from "./api";
+import { type Contact } from "./api";
+import { decodeRecipient } from "./recipient";
 
 const LS = "benzo.contacts.local.v1";
 
-/** Normalize to a leading-@ handle so "alice" and "@alice" are the same key. */
-export function normHandle(h: string): string {
-  const t = h.trim().replace(/^@+/, "").toLowerCase();
-  return /^[a-z0-9_.]{3,20}$/.test(t) ? `@${t}` : "";
+export function normAddress(a: string): string {
+  const t = a.trim();
+  if (/^G[A-Z2-7]{55}$/.test(t)) return t;
+  if (t.startsWith("bzr_") && decodeRecipient(t) !== null) return t;
+  return "";
 }
 
 export function listLocal(): Contact[] {
@@ -31,36 +27,27 @@ function writeLocal(cs: Contact[]): void {
   }
 }
 
-/** Add or update (by handle) a saved contact. Returns the new local list. */
-export function saveContact(handle: string, name: string): Contact[] {
-  const h = normHandle(handle);
-  if (!h) return listLocal();
-  const cs = listLocal().filter((c) => normHandle(c.handle) !== h);
-  cs.unshift({ handle: h, name: name.trim() || h });
+export function saveContact(address: string, name: string): Contact[] {
+  const addr = normAddress(address);
+  if (!addr) return listLocal();
+  const cs = listLocal().filter((c) => c.handle !== addr);
+  cs.unshift({ handle: addr, name: name.trim() || addr });
   writeLocal(cs);
   return cs;
 }
 
-export function removeContact(handle: string): Contact[] {
-  const h = normHandle(handle);
-  const cs = listLocal().filter((c) => normHandle(c.handle) !== h);
+export function removeContact(address: string): Contact[] {
+  const addr = normAddress(address);
+  const cs = listLocal().filter((c) => c.handle !== addr);
   writeLocal(cs);
   return cs;
 }
 
-export function isSaved(handle: string): boolean {
-  const h = normHandle(handle);
-  return listLocal().some((c) => normHandle(c.handle) === h);
+export function isSaved(address: string): boolean {
+  const addr = normAddress(address);
+  return listLocal().some((c) => c.handle === addr);
 }
 
-/**
- * Merge BFF contacts with local ones, de-duped by handle. Local nicknames win
- * (so a saved nickname overrides the BFF display name).
- */
 export function mergeContacts(bff: Contact[]): Contact[] {
-  const local = listLocal();
-  const byHandle = new Map<string, Contact>();
-  for (const c of bff) byHandle.set(normHandle(c.handle), { ...c, handle: normHandle(c.handle) });
-  for (const c of local) byHandle.set(normHandle(c.handle), c); // local overrides
-  return [...byHandle.values()];
+  return listLocal();
 }

@@ -26,8 +26,6 @@ const walletState = vi.hoisted(() => ({
   refreshBalance: vi.fn(async () => undefined),
 }));
 
-const handleAvailable = vi.hoisted(() => vi.fn(async () => ({ available: false })));
-
 vi.mock("../lib/store", () => ({
   useWallet: () => walletState,
 }));
@@ -39,7 +37,6 @@ vi.mock("../lib/api", async () => {
     currentGoogleCredential: () => null,
     api: {
       ...actual.api,
-      handleAvailable,
     },
   };
 });
@@ -54,10 +51,6 @@ vi.mock("../lib/useSendStream", () => ({
 }));
 
 describe("Send", () => {
-  beforeEach(() => {
-    handleAvailable.mockClear();
-  });
-
   it("opens and dismisses the compliance step-up sheet before balance checks", async () => {
     render(
       <MemoryRouter initialEntries={["/send"]}>
@@ -65,10 +58,9 @@ describe("Send", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.change(screen.getByTestId("send-handle"), { target: { value: "@alice" } });
+    fireEvent.change(screen.getByTestId("send-handle"), { target: { value: "GBRMUZELYDNXSBYF5KOLLSV4XLQYNZJQNLXQ3HTFCWNRIBS3I6EUBCMP" } });
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "1001" } });
 
-    await waitFor(() => expect(handleAvailable).toHaveBeenCalledWith("alice"));
     expect(screen.getByTestId("send-overcap-hint")).toHaveTextContent("Sends over $1,000");
     expect(screen.queryByTestId("send-low-private")).not.toBeInTheDocument();
 
