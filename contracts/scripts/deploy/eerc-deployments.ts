@@ -159,6 +159,15 @@ const verifyRecord = async ({
 		return;
 	}
 
+	// SKIP_VERIFY defers Routescan source verification: hardhat-verify polls the
+	// explorer for the freshly-deployed (not-yet-indexed) contract and can block
+	// the whole deploy for minutes per contract. Contracts are still live and
+	// visible on the explorer; verify separately later.
+	if (process.env.SKIP_VERIFY === "1") {
+		record.verified = false;
+		return;
+	}
+
 	if (record.verified) {
 		return;
 	}
