@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import { getAddress } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -7,9 +7,18 @@ import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
 import { sealString, unsealString } from "../crypto/seal.js";
 import { orgMembers, orgTreasuries, orgs } from "../db/schema.js";
-import { ROLE_RANK, loadMembership, makeRequireOrgRole } from "../orgs/access.js";
+import {
+	ROLE_RANK,
+	loadMembership,
+	makeRequireOrgRole,
+} from "../orgs/access.js";
 import type { OnboardingChainClient } from "../onboarding/chain.js";
-import { serializeManagedEercAccount } from "../payroll/eerc.js";
+import {
+	createManagedEercAccount,
+	deserializeManagedEercAccount,
+	serializeManagedEercAccount,
+	type ManagedEercAccount,
+} from "../payroll/eerc.js";
 import type { TreasuryRegistrar } from "../payroll/chain.js";
 
 type OrgsRoutesOptions = {
@@ -50,54 +59,62 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 	const requireOrgRole = makeRequireOrgRole(fastify, db);
 
 	// POST /orgs — create an org; the creator becomes its owner.
-	fastify.post("/orgs", { preHandler: fastify.requireAuth }, async (request, reply) => {
-		const body = createOrgSchema.safeParse(request.body);
-		if (!body.success) {
-			return reply.code(400).send({ error: "invalid_org" });
-		}
-
-		const userId = request.user!.id;
-		const created = await db.transaction(async (tx) => {
-			// ON CONFLICT DO NOTHING on the unique slug: a taken slug (or a race
-			// between two creators) returns no row and maps to 409 below, instead
-			// of the raw 23505 escaping the transaction as a 500.
-			const [org] = await tx
-				.insert(orgs)
-				.values({ name: body.data.name, slug: body.data.slug })
-				.onConflictDoNothing({ target: orgs.slug })
-				.returning();
-			if (!org) {
-				return null;
+	fastify.post(
+		"/orgs",
+		{ preHandler: fastify.requireAuth },
+		async (request, reply) => {
+			const body = createOrgSchema.safeParse(request.body);
+			if (!body.success) {
+				return reply.code(400).send({ error: "invalid_org" });
 			}
-			await tx
-				.insert(orgMembers)
-				.values({ orgId: org.id, userId, role: "owner" });
-			return org;
-		});
 
-		if (!created) {
-			return reply.code(409).send({ error: "slug_taken" });
-		}
+			const userId = request.user!.id;
+			const created = await db.transaction(async (tx) => {
+				// ON CONFLICT DO NOTHING on the unique slug: a taken slug (or a race
+				// between two creators) returns no row and maps to 409 below, instead
+				// of the raw 23505 escaping the transaction as a 500.
+				const [org] = await tx
+					.insert(orgs)
+					.values({ name: body.data.name, slug: body.data.slug })
+					.onConflictDoNothing({ target: orgs.slug })
+					.returning();
+				if (!org) {
+					return null;
+				}
+				await tx
+					.insert(orgMembers)
+					.values({ orgId: org.id, userId, role: "owner" });
+				return org;
+			});
 
-		return reply.code(201).send({ org: created, role: "owner" });
-	});
+			if (!created) {
+				return reply.code(409).send({ error: "slug_taken" });
+			}
+
+			return reply.code(201).send({ org: created, role: "owner" });
+		},
+	);
 
 	// GET /orgs — orgs the caller belongs to, with their role in each.
-	fastify.get("/orgs", { preHandler: fastify.requireAuth }, async (request, reply) => {
-		const userId = request.user!.id;
-		const rows = await db
-			.select({
-				id: orgs.id,
-				name: orgs.name,
-				slug: orgs.slug,
-				role: orgMembers.role,
-				createdAt: orgs.createdAt,
-			})
-			.from(orgMembers)
-			.innerJoin(orgs, eq(orgMembers.orgId, orgs.id))
-			.where(eq(orgMembers.userId, userId));
-		return reply.send({ orgs: rows });
-	});
+	fastify.get(
+		"/orgs",
+		{ preHandler: fastify.requireAuth },
+		async (request, reply) => {
+			const userId = request.user!.id;
+			const rows = await db
+				.select({
+					id: orgs.id,
+					name: orgs.name,
+					slug: orgs.slug,
+					role: orgMembers.role,
+					createdAt: orgs.createdAt,
+				})
+				.from(orgMembers)
+				.innerJoin(orgs, eq(orgMembers.orgId, orgs.id))
+				.where(eq(orgMembers.userId, userId));
+			return reply.send({ orgs: rows });
+		},
+	);
 
 	// GET /orgs/:id — org detail; any member may read.
 	fastify.get(
@@ -186,9 +203,7 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 			const orgId = (request.params as { id: string }).id;
 			const body = provisionTreasurySchema.safeParse(request.body);
 			if (!body.success) {
-				return reply
-					.code(400)
-					.send({ error: "consent_required" });
+				return reply.code(400).send({ error: "consent_required" });
 			}
 
 			let createdTreasury = false;
@@ -196,14 +211,17 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				where: (table, { eq: eqOp }) => eqOp(table.orgId, orgId),
 			});
 
-			if (treasury?.sealedEercKey) {
+			if (treasury?.eercRegisteredAt) {
 				return reply.code(409).send({ error: "treasury_exists" });
 			}
 
 			if (!treasury) {
 				const privateKey = generatePrivateKey();
 				const account = privateKeyToAccount(privateKey);
-				const sealedEoaKey = sealString(options.config.appMasterKey, privateKey);
+				const sealedEoaKey = sealString(
+					options.config.appMasterKey,
+					privateKey,
+				);
 
 				// Atomic: the unique index on org_id makes this race-safe. A second
 				// concurrent request conflicts and returns no row (409) instead of
@@ -233,9 +251,17 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				options.config.appMasterKey,
 				treasury.sealedEoaKey,
 			) as `0x${string}`;
+			const eercAccount = await loadOrCreateTreasuryEercAccount(
+				db,
+				options.config,
+				treasury.id,
+				treasury.sealedEercKey,
+			);
 
 			await options.onboardingChain.ensureAllowlisted(treasury.address);
-			const balance = await options.onboardingChain.getNativeBalance(treasury.address);
+			const balance = await options.onboardingChain.getNativeBalance(
+				treasury.address,
+			);
 			if (balance < options.config.dripBalanceThresholdWei) {
 				await options.onboardingChain.dripGas(
 					treasury.address,
@@ -245,16 +271,12 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 
 			const registration = await options.treasuryRegistrar.registerTreasury({
 				address: treasury.address,
+				eercAccount,
 				eoaPrivateKey,
 			});
-			const sealedEercKey = sealString(
-				options.config.appMasterKey,
-				serializeManagedEercAccount(registration.eercAccount),
-			);
-
 			await db
 				.update(orgTreasuries)
-				.set({ sealedEercKey })
+				.set({ eercRegisteredAt: new Date() })
 				.where(eq(orgTreasuries.id, treasury.id));
 
 			return reply.code(createdTreasury ? 201 : 200).send({
@@ -273,13 +295,13 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 		{ preHandler: requireOrgRole("viewer") },
 		async (request, reply) => {
 			const orgId = (request.params as { id: string }).id;
-			// Push the "registered" boolean into the query so the sealed eERC key
-			// bytea is never pulled into the API process just to null-check it.
+			// Push the "registered" boolean into the query so status reads don't
+			// need any key material.
 			const [treasury] = await db
 				.select({
 					address: orgTreasuries.address,
 					consentedAt: orgTreasuries.consentedAt,
-					registered: sql<boolean>`${orgTreasuries.sealedEercKey} is not null`,
+					registered: sql<boolean>`${orgTreasuries.eercRegisteredAt} is not null`,
 				})
 				.from(orgTreasuries)
 				.where(eq(orgTreasuries.orgId, orgId))
@@ -298,3 +320,49 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 		},
 	);
 };
+
+async function loadOrCreateTreasuryEercAccount(
+	db: Database,
+	config: ApiConfig,
+	treasuryId: string,
+	sealedEercKey: Buffer | null,
+): Promise<ManagedEercAccount> {
+	if (sealedEercKey) {
+		return deserializeManagedEercAccount(
+			unsealString(config.appMasterKey, sealedEercKey),
+		);
+	}
+
+	const account = createManagedEercAccount();
+	const sealed = sealString(
+		config.appMasterKey,
+		serializeManagedEercAccount(account),
+	);
+	const [updated] = await db
+		.update(orgTreasuries)
+		.set({ sealedEercKey: sealed })
+		.where(
+			and(
+				eq(orgTreasuries.id, treasuryId),
+				isNull(orgTreasuries.sealedEercKey),
+			),
+		)
+		.returning({ sealedEercKey: orgTreasuries.sealedEercKey });
+
+	if (updated?.sealedEercKey) {
+		return account;
+	}
+
+	const [existing] = await db
+		.select({ sealedEercKey: orgTreasuries.sealedEercKey })
+		.from(orgTreasuries)
+		.where(eq(orgTreasuries.id, treasuryId))
+		.limit(1);
+	if (!existing?.sealedEercKey) {
+		throw new Error("treasury_eerc_key_not_persisted");
+	}
+
+	return deserializeManagedEercAccount(
+		unsealString(config.appMasterKey, existing.sealedEercKey),
+	);
+}

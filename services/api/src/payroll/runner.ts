@@ -79,16 +79,13 @@ export async function enqueuePayrollRun(
 
 	let enqueued = 0;
 	for (const item of items) {
-		const jobId = await enqueuePayrollItem(
-			boss,
-			{
-				itemId: item.id,
-				orgId: item.orgId,
-				rowIndex: item.rowIndex,
-				runId: item.runId,
-				singletonKey: payrollSingletonKey(item.runId, item.rowIndex),
-			},
-		);
+		const jobId = await enqueuePayrollItem(boss, {
+			itemId: item.id,
+			orgId: item.orgId,
+			rowIndex: item.rowIndex,
+			runId: item.runId,
+			singletonKey: payrollSingletonKey(item.runId, item.rowIndex),
+		});
 		if (jobId !== null) {
 			enqueued += 1;
 		}
@@ -151,7 +148,7 @@ export async function getPayrollProgressCounts(
 		counts[row.status] = count;
 		counts.total += count;
 	}
-	counts.proved = counts.submitted + counts.confirmed;
+	counts.proved = counts.confirmed;
 
 	return counts;
 }
@@ -189,7 +186,11 @@ async function processPayrollItem(
 		return;
 	}
 
-	if (row.item.txHash) {
+	if (row.item.status === "submitted" || row.item.txHash) {
+		if (!row.item.txHash) {
+			await markSubmittedItemUnreconciled(db, row.item.id);
+			return;
+		}
 		await confirmSubmittedItem(
 			db,
 			options,
@@ -197,6 +198,7 @@ async function processPayrollItem(
 			row.run.id,
 			row.item.rowIndex,
 			row.item.txHash as Hex,
+			row.item.submissionRawTx as Hex | null,
 		);
 		return;
 	}
@@ -231,6 +233,7 @@ async function processPayrollItem(
 			attempt: payrollItems.attempt,
 		});
 
+	let prepared: { rawTransaction: Hex; txHash: Hex };
 	try {
 		const treasury = await loadTreasury(db, row.run.orgId);
 		const eoaPrivateKey = unsealString(
@@ -260,7 +263,7 @@ async function processPayrollItem(
 		});
 		const proof = await options.prover.proveTransfer(built.input);
 
-		const tx = await options.submitter.submitTransfer({
+		prepared = await options.submitter.prepareTransfer({
 			balancePCT: built.senderBalancePCT,
 			eoaPrivateKey,
 			proof,
@@ -272,21 +275,14 @@ async function processPayrollItem(
 			.set({
 				error: null,
 				status: "submitted",
-				txHash: tx.txHash,
+				submissionRawTx: prepared.rawTransaction,
+				txHash: prepared.txHash,
 				updatedAt: new Date(),
 			})
 			.where(eq(payrollItems.id, row.item.id));
-
-		await confirmSubmittedItem(
-			db,
-			options,
-			row.item.id,
-			row.run.id,
-			row.item.rowIndex,
-			tx.txHash,
-		);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : "payroll_item_failed";
+		const message =
+			error instanceof Error ? error.message : "payroll_item_failed";
 		const attempt = started?.attempt ?? row.item.attempt + 1;
 		await db
 			.update(payrollItems)
@@ -300,7 +296,18 @@ async function processPayrollItem(
 		if (attempt < PAYROLL_MAX_ATTEMPTS) {
 			throw new Error(message);
 		}
+		return;
 	}
+
+	await confirmSubmittedItem(
+		db,
+		options,
+		row.item.id,
+		row.run.id,
+		row.item.rowIndex,
+		prepared.txHash,
+		prepared.rawTransaction,
+	);
 }
 
 async function confirmSubmittedItem(
@@ -310,23 +317,54 @@ async function confirmSubmittedItem(
 	runId: string,
 	rowIndex: number,
 	txHash: Hex,
+	rawTransaction: Hex | null,
 ): Promise<void> {
 	await db
 		.update(payrollItems)
 		.set({
 			error: null,
 			status: "submitted",
+			...(rawTransaction ? { submissionRawTx: rawTransaction } : {}),
 			txHash,
 			updatedAt: new Date(),
 		})
 		.where(eq(payrollItems.id, itemId));
-	await options.submitter.waitForConfirmations(txHash, PAYROLL_CONFIRMATIONS);
+	try {
+		if (rawTransaction) {
+			await options.submitter.submitPreparedTransfer({
+				rawTransaction,
+				txHash,
+			});
+		}
+		await options.submitter.waitForConfirmations(txHash, PAYROLL_CONFIRMATIONS);
+	} catch (error) {
+		const message =
+			error instanceof Error ? error.message : "payroll_confirmation_failed";
+		if (message === "transfer_reverted") {
+			await markItemFailed(db, itemId, message);
+			await finalizeRunIfSettled(db, runId);
+			return;
+		}
+		await db
+			.update(payrollItems)
+			.set({
+				confirmationAttempt: sql`${payrollItems.confirmationAttempt} + 1`,
+				error: message,
+				status: "submitted",
+				txHash,
+				updatedAt: new Date(),
+			})
+			.where(eq(payrollItems.id, itemId));
+		throw new Error(message);
+	}
 	await db.transaction(async (tx) => {
 		await tx
 			.update(payrollItems)
 			.set({
+				confirmationAttempt: 0,
 				error: null,
 				status: "confirmed",
+				submissionRawTx: null,
 				txHash,
 				updatedAt: new Date(),
 			})
@@ -375,6 +413,21 @@ async function markItemFailed(
 		.set({
 			error,
 			status: "failed",
+			submissionRawTx: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(payrollItems.id, itemId));
+}
+
+async function markSubmittedItemUnreconciled(
+	db: Database,
+	itemId: string,
+): Promise<void> {
+	await db
+		.update(payrollItems)
+		.set({
+			error: "submitted_item_missing_tx_hash",
+			status: "submitted",
 			updatedAt: new Date(),
 		})
 		.where(eq(payrollItems.id, itemId));
@@ -426,11 +479,13 @@ async function withOrgPayrollLock<T>(
 	const client = await pool.connect();
 	const key = `payroll:${orgId}`;
 	try {
-		await client.query("select pg_advisory_lock(hashtext($1)::bigint)", [key]);
+		await client.query("select pg_advisory_lock(hashtextextended($1, 0))", [
+			key,
+		]);
 		return await fn();
 	} finally {
 		await client
-			.query("select pg_advisory_unlock(hashtext($1)::bigint)", [key])
+			.query("select pg_advisory_unlock(hashtextextended($1, 0))", [key])
 			.catch(() => undefined);
 		client.release();
 	}
@@ -441,7 +496,16 @@ function payrollSingletonKey(runId: string, rowIndex: number): string {
 }
 
 function parsePayrollAmount(amount: string, decimals: number): bigint {
+	if (decimals < 0 || !Number.isInteger(decimals)) {
+		throw new Error("invalid_payroll_decimals");
+	}
+	if (!/^\d+(?:\.\d*)?$/.test(amount)) {
+		throw new Error("invalid_payroll_amount");
+	}
 	const [whole = "0", fraction = ""] = amount.split(".");
-	const padded = (fraction + "0".repeat(decimals)).slice(0, decimals);
+	if (fraction.length > decimals) {
+		throw new Error("payroll_amount_exceeds_decimals");
+	}
+	const padded = fraction.padEnd(decimals, "0");
 	return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(padded || "0");
 }

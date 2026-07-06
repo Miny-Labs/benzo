@@ -7,7 +7,7 @@ import {
 } from "@testcontainers/postgresql";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { privateKeyToAccount } from "viem/accounts";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { ApiConfig } from "../src/config.js";
@@ -26,11 +26,15 @@ import {
 } from "../src/db/schema.js";
 import { createBoss, ensureQueues } from "../src/jobs/index.js";
 import type { OnboardingChainClient } from "../src/onboarding/chain.js";
-import type { PayrollSubmitter, TreasuryRegistrar } from "../src/payroll/chain.js";
+import type {
+	PayrollSubmitter,
+	TreasuryRegistrar,
+} from "../src/payroll/chain.js";
 import {
 	createManagedEercAccount,
 	deserializeManagedEercAccount,
 	serializeManagedEercAccount,
+	type ManagedEercAccount,
 	type TransferProofCalldata,
 } from "../src/payroll/eerc.js";
 import type { PayrollProver } from "../src/payroll/prover.js";
@@ -124,12 +128,19 @@ function createOnboardingChainStub(): OnboardingChainClient {
 
 function createTreasuryRegistrarStub(
 	eercAccount = createManagedEercAccount(123_456n),
+	onRegister?: (
+		input: Parameters<TreasuryRegistrar["registerTreasury"]>[0] & {
+			eercAccount: ManagedEercAccount;
+		},
+	) => void,
 ): TreasuryRegistrar {
 	return {
-		async registerTreasury() {
+		async registerTreasury(input) {
+			const account = input.eercAccount ?? eercAccount;
+			onRegister?.({ ...input, eercAccount: account });
 			return {
 				alreadyRegistered: false,
-				eercAccount,
+				eercAccount: account,
 				txHash: `0x${"02".repeat(32)}` as `0x${string}`,
 			};
 		},
@@ -154,6 +165,100 @@ function dummyTransferProof(): TransferProofCalldata {
 
 const wait = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function insertPayrollWorkerFixture(db: Database, config: ApiConfig) {
+	const eoaPrivateKey = generatePrivateKey();
+	const treasuryAccount = privateKeyToAccount(eoaPrivateKey);
+	const eercAccount = createManagedEercAccount(987_654n);
+	const [owner] = await db
+		.insert(users)
+		.values({
+			address: `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`,
+			roles: [],
+		})
+		.returning({ id: users.id });
+	const [org] = await db
+		.insert(orgs)
+		.values({ name: "Worker Co", slug: `worker-${randomUUID()}` })
+		.returning({ id: orgs.id });
+	await db.insert(orgMembers).values({
+		orgId: org!.id,
+		role: "owner",
+		userId: owner!.id,
+	});
+	await db.insert(orgTreasuries).values({
+		address: treasuryAccount.address.toLowerCase(),
+		consentedAt: new Date(),
+		consentedBy: owner!.id,
+		orgId: org!.id,
+		sealedEercKey: sealString(
+			config.appMasterKey,
+			serializeManagedEercAccount(eercAccount),
+		),
+		sealedEoaKey: sealString(config.appMasterKey, eoaPrivateKey),
+	});
+	const [run] = await db
+		.insert(payrollRuns)
+		.values({
+			createdBy: owner!.id,
+			itemCount: 1,
+			orgId: org!.id,
+			status: "running",
+			totalAmount: "1",
+		})
+		.returning({ id: payrollRuns.id });
+	const [item] = await db
+		.insert(payrollItems)
+		.values({
+			amount: "1",
+			recipientInput: `0x${"51".repeat(20)}`,
+			resolvedAddress: `0x${"52".repeat(20)}`,
+			rowIndex: 0,
+			runId: run!.id,
+			status: "pending",
+		})
+		.returning({ id: payrollItems.id, rowIndex: payrollItems.rowIndex });
+	const job = {
+		data: {
+			itemId: item!.id,
+			orgId: org!.id,
+			rowIndex: item!.rowIndex,
+			runId: run!.id,
+			singletonKey: `${run!.id}:${item!.rowIndex}`,
+		} satisfies PayrollItemJobData,
+	} as Parameters<typeof handlePayrollItemJob>[2];
+
+	return { eoaPrivateKey, eercAccount, item: item!, job, org: org!, run: run! };
+}
+
+function createPayrollProverStub(): PayrollProver {
+	return {
+		async proveRegistration() {
+			throw new Error("registration_not_expected");
+		},
+		async proveTransfer() {
+			return dummyTransferProof();
+		},
+	};
+}
+
+function createTransferContextStub(): Pick<
+	PayrollSubmitter,
+	"loadTransferContext"
+> {
+	const receiver = createManagedEercAccount(111_111n);
+	const auditor = createManagedEercAccount(222_222n);
+	return {
+		async loadTransferContext() {
+			return {
+				auditorPublicKey: auditor.publicKey,
+				receiverPublicKey: receiver.publicKey,
+				senderBalance: 10_000_000n,
+				senderEncryptedBalance: [0n, 0n, 0n, 0n],
+			};
+		},
+	};
+}
 
 describe("@benzo/api orgs", () => {
 	let postgres: StartedPostgreSqlContainer;
@@ -315,13 +420,15 @@ describe("@benzo/api orgs", () => {
 	it("provisions a treasury only with consent and seals the key at rest", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
-		const eercAccount = createManagedEercAccount(777_777n);
+		let registeredEercAccount: ManagedEercAccount | undefined;
 		const app = await buildApp({
 			config,
 			logger: false,
 			onboardingChain: createOnboardingChainStub(),
 			startBoss: false,
-			treasuryRegistrar: createTreasuryRegistrarStub(eercAccount),
+			treasuryRegistrar: createTreasuryRegistrarStub(undefined, (input) => {
+				registeredEercAccount = input.eercAccount;
+			}),
 		});
 		const owner = `0x${"f6".repeat(20)}`;
 
@@ -382,13 +489,16 @@ describe("@benzo/api orgs", () => {
 				address,
 			);
 			expect(row!.sealedEercKey).toBeTruthy();
+			expect(registeredEercAccount).toBeDefined();
 			expect(row!.sealedEercKey!.toString("utf8")).not.toContain(
-				eercAccount.privateKey.toString(),
+				registeredEercAccount!.privateKey.toString(),
 			);
 			const recoveredEercKey = deserializeManagedEercAccount(
 				unsealString(config.appMasterKey, row!.sealedEercKey!),
 			);
-			expect(recoveredEercKey.privateKey).toBe(eercAccount.privateKey);
+			expect(recoveredEercKey.privateKey).toBe(
+				registeredEercAccount!.privateKey,
+			);
 
 			// A second provisioning is a conflict.
 			const second = await app.inject({
@@ -476,10 +586,22 @@ describe("@benzo/api orgs", () => {
 				status: "pending",
 				resolvedAddress: aliceAddr,
 			});
-			expect(byRow[1]).toMatchObject({ status: "pending", resolvedAddress: rawAddr });
-			expect(byRow[2]).toMatchObject({ status: "failed", error: "unknown_recipient" });
-			expect(byRow[3]).toMatchObject({ status: "failed", error: "duplicate_recipient" });
-			expect(byRow[4]).toMatchObject({ status: "failed", error: "invalid_amount" });
+			expect(byRow[1]).toMatchObject({
+				status: "pending",
+				resolvedAddress: rawAddr,
+			});
+			expect(byRow[2]).toMatchObject({
+				status: "failed",
+				error: "unknown_recipient",
+			});
+			expect(byRow[3]).toMatchObject({
+				status: "failed",
+				error: "duplicate_recipient",
+			});
+			expect(byRow[4]).toMatchObject({
+				status: "failed",
+				error: "invalid_amount",
+			});
 
 			// Persisted: GET returns the run + all rows, ordered.
 			const runId = preview.runId as string;
@@ -495,7 +617,10 @@ describe("@benzo/api orgs", () => {
 				url: `/payroll/${runId}`,
 			});
 			expect(getRun.statusCode).toBe(200);
-			expect(getRun.json().run).toMatchObject({ status: "ready", itemCount: 2 });
+			expect(getRun.json().run).toMatchObject({
+				status: "ready",
+				itemCount: 2,
+			});
 
 			// A non-member can't see the run (404, existence not leaked).
 			const outsiderCookie = await session(db, config, `0x${"99".repeat(20)}`);
@@ -598,10 +723,9 @@ describe("@benzo/api orgs", () => {
 			expect(treasury.statusCode).toBe(201);
 			expect(treasury.json().registered).toBe(true);
 
-			const csv = [
-				`0x${"55".repeat(20)},1`,
-				`0x${"66".repeat(20)},2`,
-			].join("\n");
+			const csv = [`0x${"55".repeat(20)},1`, `0x${"66".repeat(20)},2`].join(
+				"\n",
+			);
 			const preview = await app.inject({
 				headers: { cookie: ownerCookie },
 				method: "POST",
@@ -652,6 +776,7 @@ describe("@benzo/api orgs", () => {
 		const auditor = createManagedEercAccount(222_222n);
 		let activeProofs = 0;
 		let maxActiveProofs = 0;
+		let prepareCount = 0;
 		let submitCount = 0;
 		const submittedRows: number[] = [];
 		const prover: PayrollProver = {
@@ -675,12 +800,17 @@ describe("@benzo/api orgs", () => {
 					senderEncryptedBalance: [0n, 0n, 0n, 0n],
 				};
 			},
-			async submitTransfer(input) {
-				submitCount += 1;
+			async prepareTransfer(input) {
+				prepareCount += 1;
 				submittedRows.push(Number(input.proof.publicSignals[0]));
 				return {
-					txHash: `0x${submitCount.toString(16).padStart(64, "0")}`,
+					rawTransaction: `0x${prepareCount.toString(16).padStart(64, "0")}`,
+					txHash: `0x${prepareCount.toString(16).padStart(64, "0")}`,
 				};
+			},
+			async submitPreparedTransfer(input) {
+				submitCount += 1;
+				return { txHash: input.txHash };
 			},
 			async waitForConfirmations() {
 				await wait(5);
@@ -761,6 +891,7 @@ describe("@benzo/api orgs", () => {
 			);
 
 			expect(maxActiveProofs).toBe(1);
+			expect(prepareCount).toBe(3);
 			expect(submitCount).toBe(3);
 			expect(submittedRows).toEqual([1, 1, 1]);
 
@@ -796,7 +927,167 @@ describe("@benzo/api orgs", () => {
 				{ config, pool, prover, submitter },
 				jobFor(insertedItems[0]!),
 			);
+			expect(prepareCount).toBe(3);
 			expect(submitCount).toBe(3);
+		} finally {
+			await pool.end();
+		}
+	});
+
+	it("resumes a prepared transfer without creating a second transfer after a broadcast crash", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const fixture = await insertPayrollWorkerFixture(db, config);
+		const rawTransaction = `0x${"ab".repeat(32)}` as `0x${string}`;
+		const txHash = `0x${"cd".repeat(32)}` as `0x${string}`;
+		let prepareCount = 0;
+		let submitCalls = 0;
+		const uniqueBroadcasts = new Set<string>();
+		const submitter: PayrollSubmitter = {
+			...createTransferContextStub(),
+			async prepareTransfer() {
+				prepareCount += 1;
+				return { rawTransaction, txHash };
+			},
+			async submitPreparedTransfer(input) {
+				submitCalls += 1;
+				uniqueBroadcasts.add(input.rawTransaction);
+				if (submitCalls === 1) {
+					throw new Error("crash_after_broadcast");
+				}
+				return { txHash: input.txHash };
+			},
+			async waitForConfirmations() {
+				return undefined;
+			},
+		};
+
+		try {
+			await expect(
+				handlePayrollItemJob(
+					db,
+					{ config, pool, prover: createPayrollProverStub(), submitter },
+					fixture.job,
+				),
+			).rejects.toThrow("crash_after_broadcast");
+			await handlePayrollItemJob(
+				db,
+				{ config, pool, prover: createPayrollProverStub(), submitter },
+				fixture.job,
+			);
+
+			expect(prepareCount).toBe(1);
+			expect(submitCalls).toBe(2);
+			expect([...uniqueBroadcasts]).toEqual([rawTransaction]);
+			const [row] = await db
+				.select()
+				.from(payrollItems)
+				.where(eq(payrollItems.id, fixture.item.id))
+				.limit(1);
+			expect(row).toMatchObject({
+				status: "confirmed",
+				submissionRawTx: null,
+				txHash,
+			});
+		} finally {
+			await pool.end();
+		}
+	});
+
+	it("keeps a broadcast item submitted when confirmation retries fail", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const fixture = await insertPayrollWorkerFixture(db, config);
+		const txHash = `0x${"ef".repeat(32)}` as `0x${string}`;
+		const submitter: PayrollSubmitter = {
+			...createTransferContextStub(),
+			async prepareTransfer() {
+				return {
+					rawTransaction: `0x${"12".repeat(32)}`,
+					txHash,
+				};
+			},
+			async submitPreparedTransfer(input) {
+				return { txHash: input.txHash };
+			},
+			async waitForConfirmations() {
+				throw new Error("confirmation_timeout");
+			},
+		};
+
+		try {
+			await expect(
+				handlePayrollItemJob(
+					db,
+					{ config, pool, prover: createPayrollProverStub(), submitter },
+					fixture.job,
+				),
+			).rejects.toThrow("confirmation_timeout");
+
+			const [row] = await db
+				.select()
+				.from(payrollItems)
+				.where(eq(payrollItems.id, fixture.item.id))
+				.limit(1);
+			expect(row).toMatchObject({
+				attempt: 1,
+				confirmationAttempt: 1,
+				error: "confirmation_timeout",
+				status: "submitted",
+				txHash,
+			});
+		} finally {
+			await pool.end();
+		}
+	});
+
+	it("marks a reverted transfer receipt failed instead of confirmed", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const fixture = await insertPayrollWorkerFixture(db, config);
+		const txHash = `0x${"34".repeat(32)}` as `0x${string}`;
+		const submitter: PayrollSubmitter = {
+			...createTransferContextStub(),
+			async prepareTransfer() {
+				return {
+					rawTransaction: `0x${"56".repeat(32)}`,
+					txHash,
+				};
+			},
+			async submitPreparedTransfer(input) {
+				return { txHash: input.txHash };
+			},
+			async waitForConfirmations() {
+				throw new Error("transfer_reverted");
+			},
+		};
+
+		try {
+			await handlePayrollItemJob(
+				db,
+				{ config, pool, prover: createPayrollProverStub(), submitter },
+				fixture.job,
+			);
+
+			const [row] = await db
+				.select()
+				.from(payrollItems)
+				.where(eq(payrollItems.id, fixture.item.id))
+				.limit(1);
+			expect(row).toMatchObject({
+				error: "transfer_reverted",
+				status: "failed",
+				txHash,
+			});
+			const [run] = await db
+				.select({ error: payrollRuns.error, status: payrollRuns.status })
+				.from(payrollRuns)
+				.where(eq(payrollRuns.id, fixture.run.id))
+				.limit(1);
+			expect(run).toMatchObject({
+				error: "no_confirmed_items",
+				status: "failed",
+			});
 		} finally {
 			await pool.end();
 		}

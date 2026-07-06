@@ -1,7 +1,9 @@
 import {
 	createWalletClient,
+	encodeFunctionData,
 	getAddress,
 	http,
+	keccak256,
 	type Address,
 	type Hex,
 	type PublicClient,
@@ -41,6 +43,19 @@ export type TransferContext = {
 	senderEncryptedBalance: bigint[];
 };
 
+export type TransferSubmissionInput = {
+	balancePCT: [bigint, bigint, bigint, bigint, bigint, bigint, bigint];
+	eoaPrivateKey: Hex;
+	proof: TransferProofCalldata;
+	recipientAddress: string;
+	tokenId: bigint;
+};
+
+export type PreparedTransferSubmission = {
+	rawTransaction: Hex;
+	txHash: Hex;
+};
+
 export type PayrollSubmitter = {
 	loadTransferContext: (input: {
 		recipientAddress: string;
@@ -48,13 +63,12 @@ export type PayrollSubmitter = {
 		treasuryAddress: string;
 		tokenId: bigint;
 	}) => Promise<TransferContext>;
-	submitTransfer: (input: {
-		balancePCT: [bigint, bigint, bigint, bigint, bigint, bigint, bigint];
-		eoaPrivateKey: Hex;
-		proof: TransferProofCalldata;
-		recipientAddress: string;
-		tokenId: bigint;
-	}) => Promise<{ txHash: Hex }>;
+	prepareTransfer: (
+		input: TransferSubmissionInput,
+	) => Promise<PreparedTransferSubmission>;
+	submitPreparedTransfer: (
+		input: PreparedTransferSubmission,
+	) => Promise<{ txHash: Hex }>;
 	waitForConfirmations: (txHash: Hex, confirmations: number) => Promise<void>;
 };
 
@@ -242,10 +256,11 @@ export function createViemTreasuryRegistrar(
 				chain: null,
 				functionName: "register",
 			});
-			await publicClient.waitForTransactionReceipt({
+			const receipt = await publicClient.waitForTransactionReceipt({
 				confirmations: 1,
 				hash: txHash,
 			});
+			throwIfRevertedReceipt(receipt, "treasury_registration_reverted");
 
 			return {
 				alreadyRegistered: false,
@@ -311,37 +326,88 @@ export function createViemPayrollSubmitter(
 				senderEncryptedBalance: flattenEncryptedBalance(balance),
 			};
 		},
-		async submitTransfer(input) {
+		async prepareTransfer(input) {
 			const account = privateKeyToAccount(input.eoaPrivateKey);
 			const walletClient = createWalletClient({
 				account,
 				transport: http(config.benzonetRpcUrl),
 			});
-			const txHash = await walletClient.writeContract({
+			const data = encodeFunctionData({
 				abi: encryptedErcAbi,
-				account,
-				address: normalizeAddress(config.eercEncryptedErcAddress),
 				args: [
 					normalizeAddress(input.recipientAddress),
 					input.tokenId,
 					input.proof,
 					input.balancePCT,
 				],
-				chain: null,
 				functionName: "transfer",
 			});
+			const request = await walletClient.prepareTransactionRequest({
+				account,
+				chain: null,
+				data,
+				to: normalizeAddress(config.eercEncryptedErcAddress),
+			});
+			const rawTransaction = await walletClient.signTransaction({
+				...request,
+				chain: null,
+			});
 
-			return { txHash };
+			return {
+				rawTransaction,
+				txHash: keccak256(rawTransaction),
+			};
+		},
+		async submitPreparedTransfer(input) {
+			try {
+				const submittedHash = await publicClient.sendRawTransaction({
+					serializedTransaction: input.rawTransaction,
+				});
+				if (submittedHash.toLowerCase() !== input.txHash.toLowerCase()) {
+					throw new Error("submitted_transfer_hash_mismatch");
+				}
+			} catch (error) {
+				if (!isIdempotentRawTransactionError(error)) {
+					throw error;
+				}
+			}
+
+			return { txHash: input.txHash };
 		},
 		async waitForConfirmations(txHash, confirmations) {
-			await publicClient.waitForTransactionReceipt({
+			const receipt = await publicClient.waitForTransactionReceipt({
 				confirmations,
 				hash: txHash,
 			});
+			throwIfRevertedReceipt(receipt, "transfer_reverted");
 		},
 	};
 }
 
 function normalizeAddress(address: string): Address {
 	return getAddress(address) as Address;
+}
+
+function throwIfRevertedReceipt(
+	receipt: { status?: "success" | "reverted" | string },
+	message: string,
+): void {
+	if (receipt.status === "reverted") {
+		throw new Error(message);
+	}
+}
+
+function isIdempotentRawTransactionError(error: unknown): boolean {
+	const message =
+		error instanceof Error
+			? `${error.name} ${error.message}`.toLowerCase()
+			: String(error).toLowerCase();
+	return [
+		"already known",
+		"already imported",
+		"already in chain",
+		"known transaction",
+		"nonce too low",
+		"transaction already exists",
+	].some((needle) => message.includes(needle));
 }

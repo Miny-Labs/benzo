@@ -34,13 +34,24 @@ export type SealedManagedEercAccountV1 = {
 
 export type EercBalance = {
 	amountPCTs: Iterable<{ pct: Iterable<bigint> } | [Iterable<bigint>, bigint]>;
-	balancePCT: Iterable<bigint>;
+	balancePCT: PoseidonPCT;
 	eGCT: {
 		c1: Iterable<bigint>;
 		c2: Iterable<bigint>;
 	};
 };
 
+export type PoseidonCiphertext = [bigint, bigint, bigint, bigint];
+export type PoseidonAuthKey = [bigint, bigint];
+export type PoseidonPCT = [
+	bigint,
+	bigint,
+	bigint,
+	bigint,
+	bigint,
+	bigint,
+	bigint,
+];
 export type BigintTuple5 = [bigint, bigint, bigint, bigint, bigint];
 export type BigintTuple32 = [
 	bigint,
@@ -92,13 +103,13 @@ export type RegistrationProofCalldata = Groth16Calldata<BigintTuple5>;
 export type TransferProofCalldata = Groth16Calldata<BigintTuple32>;
 
 export type TransferProofInput = {
-	AuditorPCT: bigint[];
-	AuditorPCTAuthKey: bigint[];
+	AuditorPCT: PoseidonCiphertext;
+	AuditorPCTAuthKey: PoseidonAuthKey;
 	AuditorPCTNonce: bigint;
 	AuditorPCTRandom: bigint;
 	AuditorPublicKey: [bigint, bigint];
-	ReceiverPCT: bigint[];
-	ReceiverPCTAuthKey: bigint[];
+	ReceiverPCT: PoseidonCiphertext;
+	ReceiverPCTAuthKey: PoseidonAuthKey;
 	ReceiverPCTNonce: bigint;
 	ReceiverPCTRandom: bigint;
 	ReceiverPublicKey: [bigint, bigint];
@@ -117,7 +128,7 @@ export type TransferProofInput = {
 
 export type BuiltTransferProof = {
 	input: TransferProofInput;
-	senderBalancePCT: [bigint, bigint, bigint, bigint, bigint, bigint, bigint];
+	senderBalancePCT: PoseidonPCT;
 };
 
 export function createManagedEercAccount(
@@ -230,22 +241,30 @@ export function buildTransferProofInput({
 		random: encryptedAmountReceiverRandom,
 	} = encryptMessage(receiverPublicKey, transferAmount);
 	const {
-		ciphertext: receiverCiphertext,
-		nonce: receiverNonce,
 		authKey: receiverAuthKey,
+		ciphertext: receiverCiphertext,
 		encRandom: receiverEncRandom,
-	} = processPoseidonEncryption([transferAmount], receiverPublicKey);
+		nonce: receiverNonce,
+	} = processPoseidonPCT(
+		[transferAmount],
+		receiverPublicKey,
+		"receiver_amount_pct",
+	);
 	const {
-		ciphertext: auditorCiphertext,
-		nonce: auditorNonce,
 		authKey: auditorAuthKey,
+		ciphertext: auditorCiphertext,
 		encRandom: auditorEncRandom,
-	} = processPoseidonEncryption([transferAmount], auditorPublicKey);
-	const {
-		ciphertext: senderCiphertext,
-		nonce: senderNonce,
-		authKey: senderAuthKey,
-	} = processPoseidonEncryption([senderNewBalance], sender.publicKey);
+		nonce: auditorNonce,
+	} = processPoseidonPCT(
+		[transferAmount],
+		auditorPublicKey,
+		"auditor_amount_pct",
+	);
+	const { pct: senderBalancePCT } = processPoseidonPCT(
+		[senderNewBalance],
+		sender.publicKey,
+		"sender_balance_pct",
+	);
 
 	return {
 		input: {
@@ -271,11 +290,7 @@ export function buildTransferProofInput({
 			SenderVTTC2: encryptedAmountSender[1],
 			ValueToTransfer: transferAmount,
 		},
-		senderBalancePCT: [
-			...senderCiphertext,
-			...senderAuthKey,
-			senderNonce,
-		] as [bigint, bigint, bigint, bigint, bigint, bigint, bigint],
+		senderBalancePCT,
 	};
 }
 
@@ -301,26 +316,21 @@ export function getDecryptedBalance(
 	const c2 = Array.from(balance.eGCT.c2);
 	const decryptedBalance = decryptPoint(privateKey, c1, c2);
 
-	if (totalBalance !== 0n) {
-		const expectedPoint = mulPointEscalar(Base8, totalBalance).map((value) =>
-			BigInt(value),
-		);
-		if (
-			decryptedBalance[0] !== expectedPoint[0] ||
-			decryptedBalance[1] !== expectedPoint[1]
-		) {
-			throw new Error("decrypted_eerc_balance_mismatch");
-		}
+	const expectedPoint = mulPointEscalar(Base8, totalBalance).map((value) =>
+		BigInt(value),
+	);
+	if (
+		decryptedBalance[0] !== expectedPoint[0] ||
+		decryptedBalance[1] !== expectedPoint[1]
+	) {
+		throw new Error("decrypted_eerc_balance_mismatch");
 	}
 
 	return totalBalance;
 }
 
 export function flattenEncryptedBalance(balance: EercBalance): bigint[] {
-	return [
-		...Array.from(balance.eGCT.c1),
-		...Array.from(balance.eGCT.c2),
-	];
+	return [...Array.from(balance.eGCT.c1), ...Array.from(balance.eGCT.c2)];
 }
 
 export function normalizeEercBalance(value: unknown): EercBalance {
@@ -345,7 +355,7 @@ export function normalizeEercBalance(value: unknown): EercBalance {
 		amountPCTs: Array.isArray(amountPCTs)
 			? amountPCTs.map((entry) => normalizeAmountPCT(entry))
 			: [],
-		balancePCT: normalizeBigintArray(balancePCT, "balancePCT"),
+		balancePCT: normalizePCT(balancePCT, "balancePCT"),
 		eGCT: {
 			c1: normalizePoint(c1, "eGCT.c1"),
 			c2: normalizePoint(c2, "eGCT.c2"),
@@ -353,7 +363,10 @@ export function normalizeEercBalance(value: unknown): EercBalance {
 	};
 }
 
-export function normalizePublicKey(value: unknown, label: string): [bigint, bigint] {
+export function normalizePublicKey(
+	value: unknown,
+	label: string,
+): [bigint, bigint] {
 	const point = normalizeBigintArray(value, label);
 	if (point.length !== 2) {
 		throw new Error(`invalid_${label}`);
@@ -362,17 +375,11 @@ export function normalizePublicKey(value: unknown, label: string): [bigint, bigi
 	return [point[0]!, point[1]!];
 }
 
-function normalizeAmountPCT(
-	value: unknown,
-): { pct: [bigint, bigint, bigint, bigint, bigint, bigint, bigint] } {
+function normalizeAmountPCT(value: unknown): { pct: PoseidonPCT } {
 	const pct = readTupleOrObject(value, 0, "pct");
-	const normalized = normalizeBigintArray(pct, "amountPCT.pct");
-	if (normalized.length !== 7) {
-		throw new Error("invalid_amount_pct");
-	}
 
 	return {
-		pct: normalized as [bigint, bigint, bigint, bigint, bigint, bigint, bigint],
+		pct: normalizePCT(pct, "amountPCT.pct"),
 	};
 }
 
@@ -411,6 +418,55 @@ function normalizeBigintArray(value: unknown, label: string): bigint[] {
 	}
 
 	return value.map((entry) => BigInt(entry as bigint | number | string));
+}
+
+function normalizeFixedBigintArray<T extends readonly bigint[]>(
+	value: unknown,
+	length: T["length"],
+	label: string,
+): T {
+	const normalized = normalizeBigintArray(value, label);
+	if (normalized.length !== length) {
+		throw new Error(`invalid_${label}`);
+	}
+
+	return normalized as unknown as T;
+}
+
+function normalizePCT(value: unknown, label: string): PoseidonPCT {
+	return normalizeFixedBigintArray<PoseidonPCT>(value, 7, label);
+}
+
+function processPoseidonPCT(
+	inputs: bigint[],
+	publicKey: bigint[],
+	label: string,
+): {
+	authKey: PoseidonAuthKey;
+	ciphertext: PoseidonCiphertext;
+	encRandom: bigint;
+	nonce: bigint;
+	pct: PoseidonPCT;
+} {
+	const encrypted = processPoseidonEncryption(inputs, publicKey);
+	const ciphertext = normalizeFixedBigintArray<PoseidonCiphertext>(
+		encrypted.ciphertext,
+		4,
+		`${label}.ciphertext`,
+	);
+	const authKey = normalizeFixedBigintArray<PoseidonAuthKey>(
+		encrypted.authKey,
+		2,
+		`${label}.authKey`,
+	);
+
+	return {
+		authKey,
+		ciphertext,
+		encRandom: encrypted.encRandom,
+		nonce: encrypted.nonce,
+		pct: [...ciphertext, ...authKey, encrypted.nonce] as PoseidonPCT,
+	};
 }
 
 // Ported from the vendored EncryptedERC TypeScript helpers in contracts/src.
@@ -482,9 +538,10 @@ function decryptPCT(
 	length = 1,
 ): bigint[] {
 	const values = Array.from(pct);
-	const ciphertext = values.slice(0, 4);
-	const authKey = values.slice(4, 6);
-	const nonce = values[6]!;
+	const normalized = normalizePCT(values, "pct");
+	const ciphertext = normalized.slice(0, 4);
+	const authKey = normalized.slice(4, 6);
+	const nonce = normalized[6];
 	const sharedKey = mulPointEscalar(
 		authKey as Point<bigint>,
 		formatPrivKeyForBabyJub(privateKey),

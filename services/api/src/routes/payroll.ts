@@ -496,7 +496,12 @@ async function streamPayrollProgress(
 			close();
 			return;
 		}
+		let progressInFlight = false;
 		interval = setInterval(() => {
+			if (progressInFlight) {
+				return;
+			}
+			progressInFlight = true;
 			void sendProgress()
 				.then((done) => {
 					if (done) {
@@ -506,6 +511,9 @@ async function streamPayrollProgress(
 				.catch((error: unknown) => {
 					request.log.error({ err: error }, "payroll sse failed");
 					close();
+				})
+				.finally(() => {
+					progressInFlight = false;
 				});
 		}, 2_000);
 	} catch (error) {
