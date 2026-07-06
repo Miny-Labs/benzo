@@ -10,6 +10,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "compile": "pnpm --filter @benzo/contracts compile",
+    "seed": "pnpm --filter @benzo/contracts seed",
     "test": "pnpm -r test",
     "lint": "biome lint",
     "lint:fix": "biome lint --write"

@@ -139,6 +139,64 @@ that window can't top the sender up again — either wait for the cooldown to
 expire or point the smoke at a fresh, funded sender address. (The smoke tolerates
 a cooldown revert and continues if the sender still holds enough tUSDC.)
 
+## Demo Seed
+
+`scripts/seed.ts` creates a repeatable populated demo world from
+`BENZO_SEED_PHRASE`. It is a chain-first seed: deterministic demo wallets are
+funded for gas, topped up with tUSDC, registered in the eERC `Registrar` with
+Node-side Groth16 proofs, and half of each account's target tUSDC balance is
+deposited privately. It also creates a payroll CSV, an open invoice pay link, an
+unclaimed gift link, and private transfer history. If `DATABASE_URL` is present,
+it mirrors the same world into the API tables for handles, contacts, onboarding
+state, org payroll, invites, activity, and audit log.
+
+Local Hardhat is the fallback path and deploys any missing local contracts:
+
+```bash
+BENZO_SEED_PHRASE="demo only local phrase" pnpm seed:local
+```
+
+Fuji and BenzoNet use their recorded deployment manifests:
+
+```bash
+BENZO_SEED_PHRASE="demo only fuji phrase" \
+RPC_URL=<fuji-rpc> PRIVATE_KEY=<deployer-key> PRIVATE_KEY_2=<auditor-key> \
+pnpm seed:fuji
+
+BENZO_SEED_PHRASE="demo only benzonet phrase" \
+BENZONET_RPC_URL=<l1-rpc> PRIVATE_KEY=<deployer-key> PRIVATE_KEY_2=<auditor-key> \
+BENZO_OPS_PRIVATE_KEY=<tx-allowlist-manager-key> \
+BENZO_DRIPPER_PRIVATE_KEY=<native-minter-key> \
+pnpm seed:benzonet
+```
+
+Useful knobs:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BENZO_SEED_TARGET` | `local` | `local`, `fuji`, or `benzonet`; the package scripts set this for you. |
+| `BENZO_SEED_COUNT` | `4` | Number of deterministic demo accounts. |
+| `BENZO_SEED_TUSDC_RAW` | `1000000000` | Target total tUSDC per account, in 6-decimal raw units. |
+| `BENZO_SEED_NATIVE_WEI` | `500000000000000000` | Minimum native gas balance per account. Fuji uses a plain AVAX transfer; BenzoNet uses the native-minter precompile. |
+| `BENZO_SEED_OUTPUT` | `contracts/.seed-fixtures.local.json` | Ignored local fixture state, including bearer gift material. |
+| `BENZO_SEED_PAYROLL_CSV` | `contracts/.seed-payroll.local.csv` | Ignored generated payroll CSV. |
+
+Reruns are idempotent for the same phrase, target, and chain id: registered
+accounts are reused, tUSDC/native balances are topped up to targets, private
+deposits only fill the missing private half, and historical transfers are
+deduped through the ignored seed output file. If `DATABASE_URL` is set, run the
+API migrations first:
+
+```bash
+pnpm --filter @benzo/api db:migrate
+```
+
+Fuji/BenzoNet seeding does not deploy missing workflow contracts. If
+`HandleRegistry`, `InvoiceRegistry`, or `GiftEscrow` is absent from the target
+manifest, the seed still writes the local fixture output and API mirror, but the
+corresponding on-chain handle/invoice/gift operation is skipped for the deploy
+step.
+
 ### Also deployed on BenzoNet (the permissioned L1)
 
 The identical converter stack is deployed on **BenzoNet**, Benzo's sovereign
