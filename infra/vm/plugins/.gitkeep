@@ -1,0 +1,2 @@
+# The subnet-evm VM binary (named <vmID>) is installed here by the operator.
+# It is gitignored — see infra/vm/README.md for the install step.

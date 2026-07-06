@@ -1,0 +1,6 @@
+{
+  "//": "Deploy this to the VALIDATOR at chains/<blockchainID>/config.json. The validator only validates — no eth query APIs, no admin API. All read traffic goes to the dedicated rpc-node instead.",
+  "eth-apis": [],
+  "pruning-enabled": true,
+  "log-level": "info"
+}

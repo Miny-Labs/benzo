@@ -1,0 +1,4 @@
+{
+  "validatorOnly": true,
+  "allowedNodes": ["NodeID-REPLACE_WITH_RPC_NODE_ID"]
+}

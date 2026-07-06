@@ -1,0 +1,5 @@
+{
+  "eth-apis": ["eth", "eth-filter", "net", "web3"],
+  "pruning-enabled": false,
+  "log-level": "info"
+}

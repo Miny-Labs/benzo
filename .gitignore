@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# --- BenzoNet VM binaries (operator-installed subnet-evm plugin) ---
+infra/vm/plugins/*
+!infra/vm/plugins/.gitkeep
+
 # --- node / ts ---
 node_modules/
 .pnpm-store/
