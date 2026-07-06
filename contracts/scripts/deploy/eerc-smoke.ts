@@ -1,5 +1,7 @@
+import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { ethers } from "hardhat";
 import {
+	type EercAccount,
 	type EercBalance,
 	createEercAccount,
 	encryptAmountPCT,
@@ -19,6 +21,7 @@ import {
 const DEPOSIT_AMOUNT = 100_000_000n;
 const TRANSFER_AMOUNT = 25_000_000n;
 const WITHDRAW_AMOUNT = 5_000_000n;
+const SMOKE_SENDER_KEY_ENV = "SMOKE_SENDER_BABYJUB_PRIVATE_KEY";
 
 const assertEqual = (label: string, actual: bigint, expected: bigint) => {
 	if (actual !== expected) {
@@ -28,6 +31,58 @@ const assertEqual = (label: string, actual: bigint, expected: bigint) => {
 
 const hasCode = async (address: string) =>
 	(await ethers.provider.getCode(address)) !== "0x";
+
+const createSmokeSenderAccount = async (senderSigner: SignerWithAddress) => {
+	const configuredPrivateKey = process.env[SMOKE_SENDER_KEY_ENV]?.trim();
+	if (configuredPrivateKey !== undefined && configuredPrivateKey !== "") {
+		return createEercAccount(BigInt(configuredPrivateKey));
+	}
+
+	const chainId = (await ethers.provider.getNetwork()).chainId;
+	const signature = await senderSigner.signMessage(
+		[
+			"Benzo eERC smoke BabyJubJub key v1",
+			`chainId:${chainId.toString()}`,
+			`sender:${senderSigner.address.toLowerCase()}`,
+		].join("\n"),
+	);
+
+	return createEercAccount(BigInt(ethers.keccak256(signature)));
+};
+
+const registerSmokeAccount = async ({
+	account,
+	keyHint,
+	label,
+	registrar,
+	signer,
+}: {
+	account: EercAccount;
+	keyHint: string;
+	label: string;
+	registrar: Parameters<typeof registerEercAccount>[0];
+	signer: SignerWithAddress;
+}) => {
+	try {
+		const registration = await registerEercAccount(registrar, signer, account);
+		if (registration?.transactionHash !== undefined) {
+			console.log(`${label} registered: ${registration.transactionHash}`);
+		} else {
+			console.log(`${label} already registered: ${signer.address}`);
+		}
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			error.message.includes("already registered with another eERC key")
+		) {
+			throw new Error(
+				`${label} ${signer.address} is already registered with a different eERC key. ${keyHint}`,
+			);
+		}
+
+		throw error;
+	}
+};
 
 const loadDeployment = async (deployIfMissing: boolean) => {
 	let record = await getEercDeploymentRecord();
@@ -59,7 +114,6 @@ const loadDeployment = async (deployIfMissing: boolean) => {
 
 	await deployEercConverterStack({
 		configureAuditor: true,
-		printPrivateKey: false,
 	});
 	record = await getEercDeploymentRecord();
 	requireDeploymentRecord(record.eercDeployment, ["encryptedERC"]);
@@ -102,21 +156,86 @@ export const runEercSmoke = async (
 		encryptedERCRecord.address,
 	);
 	const testUSDC = await ethers.getContractAt("TestUSDC", testUSDCRecord.address);
-	const senderAccount = createEercAccount(
-		process.env.SMOKE_SENDER_BABYJUB_PRIVATE_KEY === undefined
-			? undefined
-			: BigInt(process.env.SMOKE_SENDER_BABYJUB_PRIVATE_KEY),
-	);
+	const senderAccount = await createSmokeSenderAccount(senderSigner);
 	const receiverAccount = await loadStoredAuditorAccount(receiverSigner.address);
 
-	await registerEercAccount(registrar, senderSigner, senderAccount);
-	await registerEercAccount(registrar, receiverSigner, receiverAccount);
+	await registerSmokeAccount({
+		account: senderAccount,
+		keyHint: `Set ${SMOKE_SENDER_KEY_ENV} to the BabyJubJub private key used for the existing registration or use a fresh sender EOA.`,
+		label: "Smoke sender",
+		registrar,
+		signer: senderSigner,
+	});
+	await registerSmokeAccount({
+		account: receiverAccount,
+		keyHint:
+			"Ensure contracts/.auditor-key.local.json matches the on-chain auditor registration.",
+		label: "Smoke receiver",
+		registrar,
+		signer: receiverSigner,
+	});
 
-	let senderPublicBalance = await testUSDC.balanceOf(senderSigner.address);
-	if (senderPublicBalance < DEPOSIT_AMOUNT) {
-		await (await testUSDC.connect(senderSigner).faucet()).wait();
-		senderPublicBalance = await testUSDC.balanceOf(senderSigner.address);
-	}
+	const getDecryptedSmokeBalance = async (
+		owner: string,
+		tokenId: bigint,
+		account: EercAccount,
+	) => {
+		if (tokenId === 0n) {
+			return 0n;
+		}
+
+		const encryptedBalance = (await encryptedERC.balanceOf(
+			owner,
+			tokenId,
+		)) as EercBalance;
+		return getDecryptedBalance(account.privateKey, encryptedBalance);
+	};
+
+	const ensureSenderPublicBalance = async () => {
+		let balance = await testUSDC.balanceOf(senderSigner.address);
+		if (balance >= DEPOSIT_AMOUNT) {
+			return balance;
+		}
+
+		try {
+			await (await testUSDC.connect(senderSigner).faucet()).wait();
+		} catch (error) {
+			balance = await testUSDC.balanceOf(senderSigner.address);
+			if (balance >= DEPOSIT_AMOUNT) {
+				console.warn(
+					"tUSDC faucet failed; continuing with existing sender balance.",
+				);
+				return balance;
+			}
+
+			console.warn(
+				"tUSDC faucet failed and sender balance is below the deposit amount.",
+			);
+			throw error;
+		}
+
+		balance = await testUSDC.balanceOf(senderSigner.address);
+		if (balance < DEPOSIT_AMOUNT) {
+			throw new Error(
+				`Smoke sender has ${balance} tUSDC after faucet; ${DEPOSIT_AMOUNT} required.`,
+			);
+		}
+
+		return balance;
+	};
+
+	const tokenIdBeforeDeposit = await encryptedERC.tokenIds(testUSDCRecord.address);
+	const senderBalanceBeforeDeposit = await getDecryptedSmokeBalance(
+		senderSigner.address,
+		tokenIdBeforeDeposit,
+		senderAccount,
+	);
+	const receiverBalanceBeforeTransfer = await getDecryptedSmokeBalance(
+		receiverSigner.address,
+		tokenIdBeforeDeposit,
+		receiverAccount,
+	);
+	const senderPublicBalance = await ensureSenderPublicBalance();
 
 	await (
 		await testUSDC
@@ -152,7 +271,7 @@ export const runEercSmoke = async (
 	assertEqual(
 		"sender decrypted balance after deposit",
 		senderDecryptedBalance,
-		DEPOSIT_AMOUNT,
+		senderBalanceBeforeDeposit + DEPOSIT_AMOUNT,
 	);
 
 	const auditorPublicKey = receiverAccount.publicKey;
@@ -188,7 +307,7 @@ export const runEercSmoke = async (
 	assertEqual(
 		"sender decrypted balance after transfer",
 		senderDecryptedBalance,
-		DEPOSIT_AMOUNT - TRANSFER_AMOUNT,
+		senderBalanceBeforeDeposit + DEPOSIT_AMOUNT - TRANSFER_AMOUNT,
 	);
 
 	let receiverEncryptedBalance = (await encryptedERC.balanceOf(
@@ -202,7 +321,7 @@ export const runEercSmoke = async (
 	assertEqual(
 		"receiver decrypted balance after transfer",
 		receiverDecryptedBalance,
-		TRANSFER_AMOUNT,
+		receiverBalanceBeforeTransfer + TRANSFER_AMOUNT,
 	);
 
 	const receiverPublicBeforeWithdraw = await testUSDC.balanceOf(
@@ -243,7 +362,7 @@ export const runEercSmoke = async (
 	assertEqual(
 		"receiver decrypted balance after withdraw",
 		receiverDecryptedBalance,
-		TRANSFER_AMOUNT - WITHDRAW_AMOUNT,
+		receiverBalanceBeforeTransfer + TRANSFER_AMOUNT - WITHDRAW_AMOUNT,
 	);
 
 	const result = {

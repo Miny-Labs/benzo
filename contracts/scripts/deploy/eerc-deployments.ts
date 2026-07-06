@@ -11,19 +11,26 @@ import {
 } from "./eerc-crypto";
 
 const FUJI_CHAIN_ID = 43113;
-const DEPLOYMENTS_DIR = path.join(__dirname, "..", "..", "deployments");
-const AUDITOR_KEY_PATH = path.join(
-	__dirname,
-	"..",
-	"..",
-	".auditor-key.local.json",
-);
+const CONTRACTS_WORKSPACE = path.join(__dirname, "..", "..");
+const DEPLOYMENTS_DIR = path.join(CONTRACTS_WORKSPACE, "deployments");
+const AUDITOR_KEY_PATH = path.join(CONTRACTS_WORKSPACE, ".auditor-key.local.json");
+const VERIFY_TIMEOUT_MS = 90_000;
 const EERC_KEY = "eercConverter";
+
+type DeploymentJsonValue =
+	| null
+	| boolean
+	| number
+	| string
+	| DeploymentJsonValue[]
+	| { [key: string]: DeploymentJsonValue };
 
 type DeploymentRecord = {
 	address: string;
 	blockNumber?: number;
+	constructorArguments?: DeploymentJsonValue[];
 	deployer?: string;
+	libraries?: Record<string, string>;
 	snowtraceUrl?: string;
 	transactionHash?: string;
 	verified?: boolean;
@@ -120,6 +127,95 @@ const isDeploymentRecord = (value: unknown): value is DeploymentRecord =>
 const hasCode = async (address: string) =>
 	(await ethers.provider.getCode(address)) !== "0x";
 
+class VerificationTimeoutError extends Error {
+	constructor(address: string) {
+		super(
+			`Routescan verification timed out for ${address} after ${VERIFY_TIMEOUT_MS / 1000}s`,
+		);
+		this.name = "VerificationTimeoutError";
+	}
+}
+
+const serializeVerificationValue = (value: unknown): DeploymentJsonValue => {
+	if (value === undefined || value === null) {
+		return null;
+	}
+
+	if (
+		typeof value === "string" ||
+		typeof value === "number" ||
+		typeof value === "boolean"
+	) {
+		return value;
+	}
+
+	if (typeof value === "bigint") {
+		return value.toString();
+	}
+
+	if (Array.isArray(value)) {
+		return value.map(serializeVerificationValue);
+	}
+
+	if (typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>).map(([key, nestedValue]) => [
+				key,
+				serializeVerificationValue(nestedValue),
+			]),
+		) as Record<string, DeploymentJsonValue>;
+	}
+
+	return String(value);
+};
+
+const recordVerificationInputs = (
+	record: DeploymentRecord,
+	constructorArguments: unknown[],
+	libraries?: Record<string, string>,
+) => {
+	record.constructorArguments = constructorArguments.map(serializeVerificationValue);
+	if (libraries === undefined) {
+		delete record.libraries;
+	} else {
+		record.libraries = libraries;
+	}
+};
+
+const ensureContractsWorkspaceCwd = () => {
+	const contractsWorkspace = path.resolve(CONTRACTS_WORKSPACE);
+	if (process.cwd() !== contractsWorkspace) {
+		process.chdir(contractsWorkspace);
+	}
+};
+
+const runVerifyWithTimeout = async (
+	address: string,
+	verifyArgs: {
+		address: string;
+		constructorArguments: unknown[];
+		libraries?: Record<string, string>;
+	},
+) => {
+	ensureContractsWorkspaceCwd();
+
+	let timeout: NodeJS.Timeout | undefined;
+	try {
+		await Promise.race([
+			run("verify:verify", verifyArgs),
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(() => {
+					reject(new VerificationTimeoutError(address));
+				}, VERIFY_TIMEOUT_MS);
+			}),
+		]);
+	} finally {
+		if (timeout !== undefined) {
+			clearTimeout(timeout);
+		}
+	}
+};
+
 export const getDeploymentContext = async (): Promise<DeployContext> => {
 	const [deployer] = await ethers.getSigners();
 	const chainId = Number((await ethers.provider.getNetwork()).chainId);
@@ -155,7 +251,11 @@ const verifyRecord = async ({
 	pathSegments: string[];
 	record: DeploymentRecord;
 }) => {
+	recordVerificationInputs(record, constructorArguments, libraries);
+	setPath(getEercDeployment(context.deployments), pathSegments, record);
+
 	if (network.name !== "fuji") {
+		await writeDeployments(context);
 		return;
 	}
 
@@ -164,16 +264,21 @@ const verifyRecord = async ({
 	// the whole deploy for minutes per contract. Contracts are still live and
 	// visible on the explorer; verify separately later.
 	if (process.env.SKIP_VERIFY === "1") {
-		record.verified = false;
+		record.verified = record.verified ?? false;
+		if (!record.verified) {
+			delete record.verifiedAt;
+		}
+		await writeDeployments(context);
 		return;
 	}
 
 	if (record.verified) {
+		await writeDeployments(context);
 		return;
 	}
 
 	try {
-		await run("verify:verify", {
+		await runVerifyWithTimeout(record.address, {
 			address: record.address,
 			constructorArguments,
 			...(libraries === undefined ? {} : { libraries }),
@@ -182,11 +287,16 @@ const verifyRecord = async ({
 		record.verifiedAt = new Date().toISOString();
 	} catch (error) {
 		record.verified = false;
-		console.warn(`Routescan verification failed for ${record.address}`);
+		delete record.verifiedAt;
+		if (error instanceof VerificationTimeoutError) {
+			console.warn(error.message);
+			console.warn("Continuing with the next contract; re-run verification later.");
+		} else {
+			console.warn(`Routescan verification failed for ${record.address}`);
+		}
 		console.warn(error);
 	}
 
-	setPath(getEercDeployment(context.deployments), pathSegments, record);
 	await writeDeployments(context);
 };
 
@@ -240,6 +350,7 @@ const deployContract = async ({
 			? { snowtraceUrl: snowtraceAddressUrl(address) }
 			: {}),
 	};
+	recordVerificationInputs(record, constructorArguments, libraries);
 
 	console.log(`${contractName} deployed: ${address}`);
 	setPath(eercDeployment, pathSegments, record);
@@ -410,7 +521,6 @@ const getAuditorSigner = async () => {
 const getOrCreateAuditorAccount = async (
 	context: DeployContext,
 	auditorAddress: string,
-	options: { printPrivateKey?: boolean },
 ) => {
 	const keyFile = await readAuditorKeyFile();
 	keyFile.auditors = keyFile.auditors ?? {};
@@ -431,20 +541,12 @@ const getOrCreateAuditorAccount = async (
 	console.log(`Auditor BabyJubJub key written: ${AUDITOR_KEY_PATH}`);
 	console.log(`Network: ${network.name} (${context.chainId})`);
 	console.log(`Auditor address: ${auditorAddress}`);
-	if (options.printPrivateKey !== false) {
-		console.log(`Auditor private key: ${account.privateKey.toString()}`);
-		console.log(
-			"Operator must custody this value until M3 sealed storage imports it.",
-		);
-	}
+	console.log("Auditor private key is stored only in the local key file.");
 
 	return account;
 };
 
-export const configureAuditor = async (
-	context: DeployContext,
-	options: { printPrivateKey?: boolean } = {},
-) => {
+export const configureAuditor = async (context: DeployContext) => {
 	const eercDeployment = getEercDeployment(context.deployments);
 	const encryptedERCRecord = getPath(eercDeployment, ["encryptedERC"]);
 	const registrarRecord = getPath(eercDeployment, ["registrar"]);
@@ -479,12 +581,7 @@ export const configureAuditor = async (
 	const auditorAccount: EercAccount = await getOrCreateAuditorAccount(
 		context,
 		auditorSigner.address,
-		options,
 	);
-
-	if (options.printPrivateKey === false) {
-		console.log("Auditor private key printing suppressed by caller.");
-	}
 
 	const registration = await registerEercAccount(
 		registrar,
@@ -515,7 +612,7 @@ export const configureAuditor = async (
 };
 
 export const deployEercConverterStack = async (
-	options: { configureAuditor?: boolean; printPrivateKey?: boolean } = {},
+	options: { configureAuditor?: boolean } = {},
 ) => {
 	const context = await getDeploymentContext();
 	await deployVerifiers(context);
@@ -524,9 +621,7 @@ export const deployEercConverterStack = async (
 	await deployEncryptedERC(context);
 
 	if (options.configureAuditor !== false) {
-		await configureAuditor(context, {
-			printPrivateKey: options.printPrivateKey,
-		});
+		await configureAuditor(context);
 	}
 
 	return context;
