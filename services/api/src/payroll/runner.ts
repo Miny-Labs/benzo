@@ -220,10 +220,19 @@ async function processPayrollItem(
 		return;
 	}
 
+	// Only advance a run into "running" from a startable state. An operator can
+	// pause the run concurrently (written outside the advisory lock); guarding on
+	// status keeps this update from reverting that pause back to "running", which
+	// would let the next item's job slip past the pause check.
 	await db
 		.update(payrollRuns)
 		.set({ status: "running", updatedAt: new Date() })
-		.where(eq(payrollRuns.id, row.run.id));
+		.where(
+			and(
+				eq(payrollRuns.id, row.run.id),
+				inArray(payrollRuns.status, ["ready", "running"]),
+			),
+		);
 
 	const [started] = await db
 		.update(payrollItems)
