@@ -462,10 +462,11 @@ export const orgTreasuries = pgTable(
 			.references(() => orgs.id, { onDelete: "cascade" }),
 		address: text("address").notNull(),
 		// Sealed under APP_MASTER_KEY (AES-256-GCM). Never returned in responses,
-		// never logged; unsealed only in the payroll worker. sealedEercKey is set
-		// when the treasury completes server-side eERC registration.
+		// never logged; unsealed only in the payroll worker. sealedEercKey is
+		// persisted before the on-chain eERC registration so retries reuse it.
 		sealedEoaKey: bytea("sealed_eoa_key").notNull(),
 		sealedEercKey: bytea("sealed_eerc_key"),
+		eercRegisteredAt: timestamp("eerc_registered_at", { withTimezone: true }),
 		// Custody is an explicit consent moment: "Benzo holds this treasury key
 		// on its servers." Recorded before the first run and surfaced to the console.
 		consentedAt: timestamp("consented_at", { withTimezone: true }),
@@ -519,7 +520,12 @@ export const payrollItems = pgTable(
 		amount: text("amount").notNull(),
 		status: payrollItemStatus("status").notNull().default("pending"),
 		attempt: integer("attempt").notNull().default(0),
+		confirmationAttempt: integer("confirmation_attempt").notNull().default(0),
 		txHash: text("tx_hash"),
+		// Sealed under APP_MASTER_KEY: a signed raw transfer is re-broadcastable
+		// and reveals recipient/amount, so it is never stored in the clear. Held
+		// only between broadcast and confirmation, then cleared to null.
+		submissionRawTx: bytea("submission_raw_tx"),
 		error: text("error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()

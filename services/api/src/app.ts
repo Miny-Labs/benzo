@@ -43,6 +43,16 @@ import { orgsRoutes } from "./routes/orgs.js";
 import { payrollRoutes } from "./routes/payroll.js";
 import type { PgBoss } from "pg-boss";
 import type { Pool } from "pg";
+import {
+	createViemPayrollSubmitter,
+	createViemTreasuryRegistrar,
+	type PayrollSubmitter,
+	type TreasuryRegistrar,
+} from "./payroll/chain.js";
+import {
+	createSnarkjsPayrollProver,
+	type PayrollProver,
+} from "./payroll/prover.js";
 
 export type BuildAppOptions = {
 	adminChain?: AdminChainClient;
@@ -55,8 +65,11 @@ export type BuildAppOptions = {
 	logger?: FastifyServerOptions["logger"];
 	onboarding?: OnboardingOrchestrator;
 	onboardingChain?: OnboardingChainClient;
+	payrollProver?: PayrollProver;
+	payrollSubmitter?: PayrollSubmitter;
 	pool?: Pool;
 	startBoss?: boolean;
+	treasuryRegistrar?: TreasuryRegistrar;
 };
 
 export async function buildApp(options: BuildAppOptions = {}) {
@@ -89,6 +102,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	const chain = options.chain ?? createViemChainLogSource(publicClient);
 	const adminChain =
 		options.adminChain ?? createAdminChainClient(config, publicClient);
+	const payrollProver =
+		options.payrollProver ?? createSnarkjsPayrollProver(config);
+	const payrollSubmitter =
+		options.payrollSubmitter ??
+		createViemPayrollSubmitter(config, publicClient);
+	const treasuryRegistrar =
+		options.treasuryRegistrar ??
+		createViemTreasuryRegistrar(config, publicClient, payrollProver);
 	let bossStarted = false;
 
 	fastify.addHook("onClose", async () => {
@@ -121,8 +142,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		await fastify.register(activityRoutes, { db });
 		await fastify.register(auditorRoutes, { config, db });
 		await fastify.register(adminRoutes, { adminChain, chain, config, db });
-		await fastify.register(orgsRoutes, { config, db });
-		await fastify.register(payrollRoutes, { db });
+		await fastify.register(orgsRoutes, {
+			config,
+			db,
+			onboardingChain,
+			treasuryRegistrar,
+		});
+		await fastify.register(payrollRoutes, { boss, db });
 
 		if (options.startBoss !== false) {
 			await boss.start();
@@ -139,6 +165,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
 				{
 					chain,
 					config,
+				},
+				{
+					config,
+					pool,
+					prover: payrollProver,
+					submitter: payrollSubmitter,
 				},
 			);
 		}

@@ -1,9 +1,15 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 const hex32BytesPattern = /^(?:0x)?[0-9a-fA-F]{64}$/;
 const privateKeyPattern = /^0x[0-9a-fA-F]{64}$/;
 const weiPattern = /^(0|[1-9][0-9]*)$/;
 const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
+const defaultPayrollZkArtifactDir = path.resolve(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"../zk-artifacts",
+);
 const defaultDripWei = "500000000000000000";
 const fujiChainId = 43_113;
 const benzonetChainId = 68_420;
@@ -64,6 +70,13 @@ const envSchema = z
 			.int()
 			.positive()
 			.default(15),
+		PAYROLL_EERC_DECIMALS: z.coerce.number().int().min(0).max(18).default(6),
+		PAYROLL_TOKEN_ID: z.coerce.bigint().nonnegative().default(1n),
+		PAYROLL_ZK_ARTIFACT_DIR: z
+			.string()
+			.trim()
+			.min(1)
+			.default(defaultPayrollZkArtifactDir),
 		PORT: z.coerce.number().int().positive().default(3000),
 		SESSION_COOKIE_NAME: z.string().min(1).default("benzo_session"),
 		SESSION_TTL_DAYS: z.coerce.number().int().positive().default(7),
@@ -116,6 +129,9 @@ const envSchema = z
 		onboardingRegistrationPollSeconds:
 			env.ONBOARDING_REGISTRATION_POLL_SECONDS,
 		opsPrivateKey: env.OPS_PRIVATE_KEY,
+		payrollEercDecimals: env.PAYROLL_EERC_DECIMALS,
+		payrollTokenId: env.PAYROLL_TOKEN_ID,
+		payrollZkArtifactDir: path.resolve(env.PAYROLL_ZK_ARTIFACT_DIR),
 		port: env.PORT,
 		sessionCookieName: env.SESSION_COOKIE_NAME,
 		sessionTtlDays: env.SESSION_TTL_DAYS,

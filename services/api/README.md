@@ -24,6 +24,9 @@ number from `BENZONET_RPC_URL`.
 | `BENZONET_RPC_URL` | No | Avalanche Fuji, local anvil, or BenzoNet JSON-RPC URL used for health, SIWE signature verification fallbacks, and the eERC indexer. Defaults to the live Fuji RPC. |
 | `OPS_PRIVATE_KEY` | Yes | `0x`-prefixed operator key used for network-admin writes: auditor rotation, BenzoNet allowlist updates, and admin gas drips. It is validated at boot but never logged. |
 | `APP_MASTER_KEY` | Yes | 32-byte hex key reserved for libsodium secretbox encrypted-at-rest fields. It may include `0x`; the service normalizes it internally. |
+| `PAYROLL_ZK_ARTIFACT_DIR` | No | Directory containing `registration.wasm`, `registration.zkey`, `transfer.wasm`, and `transfer.zkey` for server-side treasury registration and payroll proving. Defaults to `services/api/zk-artifacts`. |
+| `PAYROLL_TOKEN_ID` | No | eERC converter token id used for payroll private transfers. Defaults to `1` (the first wrapped token). |
+| `PAYROLL_EERC_DECIMALS` | No | Decimal precision used when scaling CSV amounts to eERC transfer values. Defaults to `6`. |
 | `BENZONET_CHAIN_ID` | No | SIWE chain id. Defaults to Fuji `43113`; set to BenzoNet `68420` when `CHAIN_ENV=benzonet`. |
 | `CHAIN_ENV` | No | `fuji` or `benzonet`. Defaults to `fuji` when `BENZONET_CHAIN_ID=43113`, otherwise `benzonet`. Config load rejects mismatched chain ids. Fuji records tx allowlist as a no-op and drips gas with a plain AVAX transfer. |
 | `KYC_PROVIDER` | No | Currently only `mock`. The mock provider records name/country only and never accepts documents. |
@@ -87,11 +90,27 @@ and return `404` (not `403`) to non-members so org existence isn't leaked.
 payroll run can't prove client-side without pinning a browser tab. Each org may
 opt into a server-held treasury: `POST /orgs/:id/treasury` generates an EOA,
 seals its private key under `APP_MASTER_KEY` (AES-256-GCM — equivalent AEAD
-guarantee to libsodium secretbox, no native dependency), and records the
-custody consent moment (`consent: true` is required). The sealed key is unsealed
-only in the payroll worker; it is never returned or logged. Server-side eERC
-registration (which populates `sealed_eerc_key`) and the CSV intake + proving
-runner land in a follow-up.
+guarantee to libsodium secretbox, no native dependency), records the custody
+consent moment (`consent: true` is required), runs treasury allowlist/gas
+onboarding, registers the treasury with the eERC Registrar, and seals the
+managed BabyJubJub key in `sealed_eerc_key`. The sealed keys are unsealed only
+inside payroll registration/worker code; they are never returned or logged.
+
+Server-side Groth16 proving needs local generated artifacts. Build them from
+the contracts workspace, then copy only the runtime files into the ignored API
+artifact directory:
+
+```bash
+HOME=/tmp/benzo-zkit-45 pnpm --filter @benzo/contracts zkit:make
+mkdir -p services/api/zk-artifacts
+cp contracts/zkit/artifacts/circuits/registration.circom/RegistrationCircuit_js/RegistrationCircuit.wasm services/api/zk-artifacts/registration.wasm
+cp contracts/zkit/artifacts/circuits/registration.circom/RegistrationCircuit.groth16.zkey services/api/zk-artifacts/registration.zkey
+cp contracts/zkit/artifacts/circuits/transfer.circom/TransferCircuit_js/TransferCircuit.wasm services/api/zk-artifacts/transfer.wasm
+cp contracts/zkit/artifacts/circuits/transfer.circom/TransferCircuit.groth16.zkey services/api/zk-artifacts/transfer.zkey
+```
+
+Do not commit `services/api/zk-artifacts/`; `.wasm` and `.zkey` files are
+generated proving artifacts.
 
 ## Activity Indexer
 
