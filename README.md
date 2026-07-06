@@ -21,11 +21,16 @@ compliance demands it.
 This repo is the Benzo entry for the **Avalanche Team1 India Speedrun —
 Privacy on Avalanche** (July 1–19, 2026).
 
-> **Status: fresh scaffold.** Benzo previously shipped a full shielded-USDC
-> protocol on Stellar/Soroban (16 Soroban contracts, 16 Groth16 circuits, a
-> wallet, and a business console on Stellar testnet). That implementation was
-> retired when the project pivoted chains; it is preserved in git history at
-> tag/commit `fbb4d4e`. Everything from here forward targets Avalanche Fuji.
+> **Status: live on Avalanche Fuji.** The eERC private-token stack is deployed
+> to Fuji C-Chain (chain id `43113`) and verified end-to-end — mint → shield →
+> confidential transfer → withdraw, with on-chain Groth16 proof verification.
+> Addresses are in [`contracts/deployments/fuji.json`](contracts/deployments/fuji.json)
+> and listed under [Deployed on Fuji](#deployed-on-fuji) below.
+>
+> Benzo previously shipped a full shielded-USDC protocol on Stellar/Soroban
+> (16 Soroban contracts, 16 Groth16 circuits, a wallet, and a business console
+> on Stellar testnet); that implementation was retired when the project pivoted
+> chains and is preserved in git history at tag/commit `fbb4d4e`.
 
 ## The Two Privacy Primitives
 
@@ -67,11 +72,35 @@ Key protocol facts that shape the code:
   circuit's `.wasm` + `.zkey` must be copied into the app's `public/` and
   wired into the SDK's `circuitURLs`.
 
+## Deployed on Fuji
+
+The eERC converter stack is live on **Avalanche Fuji C-Chain** (chain id `43113`).
+Full record — every address, deploy tx hash, and Snowtrace link — is in
+[`contracts/deployments/fuji.json`](contracts/deployments/fuji.json).
+
+| Contract | Address |
+|---|---|
+| EncryptedERC (converter) | [`0x46688f1704a69a6c276cCCB823E36C80787B0FA2`](https://testnet.snowtrace.io/address/0x46688f1704a69a6c276cCCB823E36C80787B0FA2) |
+| Registrar | [`0x9a63FEa9851097DBAf3757b636217fdde50ABaF0`](https://testnet.snowtrace.io/address/0x9a63FEa9851097DBAf3757b636217fdde50ABaF0) |
+| TestUSDC (tUSDC, demo faucet) | [`0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f`](https://testnet.snowtrace.io/address/0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f) |
+
+Plus five Groth16 verifiers (registration / mint / transfer / withdraw / burn).
+The auditor public key is set and its account registered.
+
+**Wrapped token.** The converter wraps any ERC-20 by address, so it supports two:
+
+- **Circle USDC** — official testnet USD Coin (`0x5425890298aed601595a70AB815c96711a31Bc65`,
+  6 decimals) is the real asset Benzo shields. Get it from the
+  [Circle testnet faucet](https://faucet.circle.com) (Avalanche Fuji).
+- **tUSDC** — our own 6-decimal token with an unlimited public faucet, for
+  frictionless demos (Circle's faucet is rate-limited to 20 USDC / 2h).
+
 ## Repository Layout
 
 ```text
-contracts/    Hardhat workspace targeting Fuji (eERC integration lands here)
+contracts/    Hardhat workspace — eERC stack deployed to Fuji (deployments/fuji.json)
 apps/         Frontend app(s) — wagmi v2 + viem v2 + @avalabs/eerc-sdk (planned)
+services/     Hosted API — Fastify + Postgres (onboarding, identity, jobs)
 assets/       Brand assets
 ```
 
