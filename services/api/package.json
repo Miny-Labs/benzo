@@ -13,6 +13,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "dev": "tsx watch src/index.ts",
+    "index:backfill": "tsx src/indexer/backfill.ts",
     "start": "node dist/index.js",
     "test": "vitest run"
   },

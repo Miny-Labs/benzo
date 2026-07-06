@@ -5,6 +5,8 @@ import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
 import { auditLog } from "../db/schema.js";
 import { expireCreatedInvites } from "../identity/invites.js";
+import type { ChainLogSource } from "../indexer/chain.js";
+import { runIndexerOnce } from "../indexer/scanner.js";
 import {
 	enqueueOutstandingOnboardings,
 	handleOnboardingFailedJob,
@@ -17,6 +19,7 @@ import {
 
 export const JOB_QUEUES = {
 	demoAudit: "demo.audit",
+	eercIndexer: "eerc.indexer.poll",
 	invitesExpire: "invites.expire",
 	onboardingAdvance: ONBOARDING_ADVANCE_QUEUE,
 	onboardingFailed: ONBOARDING_FAILED_QUEUE,
@@ -37,10 +40,16 @@ export type InviteExpireJobData = {
 	scheduled: true;
 };
 
+type EercIndexerJobData = {
+	requestedAt: string;
+};
+
 export function createBoss(config: ApiConfig): PgBoss {
 	return new PgBoss({
 		application_name: "benzo-api",
 		connectionString: config.databaseUrl,
+		cronMonitorIntervalSeconds: 5,
+		cronWorkerIntervalSeconds: 5,
 	});
 }
 
@@ -74,6 +83,12 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
 		{ scheduled: true } satisfies InviteExpireJobData,
 		{ key: "hourly" },
 	);
+	await boss.createQueue(JOB_QUEUES.eercIndexer, {
+		deleteAfterSeconds: 86_400,
+		expireInSeconds: 60,
+		retryLimit: 2,
+		retentionSeconds: 604_800,
+	});
 }
 
 export async function registerJobs(
@@ -81,6 +96,10 @@ export async function registerJobs(
 	db: Database,
 	logger: FastifyBaseLogger,
 	onboarding?: OnboardingWorkerOptions,
+	options?: {
+		chain?: ChainLogSource;
+		config?: ApiConfig;
+	},
 ): Promise<void> {
 	await ensureQueues(boss);
 	await boss.work<DemoAuditJobData>(
@@ -114,6 +133,47 @@ export async function registerJobs(
 			);
 		},
 	);
+
+	if (options?.config?.indexerEnabled && options.chain) {
+		await boss.schedule(
+			JOB_QUEUES.eercIndexer,
+			options.config.indexerPollCron,
+			{
+				requestedAt: new Date().toISOString(),
+			},
+			{
+				singletonKey: "eerc-indexer-poll",
+				singletonSeconds: 4,
+			},
+		);
+		await boss.work<EercIndexerJobData>(
+			JOB_QUEUES.eercIndexer,
+			{ batchSize: 1 },
+			async ([job]) => {
+				if (!job || !options.config || !options.chain) {
+					return;
+				}
+
+				const result = await runIndexerOnce({
+					chain: options.chain,
+					config: options.config,
+					db,
+					logger,
+				});
+
+				logger.info(
+					{
+						confirmedBlock: result.confirmedBlock,
+						jobId: job.id,
+						latestBlock: result.latestBlock,
+						queue: JOB_QUEUES.eercIndexer,
+						requestedAt: job.data.requestedAt,
+					},
+					"eerc indexer poll processed",
+				);
+			},
+		);
+	}
 
 	if (!onboarding) {
 		return;

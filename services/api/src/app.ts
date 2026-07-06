@@ -17,6 +17,10 @@ import {
 	createNoopOnboardingOrchestrator,
 	type OnboardingOrchestrator,
 } from "./identity/onboarding.js";
+import {
+	createViemChainLogSource,
+	type ChainLogSource,
+} from "./indexer/chain.js";
 import { createBoss, registerJobs } from "./jobs/index.js";
 import {
 	createOnboardingChainClient,
@@ -24,6 +28,8 @@ import {
 } from "./onboarding/chain.js";
 import { createKycProvider, type KycProvider } from "./onboarding/kyc.js";
 import authPlugin from "./plugins/auth.js";
+import { adminRoutes } from "./routes/admin.js";
+import { activityRoutes } from "./routes/activity.js";
 import { authRoutes } from "./routes/auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { identityRoutes } from "./routes/identity.js";
@@ -33,6 +39,7 @@ import type { Pool } from "pg";
 
 export type BuildAppOptions = {
 	boss?: PgBoss;
+	chain?: ChainLogSource;
 	config?: ApiConfig;
 	db?: Database;
 	identityChain?: IdentityChainClient;
@@ -71,6 +78,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		options.onboardingChain ??
 		createOnboardingChainClient(config, publicClient);
 	const kycProvider = options.kycProvider ?? createKycProvider(config);
+	const chain = options.chain ?? createViemChainLogSource(publicClient);
 	let bossStarted = false;
 
 	fastify.addHook("onClose", async () => {
@@ -100,15 +108,26 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		await fastify.register(authRoutes, { config, db, publicClient });
 		await fastify.register(onboardingRoutes, { boss, config, db });
 		await fastify.register(identityRoutes, { db, identityChain, onboarding });
+		await fastify.register(activityRoutes, { db });
+		await fastify.register(adminRoutes, { chain, config, db });
 
 		if (options.startBoss !== false) {
 			await boss.start();
 			bossStarted = true;
-			await registerJobs(boss, db, fastify.log as FastifyBaseLogger, {
-				chain: onboardingChain,
-				config,
-				kycProvider,
-			});
+			await registerJobs(
+				boss,
+				db,
+				fastify.log as FastifyBaseLogger,
+				{
+					chain: onboardingChain,
+					config,
+					kycProvider,
+				},
+				{
+					chain,
+					config,
+				},
+			);
 		}
 	} catch (error) {
 		await fastify.close().catch((closeError: unknown) => {

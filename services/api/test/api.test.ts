@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
@@ -9,6 +9,14 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pino from "pino";
 import type { JobWithMetadata, PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	encodeAbiParameters,
+	getAddress,
+	pad,
+	toEventSelector,
+	type Address,
+	type Hex,
+} from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { createSiweMessage } from "viem/siwe";
 import { buildApp } from "../src/app.js";
@@ -16,7 +24,10 @@ import type { ApiConfig } from "../src/config.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
 import {
 	auditLog,
+	chainCursor,
 	drips,
+	eventLinks,
+	events,
 	handles,
 	invites,
 	onboardings,
@@ -24,6 +35,8 @@ import {
 	users,
 	type UserRole,
 } from "../src/db/schema.js";
+import type { ChainLog, ChainLogSource } from "../src/indexer/chain.js";
+import { runIndexerOnce } from "../src/indexer/scanner.js";
 import {
 	InMemoryIdentityChainClient,
 	type ClaimedHandle,
@@ -56,6 +69,9 @@ const testMasterKey =
 	"0000000000000000000000000000000000000000000000000000000000000000";
 const testOpsPrivateKey =
 	"0x0000000000000000000000000000000000000000000000000000000000000001";
+const testEncryptedErcAddress = "0x46688f1704a69a6c276cccb823e36c80787b0fa2";
+const testRegistrarAddress = "0x9a63fea9851097dbaf3757b636217fdde50abaf0";
+const testAuditorAddress = "0x7777777777777777777777777777777777777777";
 
 describe("@benzo/api", () => {
 	let postgres: StartedPostgreSqlContainer;
@@ -79,8 +95,14 @@ describe("@benzo/api", () => {
 			dripBalanceThresholdWei: 500_000_000_000_000_000n,
 			dripWei: 500_000_000_000_000_000n,
 			eercDeploymentManifest: undefined,
-			eercRegistrarAddress: undefined,
+			eercEncryptedErcAddress: testEncryptedErcAddress,
+			eercRegistrarAddress: testRegistrarAddress,
 			host: "127.0.0.1",
+			indexerConfirmations: 6,
+			indexerEnabled: true,
+			indexerMaxWindowBlocks: 2_000,
+			indexerPollCron: "*/5 * * * * *",
+			indexerStartBlock: 0n,
 			kycProvider: "mock",
 			logLevel: "silent",
 			nodeEnv: "test",
@@ -1328,6 +1350,227 @@ describe("@benzo/api", () => {
 			await app.close();
 		}
 	});
+
+	it("indexes eERC logs idempotently while storing opaque event bytes only", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const sender = normalizeTestAddress(
+			"0x1111111111111111111111111111111111111111",
+		);
+		const receiver = normalizeTestAddress(
+			"0x2222222222222222222222222222222222222222",
+		);
+		const transferTx =
+			"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const depositTx =
+			"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+		const chain = createStubChain([
+			privateTransferLog({
+				blockNumber: 10n,
+				from: sender,
+				logIndex: 1,
+				to: receiver,
+				transactionHash: transferTx,
+			}),
+			depositLog({
+				blockNumber: 11n,
+				logIndex: 2,
+				transactionHash: depositTx,
+				user: sender,
+			}),
+		]);
+
+		try {
+			await resetIndexerTables(db);
+
+			await runIndexerOnce({ chain, config, db, fromBlock: 10n });
+			await runIndexerOnce({ chain, config, db });
+			await runIndexerOnce({ chain, config, db, fromBlock: 10n });
+
+			const rows = await db
+				.select()
+				.from(events)
+				.orderBy(events.logIndex);
+
+			expect(rows).toHaveLength(2);
+			expect(rows[0]).toMatchObject({
+				amountPct: expect.any(Buffer),
+				eventName: "PrivateTransfer",
+				fromAddr: sender,
+				toAddr: receiver,
+				txHash: transferTx,
+			});
+			expect(rows[0]?.amountPct?.byteLength).toBe(224);
+			expect(rows[1]).toMatchObject({
+				amountPct: null,
+				eventName: "Deposit",
+				fromAddr: sender,
+				toAddr: sender,
+				txHash: depositTx,
+			});
+			expect(JSON.stringify(rows.map((row) => row.rawLog))).not.toContain(
+				'"amount"',
+			);
+			expect(
+				(
+					await db.execute(sql`
+						select column_name
+						from information_schema.columns
+						where table_name = 'events'
+							and column_name in ('amount', 'decrypted_amount', 'plaintext_amount')
+					`)
+				).rows,
+			).toEqual([]);
+		} finally {
+			await pool.end();
+		}
+	});
+
+	it("serves activity and receipts only to event participants", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const sender = normalizeTestAddress(
+			"0x3333333333333333333333333333333333333333",
+		);
+		const receiver = normalizeTestAddress(
+			"0x4444444444444444444444444444444444444444",
+		);
+		const outsider = normalizeTestAddress(
+			"0x5555555555555555555555555555555555555555",
+		);
+		const transferTx =
+			"0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+		const chain = createStubChain([
+			privateTransferLog({
+				blockNumber: 12n,
+				from: sender,
+				logIndex: 3,
+				to: receiver,
+				transactionHash: transferTx,
+			}),
+		]);
+		const app = await buildApp({
+			chain,
+			config,
+			logger: false,
+			startBoss: false,
+		});
+
+		try {
+			await resetIndexerTables(db);
+			await runIndexerOnce({ chain, config, db, fromBlock: 12n });
+			await db.insert(eventLinks).values({
+				label: "Payroll June",
+				objectId: "payroll-june",
+				objectType: "payroll_items",
+				txHash: transferTx,
+			});
+
+			const senderCookie = await createTestSession(db, config, sender);
+			const outsiderCookie = await createTestSession(db, config, outsider);
+
+			const activityResponse = await app.inject({
+				headers: { cookie: senderCookie },
+				method: "GET",
+				url: `/activity?address=${sender}`,
+			});
+			expect(activityResponse.statusCode).toBe(200);
+			expect(activityResponse.json()).toMatchObject({
+				activity: [
+					{
+						amountPct: expect.stringMatching(/^0x[0-9a-f]+$/),
+						eventName: "PrivateTransfer",
+						fromAddr: sender,
+						links: [
+							{
+								label: "Payroll June",
+								objectId: "payroll-june",
+								objectType: "payroll_items",
+							},
+						],
+						toAddr: receiver,
+						txHash: transferTx,
+					},
+				],
+				nextCursor: null,
+			});
+
+			const forbiddenActivityResponse = await app.inject({
+				headers: { cookie: outsiderCookie },
+				method: "GET",
+				url: `/activity?address=${sender}`,
+			});
+			expect(forbiddenActivityResponse.statusCode).toBe(403);
+
+			const receiptResponse = await app.inject({
+				headers: { cookie: senderCookie },
+				method: "GET",
+				url: `/receipts/${transferTx}`,
+			});
+			expect(receiptResponse.statusCode).toBe(200);
+			expect(receiptResponse.json()).toMatchObject({
+				links: [
+					{
+						label: "Payroll June",
+						objectId: "payroll-june",
+						objectType: "payroll_items",
+					},
+				],
+				txHash: transferTx,
+			});
+
+			const outsiderReceiptResponse = await app.inject({
+				headers: { cookie: outsiderCookie },
+				method: "GET",
+				url: `/receipts/${transferTx}`,
+			});
+			expect(outsiderReceiptResponse.statusCode).toBe(404);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("reports indexer lag and event counts to network admins", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const admin = normalizeTestAddress(
+			"0x6666666666666666666666666666666666666666",
+		);
+		const chain = createStubChain([]);
+		const app = await buildApp({
+			chain,
+			config,
+			logger: false,
+			startBoss: false,
+		});
+
+		try {
+			await resetIndexerTables(db);
+			await runIndexerOnce({ chain, config, db, fromBlock: 10n });
+
+			const adminCookie = await createTestSession(db, config, admin, [
+				"network_admin",
+			]);
+			const response = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "GET",
+				url: "/admin/indexer",
+			});
+
+			expect(response.statusCode).toBe(200);
+			expect(response.json()).toMatchObject({
+				confirmedBlock: "14",
+				lagBlocks: "0",
+				latestBlock: "20",
+				totalEvents: 0,
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 });
 
 async function migrateTestDatabase(config: ApiConfig): Promise<void> {
@@ -1758,4 +2001,143 @@ async function closeServer(server: Server): Promise<void> {
 			resolve();
 		});
 	});
+}
+
+
+async function resetIndexerTables(db: Database): Promise<void> {
+	await db.delete(eventLinks);
+	await db.delete(events);
+	await db.delete(chainCursor);
+}
+
+async function createTestSession(
+	db: Database,
+	config: ApiConfig,
+	address: string,
+	roles: Array<"auditor" | "network_admin"> = [],
+): Promise<string> {
+	const [user] = await db
+		.insert(users)
+		.values({ address, roles })
+		.onConflictDoUpdate({
+			set: { roles },
+			target: users.address,
+		})
+		.returning({ id: users.id });
+
+	if (!user) {
+		throw new Error("test user insert failed");
+	}
+
+	const sessionId = randomUUID();
+	await db.insert(sessions).values({
+		expiresAt: new Date(Date.now() + 86_400_000),
+		id: sessionId,
+		userId: user.id,
+	});
+
+	return `${config.sessionCookieName}=${sessionId}`;
+}
+
+function createStubChain(logs: ChainLog[]): ChainLogSource {
+	return {
+		async getBlock(blockNumber) {
+			return {
+				hash: blockHash(blockNumber),
+				number: blockNumber,
+				parentHash: blockNumber === 0n ? blockHash(0n) : blockHash(blockNumber - 1n),
+				timestamp: 1_700_000_000n + blockNumber,
+			};
+		},
+		async getBlockNumber() {
+			return 20n;
+		},
+		async getLogs(input) {
+			return logs.filter(
+				(log) =>
+					log.address.toLowerCase() === input.address.toLowerCase() &&
+					log.blockNumber >= input.fromBlock &&
+					log.blockNumber <= input.toBlock,
+			);
+		},
+	};
+}
+
+function privateTransferLog(input: {
+	blockNumber: bigint;
+	from: string;
+	logIndex: number;
+	to: string;
+	transactionHash: Hex;
+}): ChainLog {
+	return makeLog({
+		address: testEncryptedErcAddress,
+		blockNumber: input.blockNumber,
+		data: encodeAbiParameters([{ type: "uint256[7]" }], [auditorPct()]),
+		logIndex: input.logIndex,
+		topics: [
+			toEventSelector("PrivateTransfer(address,address,uint256[7],address)"),
+			topicAddress(input.from),
+			topicAddress(input.to),
+			topicAddress(testAuditorAddress),
+		],
+		transactionHash: input.transactionHash,
+	});
+}
+
+function depositLog(input: {
+	blockNumber: bigint;
+	logIndex: number;
+	transactionHash: Hex;
+	user: string;
+}): ChainLog {
+	return makeLog({
+		address: testEncryptedErcAddress,
+		blockNumber: input.blockNumber,
+		data: encodeAbiParameters(
+			[{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
+			[123n, 0n, 1n],
+		),
+		logIndex: input.logIndex,
+		topics: [
+			toEventSelector("Deposit(address,uint256,uint256,uint256)"),
+			topicAddress(input.user),
+		],
+		transactionHash: input.transactionHash,
+	});
+}
+
+function makeLog(input: {
+	address: string;
+	blockNumber: bigint;
+	data: Hex;
+	logIndex: number;
+	topics: [Hex, ...Hex[]];
+	transactionHash: Hex;
+}): ChainLog {
+	return {
+		address: input.address as Address,
+		blockHash: blockHash(input.blockNumber),
+		blockNumber: input.blockNumber,
+		data: input.data,
+		logIndex: input.logIndex,
+		topics: input.topics,
+		transactionHash: input.transactionHash,
+	};
+}
+
+function topicAddress(address: string): Hex {
+	return pad(address as Hex, { size: 32 });
+}
+
+function blockHash(blockNumber: bigint): Hex {
+	return `0x${blockNumber.toString(16).padStart(64, "0")}`;
+}
+
+function auditorPct(): [bigint, bigint, bigint, bigint, bigint, bigint, bigint] {
+	return [1n, 2n, 3n, 4n, 5n, 6n, 7n];
+}
+
+function normalizeTestAddress(address: string): string {
+	return getAddress(address).toLowerCase();
 }
