@@ -10,6 +10,7 @@ import { loadConfig, type ApiConfig } from "./config.js";
 import { createDb, createPool, type Database } from "./db/client.js";
 import {
 	createInMemoryIdentityChainClient,
+	isInMemoryIdentityChainClient,
 	type IdentityChainClient,
 } from "./identity/chain.js";
 import {
@@ -45,6 +46,11 @@ export type BuildAppOptions = {
 
 export async function buildApp(options: BuildAppOptions = {}) {
 	const config = options.config ?? loadConfig();
+	const identityChain =
+		options.identityChain ?? createInMemoryIdentityChainClient();
+
+	assertIdentityChainConfigured(config, identityChain);
+
 	const fastify = Fastify({
 		genReqId: (request) => request.headers["x-request-id"]?.toString() ?? randomUUID(),
 		logger: options.logger ?? {
@@ -54,8 +60,6 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	const pool = options.pool ?? createPool(config, fastify.log);
 	const db = options.db ?? createDb(pool);
 	const boss = options.boss ?? createBoss(config);
-	const identityChain =
-		options.identityChain ?? createInMemoryIdentityChainClient();
 	const onboarding =
 		options.onboarding ?? createNoopOnboardingOrchestrator();
 	const ownsBoss = !options.boss;
@@ -114,4 +118,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	}
 
 	return fastify;
+}
+
+function assertIdentityChainConfigured(
+	config: ApiConfig,
+	identityChain: IdentityChainClient,
+): void {
+	if (config.nodeEnv === "test") {
+		return;
+	}
+
+	if (isInMemoryIdentityChainClient(identityChain)) {
+		throw new Error(
+			"Identity chain client is not configured. Provide a real identity chain client outside NODE_ENV=test.",
+		);
+	}
 }

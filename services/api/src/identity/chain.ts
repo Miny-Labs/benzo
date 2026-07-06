@@ -113,3 +113,9 @@ export class InMemoryIdentityChainClient implements IdentityChainClient {
 export function createInMemoryIdentityChainClient(): IdentityChainClient {
 	return new InMemoryIdentityChainClient();
 }
+
+export function isInMemoryIdentityChainClient(
+	identityChain: IdentityChainClient,
+): boolean {
+	return identityChain instanceof InMemoryIdentityChainClient;
+}

@@ -24,7 +24,12 @@ import {
 	users,
 	type UserRole,
 } from "../src/db/schema.js";
-import { InMemoryIdentityChainClient } from "../src/identity/chain.js";
+import {
+	InMemoryIdentityChainClient,
+	type ClaimedHandle,
+	type HandleResolution,
+	type IdentityChainClient,
+} from "../src/identity/chain.js";
 import { hashInviteToken } from "../src/identity/invites.js";
 import type {
 	OnboardingOrchestrator,
@@ -117,6 +122,21 @@ describe("@benzo/api", () => {
 		} finally {
 			await app.close();
 		}
+	});
+
+	it("fails fast outside tests when the identity chain client is in-memory", async () => {
+		await expect(
+			buildApp({
+				config: {
+					...config,
+					apiDomain: "localhost",
+					nodeEnv: "production",
+				},
+				identityChain: new InMemoryIdentityChainClient(),
+				logger: false,
+				startBoss: false,
+			}),
+		).rejects.toThrow("Identity chain client is not configured");
 	});
 
 	it("completes nonce, SIWE verify, /auth/me, and logout", async () => {
@@ -859,6 +879,18 @@ describe("@benzo/api", () => {
 				source: "chain",
 			});
 
+			const mixedCaseResolveResponse = await app.inject({
+				method: "GET",
+				url: `/resolve/${handle.toUpperCase()}`,
+			});
+
+			expect(mixedCaseResolveResponse.statusCode).toBe(200);
+			expect(mixedCaseResolveResponse.json()).toEqual({
+				address: account.address.toLowerCase(),
+				registeredOnEerc: true,
+				source: "chain",
+			});
+
 			await mirrorStaleHandle(db, handle, staleAccount.address.toLowerCase());
 
 			const resolveResponse = await app.inject({
@@ -892,6 +924,82 @@ describe("@benzo/api", () => {
 		} finally {
 			await app.close();
 			await pool.end();
+		}
+	});
+
+	it("serves cached handles without re-calling chain enrichment after chain resolution fails", async () => {
+		const identityChain = new ThrowingResolutionIdentityChainClient();
+		const app = await buildApp({
+			config,
+			identityChain,
+			logger: false,
+			startBoss: false,
+		});
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const account = privateKeyToAccount(generatePrivateKey());
+		const cachedHandle = uniqueHandle("cached");
+		const missingHandle = uniqueHandle("missing");
+
+		try {
+			await mirrorStaleHandle(db, cachedHandle, account.address.toLowerCase());
+
+			const cachedResponse = await app.inject({
+				method: "GET",
+				url: `/resolve/${cachedHandle}`,
+			});
+
+			expect(cachedResponse.statusCode).toBe(200);
+			expect(cachedResponse.json()).toEqual({
+				address: account.address.toLowerCase(),
+				registeredOnEerc: false,
+				source: "cache",
+			});
+			expect(identityChain.resolveCalls).toBe(1);
+			expect(identityChain.registrationCalls).toBe(0);
+
+			const missingResponse = await app.inject({
+				method: "GET",
+				url: `/resolve/${missingHandle}`,
+			});
+
+			expect(missingResponse.statusCode).toBe(503);
+			expect(missingResponse.headers["cache-control"]).toBe("no-store");
+			expect(missingResponse.json()).toEqual({
+				error: "handle_resolution_unavailable",
+			});
+			expect(identityChain.resolveCalls).toBe(2);
+			expect(identityChain.registrationCalls).toBe(0);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("does not cache handle not-found responses publicly", async () => {
+		const identityChain = new InMemoryIdentityChainClient();
+		const app = await buildApp({
+			config,
+			identityChain,
+			logger: false,
+			startBoss: false,
+		});
+
+		try {
+			const response = await app.inject({
+				method: "GET",
+				url: `/resolve/${uniqueHandle("unknown")}`,
+			});
+
+			expect(response.statusCode).toBe(404);
+			expect(response.headers["cache-control"]).toBe("no-store");
+			expect(response.headers.etag).toBeUndefined();
+			expect(response.json()).toEqual({
+				error: "handle_not_found",
+				source: "chain",
+			});
+		} finally {
+			await app.close();
 		}
 	});
 
@@ -1025,6 +1133,33 @@ describe("@benzo/api", () => {
 			});
 			expect(handleResponse.statusCode).toBe(201);
 
+			const inviteWithGiftAmountResponse = await app.inject({
+				headers: { cookie: creatorCookie },
+				method: "POST",
+				payload: {
+					giftAmount: "25.50",
+					kind: "invite",
+				},
+				url: "/invites",
+			});
+			expect(inviteWithGiftAmountResponse.statusCode).toBe(400);
+			expect(inviteWithGiftAmountResponse.json()).toEqual({
+				error: "invalid_invite",
+			});
+
+			const giftWithoutAmountResponse = await app.inject({
+				headers: { cookie: creatorCookie },
+				method: "POST",
+				payload: {
+					kind: "gift",
+				},
+				url: "/invites",
+			});
+			expect(giftWithoutAmountResponse.statusCode).toBe(400);
+			expect(giftWithoutAmountResponse.json()).toEqual({
+				error: "invalid_invite",
+			});
+
 			const createResponse = await app.inject({
 				headers: { cookie: creatorCookie },
 				method: "POST",
@@ -1130,6 +1265,67 @@ describe("@benzo/api", () => {
 		} finally {
 			await app.close();
 			await pool.end();
+		}
+	});
+
+	it("keeps invite claims successful when claim enrichment throws", async () => {
+		const identityChain = new InMemoryIdentityChainClient();
+		const app = await buildApp({
+			config,
+			identityChain,
+			logger: false,
+			onboarding: new ThrowingOnboardingOrchestrator(),
+			startBoss: false,
+		});
+		const creator = privateKeyToAccount(generatePrivateKey());
+		const claimant = privateKeyToAccount(generatePrivateKey());
+
+		try {
+			const creatorCookie = await signIn(app, creator, config);
+			const claimantCookie = await signIn(app, claimant, config);
+
+			const createResponse = await app.inject({
+				headers: { cookie: creatorCookie },
+				method: "POST",
+				payload: {
+					note: "Join the workspace",
+				},
+				url: "/invites",
+			});
+			expect(createResponse.statusCode).toBe(201);
+			const createBody = createResponse.json<{
+				invite: { status: string };
+				token: string;
+			}>();
+
+			const claimResponse = await app.inject({
+				headers: { cookie: claimantCookie },
+				method: "POST",
+				url: `/invites/${createBody.token}/claim`,
+			});
+
+			expect(claimResponse.statusCode).toBe(200);
+			expect(claimResponse.json()).toMatchObject({
+				claimant: {
+					address: claimant.address.toLowerCase(),
+					registeredOnEerc: false,
+				},
+				invite: {
+					creatorHandle: null,
+					note: "Join the workspace",
+					status: "claimed",
+				},
+			});
+
+			const replayResponse = await app.inject({
+				headers: { cookie: claimantCookie },
+				method: "POST",
+				url: `/invites/${createBody.token}/claim`,
+			});
+			expect(replayResponse.statusCode).toBe(409);
+			expect(replayResponse.json()).toEqual({ error: "invite_claimed" });
+		} finally {
+			await app.close();
 		}
 	});
 });
@@ -1262,6 +1458,31 @@ class RecordingOnboardingOrchestrator implements OnboardingOrchestrator {
 
 	async startForInviteClaim(input: OnboardingStartInput): Promise<void> {
 		this.starts.push(input);
+	}
+}
+
+class ThrowingOnboardingOrchestrator implements OnboardingOrchestrator {
+	async startForInviteClaim(): Promise<void> {
+		throw new Error("onboarding enrichment failed");
+	}
+}
+
+class ThrowingResolutionIdentityChainClient implements IdentityChainClient {
+	registrationCalls = 0;
+	resolveCalls = 0;
+
+	async claimHandle(): Promise<ClaimedHandle> {
+		throw new Error("claim unavailable");
+	}
+
+	async getRegistrationStatuses(): Promise<Map<string, boolean>> {
+		this.registrationCalls += 1;
+		throw new Error("registration unavailable");
+	}
+
+	async resolveHandle(): Promise<HandleResolution> {
+		this.resolveCalls += 1;
+		throw new Error("resolve unavailable");
 	}
 }
 

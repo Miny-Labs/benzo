@@ -18,7 +18,10 @@ import {
 	type IdentityChainClient,
 } from "../identity/chain.js";
 import { createInviteToken, hashInviteToken } from "../identity/invites.js";
-import type { OnboardingOrchestrator } from "../identity/onboarding.js";
+import type {
+	OnboardingOrchestrator,
+	OnboardingStartInput,
+} from "../identity/onboarding.js";
 
 const HANDLE_PATTERN = /^[a-z0-9_]{3,20}$/;
 const RESERVED_HANDLES = new Set([
@@ -49,11 +52,11 @@ const RESERVED_HANDLES = new Set([
 const DEFAULT_INVITE_TTL_MS = 7 * 86_400_000;
 
 const handleBodySchema = z.object({
-	handle: z.string().trim(),
+	handle: z.string().trim().toLowerCase(),
 });
 
 const handleParamSchema = z.object({
-	handle: z.string().trim(),
+	handle: z.string().trim().toLowerCase(),
 });
 
 const contactBodySchema = z.object({
@@ -75,12 +78,19 @@ const contactPatchBodySchema = z
 
 const decimalAmountSchema = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$/;
 
-const inviteBodySchema = z.object({
-	expiresAt: z.string().trim().optional(),
-	giftAmount: z.string().trim().regex(decimalAmountSchema).nullable().optional(),
-	kind: z.enum(["invite", "gift"]).default("invite"),
-	note: z.string().trim().min(1).max(280).nullable().optional(),
-});
+const inviteBodySchema = z
+	.object({
+		expiresAt: z.string().trim().optional(),
+		giftAmount: z.string().trim().regex(decimalAmountSchema).nullable().optional(),
+		kind: z.enum(["invite", "gift"]).default("invite"),
+		note: z.string().trim().min(1).max(280).nullable().optional(),
+	})
+	.refine((value) => value.kind === "gift" || value.giftAmount == null, {
+		path: ["giftAmount"],
+	})
+	.refine((value) => value.kind !== "gift" || value.giftAmount != null, {
+		path: ["giftAmount"],
+	});
 
 const inviteTokenParamSchema = z.object({
 	token: z.string().min(16).max(256),
@@ -202,16 +212,15 @@ export const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
 			request.log.warn({ err: error }, "chain handle resolution failed");
 
 			if (!cached) {
-				throw error;
+				reply.header("Cache-Control", "no-store");
+				return reply.code(503).send({
+					error: "handle_resolution_unavailable",
+				});
 			}
-
-			const [registered] = await registrationMap(options.identityChain, [
-				cached.address,
-			]);
 
 			return sendCachedResponse(reply, request, 200, {
 				address: cached.address,
-				registeredOnEerc: registered?.registeredOnEerc ?? false,
+				registeredOnEerc: false,
 				source: "cache",
 			});
 		}
@@ -505,31 +514,30 @@ export const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
 					.send({ error: unavailable?.error ?? "invite_already_claimed" });
 			}
 
-			await options.onboarding.startForInviteClaim({
+			await startInviteClaimEnrichment(request, options.onboarding, {
 				address: user.address,
 				inviteId: claimed.id,
 				userId: user.id,
 			});
 
-			const [registration] = await registrationMap(options.identityChain, [
+			const registeredOnEerc = await readClaimantRegistration(
+				request,
+				options.identityChain,
 				user.address,
-			]);
-			const [creator] = await options.db
-				.select({
-					creatorHandle: handles.handle,
-				})
-				.from(users)
-				.leftJoin(handles, eq(handles.userId, users.id))
-				.where(eq(users.id, claimed.creatorUserId))
-				.limit(1);
+			);
+			const creatorHandle = await readInviteCreatorHandle(
+				request,
+				options.db,
+				claimed.creatorUserId,
+			);
 
 			return {
 				claimant: {
 					address: user.address,
-					registeredOnEerc: registration?.registeredOnEerc ?? false,
+					registeredOnEerc,
 				},
 				invite: {
-					creatorHandle: creator?.creatorHandle ?? null,
+					creatorHandle,
 					expiresAt: claimed.expiresAt.toISOString(),
 					kind: claimed.kind,
 					note: claimed.note,
@@ -661,6 +669,63 @@ async function registrationMap(
 	}));
 }
 
+async function startInviteClaimEnrichment(
+	request: FastifyRequest,
+	onboarding: OnboardingOrchestrator,
+	input: OnboardingStartInput,
+): Promise<void> {
+	try {
+		await onboarding.startForInviteClaim(input);
+	} catch (error) {
+		request.log.warn(
+			{ err: error, inviteId: input.inviteId, userId: input.userId },
+			"invite claim enrichment failed",
+		);
+	}
+}
+
+async function readClaimantRegistration(
+	request: FastifyRequest,
+	identityChain: IdentityChainClient,
+	address: string,
+): Promise<boolean> {
+	try {
+		const [registration] = await registrationMap(identityChain, [address]);
+		return registration?.registeredOnEerc ?? false;
+	} catch (error) {
+		request.log.warn(
+			{ address, err: error },
+			"invite claim registration enrichment failed",
+		);
+		return false;
+	}
+}
+
+async function readInviteCreatorHandle(
+	request: FastifyRequest,
+	db: Database,
+	creatorUserId: string,
+): Promise<string | null> {
+	try {
+		const [creator] = await db
+			.select({
+				creatorHandle: handles.handle,
+			})
+			.from(users)
+			.leftJoin(handles, eq(handles.userId, users.id))
+			.where(eq(users.id, creatorUserId))
+			.limit(1);
+
+		return creator?.creatorHandle ?? null;
+	} catch (error) {
+		request.log.warn(
+			{ creatorUserId, err: error },
+			"invite claim creator enrichment failed",
+		);
+		return null;
+	}
+}
+
 function parseInviteExpiry(value: string | undefined): Date | null {
 	if (!value) {
 		return new Date(Date.now() + DEFAULT_INVITE_TTL_MS);
@@ -751,6 +816,11 @@ function sendCachedResponse(
 	statusCode: number,
 	payload: unknown,
 ) {
+	if (statusCode >= 400) {
+		reply.header("Cache-Control", "no-store");
+		return reply.code(statusCode).send(payload);
+	}
+
 	const etag = createEtag(payload);
 	reply.header("Cache-Control", "public, max-age=60");
 	reply.header("ETag", etag);
