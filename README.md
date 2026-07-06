@@ -85,7 +85,8 @@ Full record — every address, deploy tx hash, and Snowtrace link — is in
 | TestUSDC (tUSDC, demo faucet) | [`0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f`](https://testnet.snowtrace.io/address/0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f) |
 
 Plus five Groth16 verifiers (registration / mint / transfer / withdraw / burn).
-The auditor public key is set and its account registered.
+The auditor public key is set and its account registered. **All nine contracts
+have verified source on Snowtrace** (click any address above → the Contract tab).
 
 **Wrapped token.** The converter wraps any ERC-20 by address, so it supports two:
 

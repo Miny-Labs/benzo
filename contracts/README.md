@@ -110,7 +110,10 @@ stack lands under `contracts.eercConverter` in `deployments/fuji.json`, includin
 Routescan verification is attempted after each Fuji deployment record is
 persisted. A verification failure leaves the address and transaction hash in
 `deployments/fuji.json` with `verified: false` so the operator can retry without
-redeploying.
+redeploying (Routescan can index a fresh contract minutes after deploy, so a
+first-attempt failure often just needs a re-run). The live Fuji stack recorded
+here is fully verified: all nine contracts show `verified: true` with a
+`verifiedAt` timestamp and have browsable source on Snowtrace.
 
 After the Fuji deploy, run the end-to-end smoke:
 
