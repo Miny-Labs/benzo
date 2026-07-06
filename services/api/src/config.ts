@@ -9,6 +9,7 @@ const envSchema = z
 			.string()
 			.regex(hex32BytesPattern, "APP_MASTER_KEY must be a 32-byte hex string")
 			.transform((value) => value.replace(/^0x/i, "").toLowerCase()),
+		API_DOMAIN: z.string().trim().min(1).optional(),
 		BENZONET_CHAIN_ID: z.coerce.number().int().positive().default(43_113),
 		BENZONET_RPC_URL: z.url(),
 		DATABASE_URL: z.url(),
@@ -28,8 +29,18 @@ const envSchema = z
 		SESSION_TTL_DAYS: z.coerce.number().int().positive().default(7),
 		SIWE_NONCE_TTL_MINUTES: z.coerce.number().int().positive().default(10),
 	})
+	.superRefine((env, ctx) => {
+		if (env.NODE_ENV === "production" && !env.API_DOMAIN) {
+			ctx.addIssue({
+				code: "custom",
+				message: "API_DOMAIN is required in production",
+				path: ["API_DOMAIN"],
+			});
+		}
+	})
 	.transform((env) => ({
 		appMasterKey: env.APP_MASTER_KEY,
+		apiDomain: env.API_DOMAIN ?? `localhost:${env.PORT}`,
 		benzonetChainId: env.BENZONET_CHAIN_ID,
 		benzonetRpcUrl: env.BENZONET_RPC_URL,
 		databaseUrl: env.DATABASE_URL,

@@ -67,17 +67,7 @@ export async function enqueueDemoAuditJob(
 	const requestedAt = new Date().toISOString();
 
 	return db.transaction(async (tx) => {
-		await tx.insert(auditLog).values({
-			action: "demo_job_enqueued",
-			actor: input.actor,
-			meta: {
-				queue: JOB_QUEUES.demoAudit,
-				singletonKey,
-			},
-			subject: input.subject,
-		});
-
-		return boss.send(
+		const jobId = await boss.send(
 			JOB_QUEUES.demoAudit,
 			{
 				actor: input.actor,
@@ -90,6 +80,22 @@ export async function enqueueDemoAuditJob(
 				singletonSeconds: 86_400,
 			},
 		);
+
+		if (!jobId) {
+			return null;
+		}
+
+		await tx.insert(auditLog).values({
+			action: "demo_job_enqueued",
+			actor: input.actor,
+			meta: {
+				queue: JOB_QUEUES.demoAudit,
+				singletonKey,
+			},
+			subject: input.subject,
+		});
+
+		return jobId;
 	});
 }
 

@@ -25,7 +25,13 @@ export type BuildAppOptions = {
 
 export async function buildApp(options: BuildAppOptions = {}) {
 	const config = options.config ?? loadConfig();
-	const pool = options.pool ?? createPool(config);
+	const fastify = Fastify({
+		genReqId: (request) => request.headers["x-request-id"]?.toString() ?? randomUUID(),
+		logger: options.logger ?? {
+			level: config.logLevel,
+		},
+	});
+	const pool = options.pool ?? createPool(config, fastify.log);
 	const db = options.db ?? createDb(pool);
 	const boss = options.boss ?? createBoss(config);
 	const ownsBoss = !options.boss;
@@ -33,35 +39,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	const publicClient = createPublicClient({
 		transport: http(config.benzonetRpcUrl),
 	});
-
-	const fastify = Fastify({
-		genReqId: (request) => request.headers["x-request-id"]?.toString() ?? randomUUID(),
-		logger: options.logger ?? {
-			level: config.logLevel,
-		},
-	});
-
-	fastify.addHook("onRequest", async (request, reply) => {
-		reply.header("x-request-id", request.id);
-	});
-
-	fastify.setErrorHandler(async (error, request, reply) => {
-		request.log.error({ err: error }, "request failed");
-		await reply.code(500).send({ error: "internal_server_error" });
-	});
-
-	await fastify.register(cookie);
-	await fastify.register(authPlugin, { config, db });
-	await fastify.register(healthRoutes, { db, publicClient });
-	await fastify.register(authRoutes, { config, db, publicClient });
-
-	if (options.startBoss !== false) {
-		await boss.start();
-		await registerJobs(boss, db, fastify.log as FastifyBaseLogger);
-	}
+	let bossStarted = false;
 
 	fastify.addHook("onClose", async () => {
-		if (options.startBoss !== false && ownsBoss) {
+		if (bossStarted && ownsBoss) {
 			await boss.stop();
 		}
 
@@ -69,6 +50,33 @@ export async function buildApp(options: BuildAppOptions = {}) {
 			await pool.end();
 		}
 	});
+
+	try {
+		fastify.addHook("onRequest", async (request, reply) => {
+			reply.header("x-request-id", request.id);
+		});
+
+		fastify.setErrorHandler(async (error, request, reply) => {
+			request.log.error({ err: error }, "request failed");
+			await reply.code(500).send({ error: "internal_server_error" });
+		});
+
+		await fastify.register(cookie);
+		await fastify.register(authPlugin, { config, db });
+		await fastify.register(healthRoutes, { db, publicClient });
+		await fastify.register(authRoutes, { config, db, publicClient });
+
+		if (options.startBoss !== false) {
+			await boss.start();
+			bossStarted = true;
+			await registerJobs(boss, db, fastify.log as FastifyBaseLogger);
+		}
+	} catch (error) {
+		await fastify.close().catch((closeError: unknown) => {
+			fastify.log.error({ err: closeError }, "api startup cleanup failed");
+		});
+		throw error;
+	}
 
 	return fastify;
 }

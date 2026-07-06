@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+	bigint,
 	index,
 	jsonb,
 	pgEnum,
@@ -58,6 +59,9 @@ export const siweNonces = pgTable(
 export const auditLog = pgTable(
 	"audit_log",
 	{
+		id: bigint("id", { mode: "bigint" })
+			.primaryKey()
+			.generatedAlwaysAsIdentity(),
 		actor: text("actor").notNull(),
 		action: text("action").notNull(),
 		subject: text("subject").notNull(),

@@ -33,8 +33,6 @@ type AuthRoutesOptions = {
 	publicClient: PublicClient;
 };
 
-class AuthVerificationError extends Error {}
-
 export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
 	fastify,
 	options,
@@ -69,12 +67,6 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
 			return reply.code(400).send({ error: "invalid_siwe_payload" });
 		}
 
-		const domain = request.headers.host;
-
-		if (!domain) {
-			return reply.code(400).send({ error: "missing_host_header" });
-		}
-
 		const parsed = (() => {
 			try {
 				return parseSiweMessage(body.data.message);
@@ -91,54 +83,55 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (
 			return reply.code(401).send({ error: "wrong_chain" });
 		}
 
+		if (parsed.domain !== options.config.apiDomain) {
+			return reply.code(401).send({ error: "wrong_domain" });
+		}
+
 		const address = normalizeAddress(parsed.address);
 		const nonce = parsed.nonce;
-		const nonceExists = await hasLiveNonce(options.db, nonce, address);
+		const nonceConsumed = await consumeLiveNonce(options.db, nonce, address);
 
-		if (!nonceExists) {
+		if (!nonceConsumed) {
 			return reply.code(401).send({ error: "invalid_nonce" });
 		}
 
-		const verified = await verifySiweMessage(options.publicClient, {
-			address: parsed.address as Address,
-			domain,
-			message: body.data.message,
-			nonce,
-			signature: body.data.signature,
-		});
+		let verified = false;
+
+		try {
+			verified = await verifySiweMessage(options.publicClient, {
+				address: parsed.address as Address,
+				domain: options.config.apiDomain,
+				message: body.data.message,
+				nonce,
+				signature: body.data.signature,
+			});
+		} catch (error) {
+			request.log.debug({ err: error }, "siwe signature verification failed");
+		}
 
 		if (!verified) {
 			return reply.code(401).send({ error: "invalid_signature" });
 		}
 
-		try {
-			const { expiresAt, sessionId, user } = await createSession(
-				options.db,
-				options.config,
-				{
-					address,
-					nonce,
-				},
-			);
+		const { expiresAt, sessionId, user } = await createSession(
+			options.db,
+			options.config,
+			{
+				address,
+			},
+		);
 
-			reply.setCookie(options.config.sessionCookieName, sessionId, {
-				expires: expiresAt,
-				httpOnly: true,
-				path: "/",
-				sameSite: "lax",
-				secure: options.config.nodeEnv === "production",
-			});
+		reply.setCookie(options.config.sessionCookieName, sessionId, {
+			expires: expiresAt,
+			httpOnly: true,
+			path: "/",
+			sameSite: "lax",
+			secure: options.config.nodeEnv === "production",
+		});
 
-			return reply.send({
-				user,
-			});
-		} catch (error) {
-			if (error instanceof AuthVerificationError) {
-				return reply.code(401).send({ error: "invalid_nonce" });
-			}
-
-			throw error;
-		}
+		return reply.send({
+			user,
+		});
 	});
 
 	fastify.post("/auth/logout", async (request, reply) => {
@@ -174,14 +167,13 @@ function normalizeAddress(address: string): string {
 	return getAddress(address).toLowerCase();
 }
 
-async function hasLiveNonce(
+async function consumeLiveNonce(
 	db: Database,
 	nonce: string,
 	address: string,
 ): Promise<boolean> {
 	const [row] = await db
-		.select({ nonce: siweNonces.nonce })
-		.from(siweNonces)
+		.delete(siweNonces)
 		.where(
 			and(
 				eq(siweNonces.nonce, nonce),
@@ -189,7 +181,7 @@ async function hasLiveNonce(
 				gt(siweNonces.expiresAt, new Date()),
 			),
 		)
-		.limit(1);
+		.returning({ nonce: siweNonces.nonce });
 
 	return Boolean(row);
 }
@@ -199,7 +191,6 @@ async function createSession(
 	config: ApiConfig,
 	input: {
 		address: string;
-		nonce: string;
 	},
 ): Promise<{
 	expiresAt: Date;
@@ -214,40 +205,33 @@ async function createSession(
 	const sessionId = randomBytes(32).toString("hex");
 
 	return db.transaction(async (tx) => {
-		const [nonce] = await tx
-			.delete(siweNonces)
-			.where(
-				and(
-					eq(siweNonces.nonce, input.nonce),
-					eq(siweNonces.address, input.address),
-					gt(siweNonces.expiresAt, new Date()),
-				),
-			)
-			.returning({ nonce: siweNonces.nonce });
-
-		if (!nonce) {
-			throw new AuthVerificationError("nonce already consumed");
-		}
-
-		const [user] = await tx
+		const [insertedUser] = await tx
 			.insert(users)
 			.values({
 				address: input.address,
 			})
-			.onConflictDoUpdate({
-				set: {
-					address: input.address,
-				},
-				target: users.address,
-			})
+			.onConflictDoNothing({ target: users.address })
 			.returning({
 				address: users.address,
 				id: users.id,
 				roles: users.roles,
 			});
+		const [existingUser] =
+			insertedUser === undefined
+				? await tx
+						.select({
+							address: users.address,
+							id: users.id,
+							roles: users.roles,
+						})
+						.from(users)
+						.where(eq(users.address, input.address))
+						.limit(1)
+				: [];
+		const user = insertedUser ?? existingUser;
 
 		if (!user) {
-			throw new AuthVerificationError("user upsert failed");
+			throw new Error("user lookup failed");
 		}
 
 		await tx.insert(sessions).values({

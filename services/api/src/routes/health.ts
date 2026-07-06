@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyBaseLogger, FastifyPluginAsync } from "fastify";
 import type { PublicClient } from "viem";
 import type { Database } from "../db/client.js";
 
@@ -23,10 +23,10 @@ export const healthRoutes: FastifyPluginAsync<HealthRoutesOptions> = async (
 	fastify,
 	options,
 ) => {
-	fastify.get("/healthz", async (_request, reply) => {
+	fastify.get("/healthz", async (request, reply) => {
 		const [db, rpc] = await Promise.all([
-			checkDb(options.db),
-			checkRpc(options.publicClient),
+			checkDb(options.db, request.log),
+			checkRpc(options.publicClient, request.log),
 		]);
 		const ok = db.ok && rpc.ok;
 
@@ -38,7 +38,10 @@ export const healthRoutes: FastifyPluginAsync<HealthRoutesOptions> = async (
 	});
 };
 
-async function checkDb(db: Database): Promise<CheckResult> {
+async function checkDb(
+	db: Database,
+	logger: FastifyBaseLogger,
+): Promise<CheckResult> {
 	const startedAt = Date.now();
 
 	try {
@@ -48,8 +51,10 @@ async function checkDb(db: Database): Promise<CheckResult> {
 			ok: true,
 		};
 	} catch (error) {
+		logger.error({ err: error }, "database health check failed");
+
 		return {
-			error: error instanceof Error ? error.message : "unknown_error",
+			error: "db_unreachable",
 			latencyMs: Date.now() - startedAt,
 			ok: false,
 		};
@@ -58,6 +63,7 @@ async function checkDb(db: Database): Promise<CheckResult> {
 
 async function checkRpc(
 	publicClient: PublicClient,
+	logger: FastifyBaseLogger,
 ): Promise<CheckResult & { blockNumber?: string }> {
 	const startedAt = Date.now();
 
@@ -69,8 +75,10 @@ async function checkRpc(
 			ok: true,
 		};
 	} catch (error) {
+		logger.error({ err: error }, "rpc health check failed");
+
 		return {
-			error: error instanceof Error ? error.message : "unknown_error",
+			error: "rpc_unreachable",
 			latencyMs: Date.now() - startedAt,
 			ok: false,
 		};

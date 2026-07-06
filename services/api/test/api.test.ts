@@ -40,6 +40,7 @@ describe("@benzo/api", () => {
 		rpc = await startRpcServer();
 		config = {
 			appMasterKey: testMasterKey,
+			apiDomain: "localhost",
 			benzonetChainId: 43_113,
 			benzonetRpcUrl: rpc.url,
 			databaseUrl: postgres.getConnectionUri(),
@@ -166,6 +167,106 @@ describe("@benzo/api", () => {
 		}
 	});
 
+	it("rejects SIWE messages for a non-configured domain even when Host matches", async () => {
+		const app = await buildApp({ config, logger: false });
+		const account = privateKeyToAccount(generatePrivateKey());
+		const attackerDomain = "attacker.example";
+
+		try {
+			const nonceResponse = await app.inject({
+				method: "GET",
+				url: `/auth/nonce?address=${account.address}`,
+			});
+			expect(nonceResponse.statusCode).toBe(200);
+			const { nonce } = nonceResponse.json<{ nonce: string }>();
+			const message = createSiweMessage({
+				address: account.address,
+				chainId: config.benzonetChainId,
+				domain: attackerDomain,
+				issuedAt: new Date(),
+				nonce,
+				uri: `https://${attackerDomain}`,
+				version: "1",
+			});
+			const signature = await account.signMessage({ message });
+
+			const verifyResponse = await app.inject({
+				headers: {
+					host: attackerDomain,
+				},
+				method: "POST",
+				payload: {
+					message,
+					signature,
+				},
+				url: "/auth/verify",
+			});
+
+			expect(verifyResponse.statusCode).toBe(401);
+			expect(verifyResponse.json()).toEqual({ error: "wrong_domain" });
+		} finally {
+			await app.close();
+		}
+	});
+
+	it("consumes a SIWE nonce when signature verification fails", async () => {
+		const app = await buildApp({ config, logger: false });
+		const account = privateKeyToAccount(generatePrivateKey());
+		const attackerAccount = privateKeyToAccount(generatePrivateKey());
+
+		try {
+			const nonceResponse = await app.inject({
+				method: "GET",
+				url: `/auth/nonce?address=${account.address}`,
+			});
+			expect(nonceResponse.statusCode).toBe(200);
+			const { nonce } = nonceResponse.json<{ nonce: string }>();
+			const message = createSiweMessage({
+				address: account.address,
+				chainId: config.benzonetChainId,
+				domain: "localhost",
+				issuedAt: new Date(),
+				nonce,
+				uri: "http://localhost",
+				version: "1",
+			});
+			const invalidSignature = await attackerAccount.signMessage({ message });
+
+			const failedVerifyResponse = await app.inject({
+				headers: {
+					host: "localhost",
+				},
+				method: "POST",
+				payload: {
+					message,
+					signature: invalidSignature,
+				},
+				url: "/auth/verify",
+			});
+
+			expect(failedVerifyResponse.statusCode).toBe(401);
+			expect(failedVerifyResponse.json()).toEqual({ error: "invalid_signature" });
+
+			const validSignature = await account.signMessage({ message });
+			const retryResponse = await app.inject({
+				headers: {
+					host: "localhost",
+				},
+				method: "POST",
+				payload: {
+					message,
+					signature: validSignature,
+				},
+				url: "/auth/verify",
+			});
+
+			expect(retryResponse.statusCode).toBe(401);
+			expect(retryResponse.json()).toEqual({ error: "invalid_nonce" });
+		} finally {
+			await app.close();
+		}
+	});
+
 	it("enqueues the demo pg-boss job transactionally and processes it after restart", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
@@ -182,6 +283,14 @@ describe("@benzo/api", () => {
 			});
 
 			expect(jobId).toEqual(expect.any(String));
+			expect(await countAuditRows(db, "demo_job_enqueued")).toBe(1);
+
+			const duplicateJobId = await enqueueDemoAuditJob(db, firstBoss, {
+				actor: "test:operator",
+				subject: "demo:restart",
+			});
+
+			expect(duplicateJobId).toBeNull();
 			expect(await countAuditRows(db, "demo_job_enqueued")).toBe(1);
 
 			await firstBoss.stop();
