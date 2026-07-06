@@ -30,6 +30,39 @@ paths.
 The ported upstream tests live in `test/eerc/`. Their only local deviations are
 path/import updates required by Benzo's `contracts/eerc/` vendor directory.
 
+## Handle Registry
+
+`contracts/benzo/HandleRegistry.sol` is the on-chain source of truth for
+Benzo `@handle` resolution. Handles are claimed first-come-first-served with no
+admin, fees, reservations, or dispute process. Squatting is an accepted demo
+tradeoff.
+
+Privacy claims - stated precisely: the handle -> address mapping is fully
+public by design; claiming a handle deliberately links a human-readable
+identity to an address. eERC keeps that address's balances and transfer amounts
+encrypted, but its transaction graph (who it interacted with, when) remains
+public metadata. The contract makes no privacy claim beyond what eERC provides
+to the underlying address.
+
+Handles are validated byte-by-byte on-chain: 3-32 bytes, `[a-z0-9_]` only, and
+no normalization. Uppercase and unicode bytes revert.
+
+The on-chain `HandleRegistry` is the single source of truth. Any backend handle
+table is only a write-through cache populated by the indexer; claim flows must
+go through the contract. Resolution endpoints must state whether they serve
+chain state or indexed cache state. If cache data conflicts with contract state,
+the contract wins and the cache must be repaired from indexed events.
+
+Deploy and Routescan-verify on Fuji:
+
+```bash
+pnpm hardhat run scripts/deploy/06-handle-registry.ts --network fuji
+```
+
+The deploy script updates `deployments/fuji.json` with the deployed
+`handleRegistry` address. `deployments/benzonet.json` is intentionally left for
+the later BenzoNet deploy step.
+
 ## Commands
 
 ```bash
@@ -37,7 +70,7 @@ pnpm compile        # hardhat compile
 pnpm test           # hardhat test
 pnpm zkit:make      # hardhat zkit make
 pnpm zkit:verifiers # hardhat zkit verifiers
-pnpm deploy:fuji    # hardhat run scripts/deploy.ts --network fuji
+pnpm deploy:fuji    # hardhat run scripts/deploy/06-handle-registry.ts --network fuji
 ```
 
 Verification on testnet.snowtrace.io works via Routescan with the

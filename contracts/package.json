@@ -12,7 +12,7 @@
     "test": "hardhat test",
     "zkit:make": "hardhat zkit make",
     "zkit:verifiers": "hardhat zkit verifiers",
-    "deploy:fuji": "hardhat run scripts/deploy.ts --network fuji"
+    "deploy:fuji": "hardhat run scripts/deploy/06-handle-registry.ts --network fuji"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
