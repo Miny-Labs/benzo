@@ -11,6 +11,9 @@ import {
 } from "./eerc-crypto";
 
 const FUJI_CHAIN_ID = 43113;
+// Fixed by the BenzoNet genesis; kept a hardcoded constant like FUJI_CHAIN_ID
+// so the deploy guard can't be loosened by a stray env var.
+const BENZONET_CHAIN_ID = 68420;
 const CONTRACTS_WORKSPACE = path.join(__dirname, "..", "..");
 const DEPLOYMENTS_DIR = path.join(CONTRACTS_WORKSPACE, "deployments");
 const AUDITOR_KEY_PATH = path.join(CONTRACTS_WORKSPACE, ".auditor-key.local.json");
@@ -244,8 +247,15 @@ export const getDeploymentContext = async (): Promise<DeployContext> => {
 	const [deployer] = await ethers.getSigners();
 	const chainId = Number((await ethers.provider.getNetwork()).chainId);
 
-	if (network.name === "fuji" && chainId !== FUJI_CHAIN_ID) {
-		throw new Error(`Fuji deploy expected chainId ${FUJI_CHAIN_ID}; got ${chainId}`);
+	const expectedChainId: Record<string, number> = {
+		fuji: FUJI_CHAIN_ID,
+		benzonet: BENZONET_CHAIN_ID,
+	};
+	const expected = expectedChainId[network.name];
+	if (expected !== undefined && chainId !== expected) {
+		throw new Error(
+			`${network.name} deploy expected chainId ${expected}; got ${chainId}`,
+		);
 	}
 
 	const deploymentPath = deploymentPathForNetwork();

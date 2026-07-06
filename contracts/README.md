@@ -139,6 +139,22 @@ that window can't top the sender up again — either wait for the cooldown to
 expire or point the smoke at a fresh, funded sender address. (The smoke tolerates
 a cooldown revert and continues if the sender still holds enough tUSDC.)
 
+### Also deployed on BenzoNet (the permissioned L1)
+
+The identical converter stack is deployed on **BenzoNet**, Benzo's sovereign
+Avalanche L1 (chain id `68420`), so encrypted balances run on a gated chain —
+the two privacy primitives stacked. Same tooling, a `benzonet` Hardhat network:
+
+```bash
+BENZONET_RPC_URL=<l1-rpc> SKIP_VERIFY=1 \
+  PRIVATE_KEY=<deployer-key> PRIVATE_KEY_2=<funded-auditor-key> pnpm deploy:benzonet
+```
+
+The deployer must be on BenzoNet's deployer allowlist and the deployer/auditor
+accounts funded with BGAS (both hold a genesis allocation). The stack is
+recorded in [`deployments/benzonet.json`](deployments/benzonet.json); the L1
+itself is in [`../infra/benzonet-fuji.json`](../infra/benzonet-fuji.json).
+
 ## Circuit Artifact Pipeline
 
 The eERC SDK generates Groth16 proofs from circuit artifacts served to the
