@@ -15,6 +15,7 @@
     "zkit:make": "hardhat zkit make",
     "zkit:verifiers": "hardhat zkit verifiers",
     "deploy:eerc": "hardhat run scripts/deploy/00-eerc-converter-stack.ts --network fuji",
+    "deploy:benzonet": "hardhat run scripts/deploy/00-eerc-converter-stack.ts --network benzonet",
     "smoke:eerc": "hardhat run scripts/deploy/99-smoke.ts --network fuji",
     "deploy:handle-registry": "hardhat run scripts/deploy/06-handle-registry.ts --network fuji",
     "deploy:invoice-registry": "hardhat run scripts/deploy/07-invoice-registry.ts --network fuji",

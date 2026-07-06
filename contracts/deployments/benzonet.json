@@ -1,0 +1,120 @@
+{
+  "network": "benzonet",
+  "chainId": 68420,
+  "contracts": {
+    "eercConverter": {
+      "verifiers": {
+        "registration": {
+          "address": "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0",
+          "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+          "transactionHash": "0xbceccf9fa04e67267883a2cea7578b403666cc888582ea0bc85acd777a940ff1",
+          "blockNumber": 6,
+          "verified": false,
+          "constructorArguments": []
+        },
+        "mint": {
+          "address": "0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f",
+          "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+          "transactionHash": "0xb941620b7e1f158982db0354d5de2b0614dc4ea1aa08aed478508331640c23f4",
+          "blockNumber": 7,
+          "verified": false,
+          "constructorArguments": []
+        },
+        "transfer": {
+          "address": "0xa1d0f50D5f479a2aeC3C67A38a6fa5c735CcC313",
+          "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+          "transactionHash": "0xbe4be218a2ba86d289d7ad08e2c1c1a4cbf964fb03e83a29feb46aaa8330599f",
+          "blockNumber": 8,
+          "verified": false,
+          "constructorArguments": []
+        },
+        "withdraw": {
+          "address": "0x46688f1704a69a6c276cCCB823E36C80787B0FA2",
+          "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+          "transactionHash": "0x381d38cad9954ebd6bd49ee00d77d65d4eb041c00f1a3b0412d7eabdcfe82ba2",
+          "blockNumber": 9,
+          "verified": false,
+          "constructorArguments": []
+        },
+        "burn": {
+          "address": "0x992014C9De921CC064Ea6BC03849aea638b86Fd1",
+          "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+          "transactionHash": "0x9bd1f40f6e6481df7699572d353ee1157637a7778d0d5e7687c325edf77f83f9",
+          "blockNumber": 10,
+          "verified": false,
+          "constructorArguments": []
+        }
+      },
+      "registrar": {
+        "address": "0xdfB9b7d958539FC4A1e31C9b813833Fb972B30Ff",
+        "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+        "transactionHash": "0xdde88065fd46d7e7d514bac933659eb590f69f75f9be17c43555f16812c44dc4",
+        "blockNumber": 11,
+        "verified": false,
+        "constructorArguments": [
+          "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0"
+        ]
+      },
+      "testUSDC": {
+        "address": "0x85546bE3564d503F6ED77a4DA44BEF32EcAEd034",
+        "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+        "transactionHash": "0x26f400cb74d47fe3cc582dab6d74a0f88cdc5cd5bf6f8a2f89e4b72fc2217571",
+        "blockNumber": 12,
+        "verified": false,
+        "constructorArguments": [
+          "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb"
+        ]
+      },
+      "libraries": {
+        "babyJubJub": {
+          "address": "0x542251F24101841485f7d3CD312955b254c7717D",
+          "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+          "transactionHash": "0x6816ab5dad2e06a665a24a827f19ad5260296db6a436fc3b11fd5da571af3938",
+          "blockNumber": 13,
+          "verified": false,
+          "constructorArguments": []
+        }
+      },
+      "encryptedERC": {
+        "address": "0x790Dd53099E5009a9Cf572769a5A663cCb7EfAcE",
+        "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+        "transactionHash": "0x3696f9b63053e88931de18e3ec9312788f501fdae0723cfe65c4d7bb13a74627",
+        "blockNumber": 14,
+        "verified": false,
+        "constructorArguments": [
+          {
+            "registrar": "0xdfB9b7d958539FC4A1e31C9b813833Fb972B30Ff",
+            "isConverter": true,
+            "name": "Benzo Private tUSDC",
+            "symbol": "btUSDC",
+            "decimals": 6,
+            "mintVerifier": "0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f",
+            "withdrawVerifier": "0x46688f1704a69a6c276cCCB823E36C80787B0FA2",
+            "transferVerifier": "0xa1d0f50D5f479a2aeC3C67A38a6fa5c735CcC313",
+            "burnVerifier": "0x992014C9De921CC064Ea6BC03849aea638b86Fd1"
+          }
+        ],
+        "libraries": {
+          "contracts/eerc/libraries/BabyJubJub.sol:BabyJubJub": "0x542251F24101841485f7d3CD312955b254c7717D"
+        }
+      },
+      "wrappedToken": {
+        "address": "0x85546bE3564d503F6ED77a4DA44BEF32EcAEd034",
+        "decimals": 6,
+        "symbol": "tUSDC"
+      },
+      "auditor": {
+        "address": "0xa0C5455eF9A7D71e9B5b3ce8Cf3C7E06D856bEDB",
+        "publicKey": [
+          "8326951487785448784552314372835261914295744593208537803722524504914683554244",
+          "13157554229670550111853026485939760935856134736076038263498141986685785265596"
+        ],
+        "registrationTxHash": "0xa9bd3d88447296bc9bb9104a1b0e0023412addbd1d5030507aadddd0e91f8316",
+        "setAuditorPublicKeyTxHash": "0xc64e069dd3ec5216a224c24374f2edb8bce270d924c7ac7fd3a2edea19c31e31",
+        "setAuditorPublicKeyBlockNumber": 16,
+        "keyFile": ".auditor-key.local.json",
+        "custodyNote": "Operator must custody the BabyJubJub privateKey in contracts/.auditor-key.local.json until M3 sealed storage imports it."
+      }
+    }
+  }
+}
