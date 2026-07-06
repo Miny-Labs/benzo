@@ -2,13 +2,14 @@
   "name": "benzo-monorepo",
   "private": true,
   "version": "0.1.0",
-  "description": "Benzo: private-by-default shielded-USDC payments protocol on Stellar (Soroban)",
+  "description": "Benzo: private USDC payments on Avalanche (eERC)",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "pnpm -r build",
+    "compile": "pnpm --filter @benzo/contracts compile",
     "test": "pnpm -r test",
     "lint": "biome lint",
     "lint:fix": "biome lint --write"
