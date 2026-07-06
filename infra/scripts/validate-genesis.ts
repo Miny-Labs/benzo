@@ -156,6 +156,10 @@ assert(
   "warpConfig.blockTimestamp must equal the genesis/Durango timestamp",
 );
 assert(
+  warp.quorumNumerator === 67,
+  "warpConfig.quorumNumerator must be 67 (the avalanche-cli PoA default)",
+);
+assert(
   warp.requirePrimaryNetworkSigners === true,
   "warpConfig.requirePrimaryNetworkSigners must be true for a sovereign L1",
 );
