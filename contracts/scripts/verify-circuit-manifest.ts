@@ -98,9 +98,9 @@ function validateEntry(index: number, entry: ManifestEntry): string[] {
   if (
     typeof entry.bytes !== "number" ||
     !Number.isSafeInteger(entry.bytes) ||
-    entry.bytes < 0
+    entry.bytes <= 0
   ) {
-    failures.push(`${prefix}.bytes must be a non-negative safe integer`);
+    failures.push(`${prefix}.bytes must be a positive safe integer`);
   }
 
   for (const key of ["zkitVersion", "circomVersion", "upstreamTag", "builtAt"] as const) {

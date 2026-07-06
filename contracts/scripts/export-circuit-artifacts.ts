@@ -111,9 +111,34 @@ function findGeneratedArtifact(circuit: Circuit, extension: Extension): string {
     );
   }
 
-  matches.sort((left, right) => left.length - right.length);
+  matches.sort((left, right) => left.length - right.length || comparePaths(left, right));
+
+  if (matches.length > 1) {
+    console.warn(
+      [
+        `Multiple generated artifacts matched ${circuit.circuit}.${extension}; using ${relative(
+          repoRoot,
+          matches[0],
+        )}.`,
+        "Candidates:",
+        ...matches.map((match) => `  - ${relative(repoRoot, match)}`),
+      ].join("\n"),
+    );
+  }
 
   return matches[0];
+}
+
+function comparePaths(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+
+  if (left > right) {
+    return 1;
+  }
+
+  return 0;
 }
 
 function listFiles(directory: string): string[] {
