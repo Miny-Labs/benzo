@@ -1,12 +1,23 @@
 import { sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
-import { fromDrizzle, PgBoss, type Job } from "pg-boss";
+import { fromDrizzle, PgBoss, type Job, type JobWithMetadata } from "pg-boss";
 import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
 import { auditLog } from "../db/schema.js";
+import {
+	enqueueOutstandingOnboardings,
+	handleOnboardingFailedJob,
+	handleOnboardingJob,
+	ONBOARDING_ADVANCE_QUEUE,
+	ONBOARDING_FAILED_QUEUE,
+	type OnboardingJobData,
+	type OnboardingWorkerOptions,
+} from "../onboarding/service.js";
 
 export const JOB_QUEUES = {
 	demoAudit: "demo.audit",
+	onboardingAdvance: ONBOARDING_ADVANCE_QUEUE,
+	onboardingFailed: ONBOARDING_FAILED_QUEUE,
 } as const;
 
 export type DemoAuditJobData = {
@@ -33,12 +44,26 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
 		retryLimit: 3,
 		retentionSeconds: 604_800,
 	});
+	await boss.createQueue(JOB_QUEUES.onboardingFailed, {
+		deleteAfterSeconds: 604_800,
+		retentionSeconds: 2_592_000,
+	});
+	await boss.createQueue(JOB_QUEUES.onboardingAdvance, {
+		deadLetter: JOB_QUEUES.onboardingFailed,
+		deleteAfterSeconds: 604_800,
+		expireInSeconds: 60,
+		policy: "key_strict_fifo",
+		retentionSeconds: 2_592_000,
+		retryBackoff: true,
+		retryLimit: 8,
+	});
 }
 
 export async function registerJobs(
 	boss: PgBoss,
 	db: Database,
 	logger: FastifyBaseLogger,
+	onboarding?: OnboardingWorkerOptions,
 ): Promise<void> {
 	await ensureQueues(boss);
 	await boss.work<DemoAuditJobData>(
@@ -56,6 +81,52 @@ export async function registerJobs(
 			);
 		},
 	);
+
+	if (!onboarding) {
+		return;
+	}
+
+	await boss.work<OnboardingJobData>(
+		JOB_QUEUES.onboardingAdvance,
+		{ batchSize: 1, includeMetadata: true, localConcurrency: 4 },
+		async ([job]) => {
+			if (!job) {
+				return;
+			}
+
+			await handleOnboardingJob(
+				db,
+				boss,
+				onboarding,
+				job as JobWithMetadata<OnboardingJobData>,
+			);
+			logger.info(
+				{ jobId: job.id, queue: JOB_QUEUES.onboardingAdvance },
+				"onboarding job processed",
+			);
+		},
+	);
+	await boss.work<OnboardingJobData>(
+		JOB_QUEUES.onboardingFailed,
+		{ batchSize: 1 },
+		async ([job]) => {
+			if (!job) {
+				return;
+			}
+
+			await handleOnboardingFailedJob(db, job);
+			logger.error(
+				{ jobId: job.id, queue: JOB_QUEUES.onboardingFailed },
+				"onboarding job failed terminally",
+			);
+		},
+	);
+
+	const resumed = await enqueueOutstandingOnboardings(db, boss);
+
+	if (resumed > 0) {
+		logger.info({ count: resumed }, "resumed onboarding jobs");
+	}
 }
 
 export async function enqueueDemoAuditJob(

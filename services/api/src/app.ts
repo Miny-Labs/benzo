@@ -8,9 +8,15 @@ import { createPublicClient, http } from "viem";
 import { loadConfig, type ApiConfig } from "./config.js";
 import { createDb, createPool, type Database } from "./db/client.js";
 import { createBoss, registerJobs } from "./jobs/index.js";
+import {
+	createOnboardingChainClient,
+	type OnboardingChainClient,
+} from "./onboarding/chain.js";
+import { createKycProvider, type KycProvider } from "./onboarding/kyc.js";
 import authPlugin from "./plugins/auth.js";
 import { authRoutes } from "./routes/auth.js";
 import { healthRoutes } from "./routes/health.js";
+import { onboardingRoutes } from "./routes/onboarding.js";
 import type { PgBoss } from "pg-boss";
 import type { Pool } from "pg";
 
@@ -18,7 +24,9 @@ export type BuildAppOptions = {
 	boss?: PgBoss;
 	config?: ApiConfig;
 	db?: Database;
+	kycProvider?: KycProvider;
 	logger?: FastifyServerOptions["logger"];
+	onboardingChain?: OnboardingChainClient;
 	pool?: Pool;
 	startBoss?: boolean;
 };
@@ -39,6 +47,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	const publicClient = createPublicClient({
 		transport: http(config.benzonetRpcUrl),
 	});
+	const onboardingChain =
+		options.onboardingChain ??
+		createOnboardingChainClient(config, publicClient);
+	const kycProvider = options.kycProvider ?? createKycProvider(config);
 	let bossStarted = false;
 
 	fastify.addHook("onClose", async () => {
@@ -65,11 +77,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		await fastify.register(authPlugin, { config, db });
 		await fastify.register(healthRoutes, { db, publicClient });
 		await fastify.register(authRoutes, { config, db, publicClient });
+		await fastify.register(onboardingRoutes, { boss, config, db });
 
 		if (options.startBoss !== false) {
 			await boss.start();
 			bossStarted = true;
-			await registerJobs(boss, db, fastify.log as FastifyBaseLogger);
+			await registerJobs(boss, db, fastify.log as FastifyBaseLogger, {
+				chain: onboardingChain,
+				config,
+				kycProvider,
+			});
 		}
 	} catch (error) {
 		await fastify.close().catch((closeError: unknown) => {

@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
@@ -13,13 +14,26 @@ import { createSiweMessage } from "viem/siwe";
 import { buildApp } from "../src/app.js";
 import type { ApiConfig } from "../src/config.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
-import { auditLog } from "../src/db/schema.js";
+import {
+	auditLog,
+	drips,
+	onboardings,
+	sessions,
+	users,
+	type UserRole,
+} from "../src/db/schema.js";
 import {
 	createBoss,
 	enqueueDemoAuditJob,
 	ensureQueues,
 	registerJobs,
 } from "../src/jobs/index.js";
+import type {
+	AllowlistStepResult,
+	GasDripStepResult,
+	OnboardingChainClient,
+} from "../src/onboarding/chain.js";
+import type { OnboardingStatusResponse } from "../src/onboarding/service.js";
 
 const testMasterKey =
 	"0000000000000000000000000000000000000000000000000000000000000000";
@@ -43,10 +57,17 @@ describe("@benzo/api", () => {
 			apiDomain: "localhost",
 			benzonetChainId: 43_113,
 			benzonetRpcUrl: rpc.url,
+			chainEnv: "fuji",
 			databaseUrl: postgres.getConnectionUri(),
+			dripBalanceThresholdWei: 500_000_000_000_000_000n,
+			dripWei: 500_000_000_000_000_000n,
+			eercDeploymentManifest: undefined,
+			eercRegistrarAddress: undefined,
 			host: "127.0.0.1",
+			kycProvider: "mock",
 			logLevel: "silent",
 			nodeEnv: "test",
+			onboardingRegistrationPollSeconds: 1,
 			opsPrivateKey: testOpsPrivateKey,
 			port: 0,
 			sessionCookieName: "benzo_test_session",
@@ -307,6 +328,280 @@ describe("@benzo/api", () => {
 			await pool.end();
 		}
 	});
+
+	it("runs Fuji onboarding with allowlist no-op, plain gas transfer, and registration polling", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const boss = createBoss(config);
+		const chain = createOnboardingChainStub({
+			chainEnv: "fuji",
+			registered: false,
+		});
+		const app = await buildApp({
+			boss,
+			config,
+			db,
+			logger: false,
+			onboardingChain: chain,
+			pool,
+		});
+		const account = privateKeyToAccount(generatePrivateKey());
+
+		try {
+			const { cookie } = await createAuthenticatedSession(
+				db,
+				config,
+				account.address,
+			);
+
+			const startResponses = await Promise.all(
+				Array.from({ length: 2 }, () =>
+					app.inject({
+						headers: { cookie },
+						method: "POST",
+						payload: {
+							mockKyc: {
+								country: "US",
+								name: "Ava Example",
+							},
+						},
+						url: "/onboarding/start",
+					}),
+				),
+			);
+
+			expect(startResponses.map((response) => response.statusCode)).toEqual([
+				202, 202,
+			]);
+
+			await waitFor(async () => {
+				const onboarding = await fetchOnboardingStatus(app, cookie);
+				expect(onboarding.status).toBe("awaiting_registration");
+			});
+
+			let onboarding = await fetchOnboardingStatus(app, cookie);
+			expect(onboarding).toMatchObject({
+				chainEnv: "fuji",
+				mockKyc: {
+					payload: {
+						country: "US",
+						label: "MOCK_KYC_NO_DOCUMENTS",
+						name: "Ava Example",
+					},
+					provider: "mock",
+				},
+				steps: {
+					allowlist: {
+						result: "noop_fuji_no_tx_allowlist",
+						txHash: null,
+					},
+					gas: {
+						result: "fuji_plain_transfer_sent",
+						txHash: txHash(1),
+					},
+				},
+			});
+			expect(chain.calls.allowlistWrites).toBe(0);
+			expect(chain.calls.drips).toBe(1);
+
+			chain.setRegistered(true);
+
+			await waitFor(async () => {
+				onboarding = await fetchOnboardingStatus(app, cookie);
+				expect(onboarding.status).toBe("complete");
+			});
+
+			const streamResponse = await app.inject({
+				headers: { cookie },
+				method: "GET",
+				url: "/onboarding/status/stream",
+			});
+
+			expect(streamResponse.statusCode).toBe(200);
+			expect(streamResponse.body).toContain("event: status");
+			expect(streamResponse.body).toContain('"status":"complete"');
+		} finally {
+			await app.close();
+			await boss.stop().catch(() => undefined);
+			await pool.end();
+		}
+	});
+
+	it("runs BenzoNet onboarding idempotently across concurrent starts", async () => {
+		const benzonetConfig: ApiConfig = {
+			...config,
+			benzonetChainId: 133_713,
+			chainEnv: "benzonet",
+		};
+		const pool = createPool(benzonetConfig);
+		const db = createDb(pool);
+		const boss = createBoss(benzonetConfig);
+		const chain = createOnboardingChainStub({
+			chainEnv: "benzonet",
+			chainId: benzonetConfig.benzonetChainId,
+			registered: true,
+		});
+		const app = await buildApp({
+			boss,
+			config: benzonetConfig,
+			db,
+			logger: false,
+			onboardingChain: chain,
+			pool,
+		});
+		const userAccount = privateKeyToAccount(generatePrivateKey());
+		const adminAccount = privateKeyToAccount(generatePrivateKey());
+
+		try {
+			const { cookie, userId } = await createAuthenticatedSession(
+				db,
+				benzonetConfig,
+				userAccount.address,
+			);
+			const admin = await createAuthenticatedSession(
+				db,
+				benzonetConfig,
+				adminAccount.address,
+				["network_admin"],
+			);
+
+			const startResponses = await Promise.all(
+				Array.from({ length: 5 }, () =>
+					app.inject({
+						headers: { cookie },
+						method: "POST",
+						payload: {
+							mockKyc: {
+								country: "CA",
+								name: "Concurrent User",
+							},
+						},
+						url: "/onboarding/start",
+					}),
+				),
+			);
+
+			expect(startResponses.every((response) => response.statusCode === 202)).toBe(
+				true,
+			);
+
+			await waitFor(async () => {
+				const onboarding = await fetchOnboardingStatus(app, cookie);
+				expect(onboarding.status).toBe("complete");
+			});
+
+			const onboarding = await fetchOnboardingStatus(app, cookie);
+			expect(onboarding.steps.allowlist).toMatchObject({
+				result: "enabled",
+				txHash: txHash(1),
+			});
+			expect(onboarding.steps.gas).toMatchObject({
+				result: "benzonet_native_minter_sent",
+				txHash: txHash(2),
+			});
+			expect(chain.calls.allowlistReads).toBe(1);
+			expect(chain.calls.allowlistWrites).toBe(1);
+			expect(chain.calls.drips).toBe(1);
+			expect(await countOnboardingsForUser(db, userId)).toBe(1);
+			expect(await countDripsForAddress(db, userAccount.address.toLowerCase())).toBe(
+				1,
+			);
+
+			const adminResponse = await app.inject({
+				headers: { cookie: admin.cookie },
+				method: "GET",
+				url: "/admin/onboardings?status=complete",
+			});
+
+			expect(adminResponse.statusCode).toBe(200);
+			expect(adminResponse.json()).toMatchObject({
+				onboardings: expect.arrayContaining([
+					expect.objectContaining({
+						address: userAccount.address.toLowerCase(),
+						status: "complete",
+					}),
+				]),
+			});
+		} finally {
+			await app.close();
+			await boss.stop().catch(() => undefined);
+			await pool.end();
+		}
+	});
+
+	it("resumes awaiting registration after service restart without repeating chain steps", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const firstBoss = createBoss(config);
+		const chain = createOnboardingChainStub({
+			chainEnv: "fuji",
+			registered: false,
+		});
+		const account = privateKeyToAccount(generatePrivateKey());
+		const firstApp = await buildApp({
+			boss: firstBoss,
+			config,
+			db,
+			logger: false,
+			onboardingChain: chain,
+			pool,
+		});
+		let firstAppClosed = false;
+		let secondBoss: PgBoss | undefined;
+		let secondApp: Awaited<ReturnType<typeof buildApp>> | undefined;
+
+		try {
+			const { cookie } = await createAuthenticatedSession(
+				db,
+				config,
+				account.address,
+			);
+
+			const startResponse = await firstApp.inject({
+				headers: { cookie },
+				method: "POST",
+				url: "/onboarding/start",
+			});
+
+			expect(startResponse.statusCode).toBe(202);
+
+			await waitFor(async () => {
+				const onboarding = await fetchOnboardingStatus(firstApp, cookie);
+				expect(onboarding.status).toBe("awaiting_registration");
+			});
+			expect(chain.calls.drips).toBe(1);
+
+			await firstApp.close();
+			firstAppClosed = true;
+			await firstBoss.stop().catch(() => undefined);
+			chain.setRegistered(true);
+
+			secondBoss = createBoss(config);
+			secondApp = await buildApp({
+				boss: secondBoss,
+				config,
+				db,
+				logger: false,
+				onboardingChain: chain,
+				pool,
+			});
+
+			await waitFor(async () => {
+				const onboarding = await fetchOnboardingStatus(secondApp!, cookie);
+				expect(onboarding.status).toBe("complete");
+			});
+			expect(chain.calls.allowlistWrites).toBe(0);
+			expect(chain.calls.drips).toBe(1);
+		} finally {
+			await secondApp?.close();
+			await secondBoss?.stop().catch(() => undefined);
+			if (!firstAppClosed) {
+				await firstApp.close();
+			}
+			await firstBoss.stop().catch(() => undefined);
+			await pool.end();
+		}
+	});
 });
 
 async function migrateTestDatabase(config: ApiConfig): Promise<void> {
@@ -348,6 +643,186 @@ async function countAuditRows(
 		.where(and(eq(auditLog.action, action), eq(auditLog.subject, "demo:restart")));
 
 	return row?.count ?? 0;
+}
+
+async function createAuthenticatedSession(
+	db: Database,
+	config: ApiConfig,
+	address: string,
+	roles: UserRole[] = [],
+): Promise<{
+	cookie: string;
+	userId: string;
+}> {
+	const normalizedAddress = address.toLowerCase();
+	const [user] = await db
+		.insert(users)
+		.values({
+			address: normalizedAddress,
+			roles,
+		})
+		.onConflictDoUpdate({
+			set: {
+				roles,
+			},
+			target: users.address,
+		})
+		.returning({
+			id: users.id,
+		});
+
+	if (!user) {
+		throw new Error("test_user_create_failed");
+	}
+
+	const sessionId = randomBytes(32).toString("hex");
+	await db.insert(sessions).values({
+		expiresAt: new Date(Date.now() + 86_400_000),
+		id: sessionId,
+		userId: user.id,
+	});
+
+	return {
+		cookie: `${config.sessionCookieName}=${sessionId}`,
+		userId: user.id,
+	};
+}
+
+async function fetchOnboardingStatus(
+	app: Awaited<ReturnType<typeof buildApp>>,
+	cookie: string,
+): Promise<OnboardingStatusResponse> {
+	const response = await app.inject({
+		headers: { cookie },
+		method: "GET",
+		url: "/onboarding/status",
+	});
+
+	expect(response.statusCode).toBe(200);
+
+	return response.json<{ onboarding: OnboardingStatusResponse }>().onboarding;
+}
+
+async function countOnboardingsForUser(
+	db: Database,
+	userId: string,
+): Promise<number> {
+	const [row] = await db
+		.select({
+			count: sql<number>`count(*)::int`,
+		})
+		.from(onboardings)
+		.where(eq(onboardings.userId, userId));
+
+	return row?.count ?? 0;
+}
+
+async function countDripsForAddress(
+	db: Database,
+	address: string,
+): Promise<number> {
+	const [row] = await db
+		.select({
+			count: sql<number>`count(*)::int`,
+		})
+		.from(drips)
+		.where(eq(drips.address, address));
+
+	return row?.count ?? 0;
+}
+
+type OnboardingChainStub = OnboardingChainClient & {
+	calls: {
+		allowlistReads: number;
+		allowlistWrites: number;
+		balanceReads: number;
+		drips: number;
+		registrationPolls: number;
+	};
+	setNativeBalance: (balance: bigint) => void;
+	setRegistered: (registered: boolean) => void;
+};
+
+function createOnboardingChainStub(input: {
+	allowlistLevel?: bigint;
+	chainEnv: "fuji" | "benzonet";
+	chainId?: number;
+	nativeBalance?: bigint;
+	registered: boolean;
+}): OnboardingChainStub {
+	let allowlistLevel = input.allowlistLevel ?? 0n;
+	let nativeBalance = input.nativeBalance ?? 0n;
+	let registered = input.registered;
+	let nextTxId = 1;
+	const calls = {
+		allowlistReads: 0,
+		allowlistWrites: 0,
+		balanceReads: 0,
+		drips: 0,
+		registrationPolls: 0,
+	};
+
+	return {
+		calls,
+		chainEnv: input.chainEnv,
+		chainId: input.chainId ?? (input.chainEnv === "fuji" ? 43_113 : 133_713),
+		async dripGas(_address, amountWei): Promise<GasDripStepResult> {
+			calls.drips += 1;
+			nativeBalance += amountWei;
+
+			return {
+				mode:
+					input.chainEnv === "fuji"
+						? "fuji_plain_transfer"
+						: "benzonet_native_minter",
+				result: "sent",
+				txHash: txHash(nextTxId++),
+			};
+		},
+		async ensureAllowlisted(): Promise<AllowlistStepResult> {
+			if (input.chainEnv === "fuji") {
+				return {
+					result: "noop_fuji_no_tx_allowlist",
+					txHash: null,
+				};
+			}
+
+			calls.allowlistReads += 1;
+
+			if (allowlistLevel >= 1n) {
+				return {
+					result: "already_enabled",
+					txHash: null,
+				};
+			}
+
+			calls.allowlistWrites += 1;
+			allowlistLevel = 1n;
+
+			return {
+				result: "enabled",
+				txHash: txHash(nextTxId++),
+			};
+		},
+		async getNativeBalance() {
+			calls.balanceReads += 1;
+			return nativeBalance;
+		},
+		async isUserRegistered() {
+			calls.registrationPolls += 1;
+			return registered;
+		},
+		setNativeBalance(balance) {
+			nativeBalance = balance;
+		},
+		setRegistered(value) {
+			registered = value;
+		},
+	};
+}
+
+function txHash(id: number): `0x${string}` {
+	return `0x${id.toString(16).padStart(64, "0")}`;
 }
 
 async function waitFor(assertion: () => Promise<void>): Promise<void> {
