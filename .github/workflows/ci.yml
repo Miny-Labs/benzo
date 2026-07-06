@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -20,9 +22,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm --filter @benzo/config test
+      # Hosted API: typecheck + full suite. The tests spin up Postgres via
+      # testcontainers (Docker is preinstalled on ubuntu-latest runners).
+      - run: pnpm --filter @benzo/api build
+      - run: pnpm --filter @benzo/api test
       - run: pnpm --filter @benzo/contracts compile
       - run: pnpm --filter @benzo/contracts zkit:make
       - run: pnpm --filter @benzo/contracts artifacts:export
       - run: pnpm --filter @benzo/contracts artifacts:verify
+      # Contract tests need the compiled contracts + zkit artifacts above.
+      - run: pnpm --filter @benzo/contracts test
       # Report but don't fail on transitive advisories (triage signal).
       - run: pnpm audit --audit-level high || true
