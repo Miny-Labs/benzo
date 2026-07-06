@@ -1,0 +1,112 @@
+# BenzoNet RPC edge — the only public entry to the L1.
+#
+# Browser apps (wallet, console) and the backend hit Caddy at
+#   https://{$RPC_DOMAIN}/<app>/<token>
+# and Caddy rewrites to /ext/bc/{$BLOCKCHAIN_ID}/rpc on the internal rpc-node.
+#
+# The path tokens are ABUSE-THROTTLING IDENTIFIERS, not secrets — browser
+# bundles ship them. Real access control is on-chain (txAllowList); Caddy adds
+# origin pinning, method restriction, and per-token rate limits. All env vars
+# come from infra/vm/.env.
+
+{
+	email {$ACME_EMAIL}
+	# caddy-ratelimit ordering (module is not in the stock image; see Dockerfile).
+	order rate_limit before reverse_proxy
+}
+
+{$RPC_DOMAIN} {
+	# Only JSON-RPC POST and CORS preflight OPTIONS survive; everything else
+	# (GET, bare /ext/*, unknown paths) 404s via the fallthrough handle at the end.
+	@disallowed_method not method POST OPTIONS
+	respond @disallowed_method 404
+
+	# ---- wallet app: /wallet/<WALLET_RPC_TOKEN> ----
+	handle /wallet/{$WALLET_RPC_TOKEN} {
+		import app_cors {$WALLET_ORIGIN}
+		import preflight_204
+		# POST with no allowed Origin is rejected (a bare token isn't enough).
+		@wallet_no_origin {
+			method POST
+			not header Origin {$WALLET_ORIGIN}
+			not header Origin {$DEV_ORIGIN:https://disabled.invalid}
+		}
+		respond @wallet_no_origin 403
+		rate_limit {
+			zone wallet {
+				# Per-client bucket (not a single global 20 r/s for all wallets).
+				key {remote_host}
+				events 20
+				window 1s
+			}
+		}
+		rewrite * /ext/bc/{$BLOCKCHAIN_ID}/rpc
+		reverse_proxy rpc-node:9650
+	}
+
+	# ---- console app: /console/<CONSOLE_RPC_TOKEN> ----
+	handle /console/{$CONSOLE_RPC_TOKEN} {
+		import app_cors {$CONSOLE_ORIGIN}
+		import preflight_204
+		@console_no_origin {
+			method POST
+			not header Origin {$CONSOLE_ORIGIN}
+			not header Origin {$DEV_ORIGIN:https://disabled.invalid}
+		}
+		respond @console_no_origin 403
+		rate_limit {
+			zone console {
+				key {remote_host}
+				events 20
+				window 1s
+			}
+		}
+		rewrite * /ext/bc/{$BLOCKCHAIN_ID}/rpc
+		reverse_proxy rpc-node:9650
+	}
+
+	# ---- backend: /backend/<BACKEND_RPC_TOKEN> ----
+	# Server-to-server: no Origin requirement, higher but separate rate limit.
+	handle /backend/{$BACKEND_RPC_TOKEN} {
+		import preflight_204
+		rate_limit {
+			zone backend {
+				key {remote_host}
+				events 100
+				window 1s
+			}
+		}
+		rewrite * /ext/bc/{$BLOCKCHAIN_ID}/rpc
+		reverse_proxy rpc-node:9650
+	}
+
+	# Wrong/absent token, bare /ext/* — nothing else is routable.
+	handle {
+		respond 404
+	}
+}
+
+# Reflect an allowed browser Origin (prod app origin or local dev) back in the
+# CORS header; requests from other origins get no ACAO header and the browser
+# blocks the response. Argument {args[0]} is the app's production origin.
+(app_cors) {
+	@origin_prod header Origin {args[0]}
+	# Local dev origin, opt-in via DEV_ORIGIN (unset in prod → a value that
+	# never matches a real browser Origin, so the dev clause stays inert).
+	@origin_dev header Origin {$DEV_ORIGIN:https://disabled.invalid}
+	handle @origin_prod {
+		header Access-Control-Allow-Origin {http.request.header.Origin}
+	}
+	handle @origin_dev {
+		header Access-Control-Allow-Origin {http.request.header.Origin}
+	}
+	header Access-Control-Allow-Methods "POST, OPTIONS"
+	header Access-Control-Allow-Headers "Content-Type"
+	header Vary Origin
+}
+
+# Short-circuit CORS preflight before it hits the rate limiter / proxy.
+(preflight_204) {
+	@preflight method OPTIONS
+	respond @preflight 204
+}

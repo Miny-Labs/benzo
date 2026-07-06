@@ -1,0 +1,113 @@
+# BenzoNet VM topology — a dedicated RPC node that tracks the L1, fronted by
+# Caddy as the only public entry. The validator runs separately (its APIs never
+# leave its own host); this compose is the RPC + edge box.
+#
+# Node ports (9650 HTTP / 9651 staking) are NEVER published to the host — only
+# exposed on the internal docker network, reachable solely by Caddy. Caddy is
+# the one service that binds host 80/443.
+#
+# Bring-up:  docker compose up -d           (rpc-node + caddy)
+# Monitoring (see #28): docker compose --profile monitoring up -d
+#
+# Fill infra/vm/.env from .env.example first (tokens, domain, blockchain id).
+
+services:
+  rpc-node:
+    # Pin to the avalanchego release whose bundled subnet-evm matches the VM
+    # binary in ./plugins/<vmID> (see README — verify against the ava-labs
+    # compatibility matrix; never use :latest).
+    image: avaplatform/avalanchego:v1.13.0
+    restart: unless-stopped
+    command:
+      - --network-id=fuji
+      - --track-subnets=${SUBNET_ID}
+      # L1 validators/RPC nodes only need the P-Chain; skip the X/C full sync.
+      - --partial-sync-primary-network
+      - --http-host=0.0.0.0
+      - --http-port=9650
+      - --staking-port=9651
+      # avalanchego defaults --http-allowed-hosts to localhost, so it would
+      # reject the public Host header Caddy forwards. The node is internal-only
+      # (expose, not ports — Caddy is the sole reachable path), so '*' is safe.
+      - "--http-allowed-hosts=*"
+    # expose (not ports): reachable on the docker network, never on the host.
+    expose:
+      - "9650"
+      - "9651"
+    volumes:
+      - avalanchego-db:/root/.avalanchego/db
+      - avalanchego-staking:/root/.avalanchego/staking
+      - ./configs/subnets:/root/.avalanchego/configs/subnets:ro
+      - ./configs/chains:/root/.avalanchego/configs/chains:ro
+      # subnet-evm VM binary, installed by the operator (gitignored):
+      - ./plugins:/root/.avalanchego/plugins:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9650/ext/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    networks:
+      - benzonet
+
+  caddy:
+    build:
+      context: ./caddy
+    restart: unless-stopped
+    # The only public entry: TLS + per-app token routing to rpc-node:9650.
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file:
+      - .env
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      rpc-node:
+        condition: service_healthy
+    networks:
+      - benzonet
+
+  # --- monitoring: stubbed here, configured in #28 (docker compose --profile monitoring) ---
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    expose:
+      - "9090"
+    networks:
+      - benzonet
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    env_file:
+      - .env
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    expose:
+      - "3000"
+    depends_on:
+      - prometheus
+    networks:
+      - benzonet
+
+volumes:
+  avalanchego-db:
+  avalanchego-staking:
+  caddy-data:
+  caddy-config:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  benzonet:
+    driver: bridge
