@@ -28,6 +28,11 @@ export type MockKycPayload = {
 	name: string;
 };
 
+export type MockKycInputPayload = {
+	country?: string;
+	name?: string;
+};
+
 export const users = pgTable(
 	"users",
 	{
@@ -78,6 +83,7 @@ export const onboardings = pgTable(
 		status: onboardingStatus("status").notNull().default("pending_kyc"),
 		chainEnv: text("chain_env").notNull(),
 		chainId: integer("chain_id").notNull(),
+		mockKycInput: jsonb("mock_kyc_input").$type<MockKycInputPayload>(),
 		kycApprovedAt: timestamp("kyc_approved_at", { withTimezone: true }),
 		allowlistTxHash: text("allowlist_tx_hash"),
 		allowlistResult: text("allowlist_result"),

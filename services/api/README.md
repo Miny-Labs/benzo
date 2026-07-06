@@ -23,8 +23,8 @@ number from `BENZONET_RPC_URL`.
 | `BENZONET_RPC_URL` | Yes | Avalanche Fuji, local anvil, or BenzoNet JSON-RPC URL used for health and SIWE signature verification fallbacks. |
 | `OPS_PRIVATE_KEY` | Yes | `0x`-prefixed operator key reserved for later workflow jobs. It is validated at boot but not logged. |
 | `APP_MASTER_KEY` | Yes | 32-byte hex key reserved for libsodium secretbox encrypted-at-rest fields. It may include `0x`; the service normalizes it internally. |
-| `BENZONET_CHAIN_ID` | No | SIWE chain id. Defaults to Fuji `43113` until the BenzoNet VM chain id is assigned. |
-| `CHAIN_ENV` | No | `fuji` or `benzonet`. Defaults to `fuji` when `BENZONET_CHAIN_ID=43113`, otherwise `benzonet`. Fuji records tx allowlist as a no-op and drips gas with a plain AVAX transfer. |
+| `BENZONET_CHAIN_ID` | No | SIWE chain id. Defaults to Fuji `43113`; set to BenzoNet `68420` when `CHAIN_ENV=benzonet`. |
+| `CHAIN_ENV` | No | `fuji` or `benzonet`. Defaults to `fuji` when `BENZONET_CHAIN_ID=43113`, otherwise `benzonet`. Config load rejects mismatched chain ids. Fuji records tx allowlist as a no-op and drips gas with a plain AVAX transfer. |
 | `KYC_PROVIDER` | No | Currently only `mock`. The mock provider records name/country only and never accepts documents. |
 | `DRIP_WEI` | No | Native gas amount to send/mint during onboarding. Defaults to `500000000000000000` (0.5 native). |
 | `DRIP_BALANCE_THRESHOLD_WEI` | No | Skip gas drip when the user balance is already at least this amount. Defaults to `500000000000000000`. |

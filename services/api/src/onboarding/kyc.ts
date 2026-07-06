@@ -1,10 +1,7 @@
 import type { ApiConfig } from "../config.js";
-import type { MockKycPayload } from "../db/schema.js";
+import type { MockKycInputPayload, MockKycPayload } from "../db/schema.js";
 
-export type MockKycInput = {
-	country?: string;
-	name?: string;
-};
+export type MockKycInput = MockKycInputPayload;
 
 export type KycProvider = {
 	name: "mock";

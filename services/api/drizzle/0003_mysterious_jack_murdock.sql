@@ -1,0 +1,1 @@
+ALTER TABLE "onboardings" ADD COLUMN "mock_kyc_input" jsonb;

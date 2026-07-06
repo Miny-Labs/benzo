@@ -7,7 +7,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { and, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pino from "pino";
-import type { PgBoss } from "pg-boss";
+import type { JobWithMetadata, PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { createSiweMessage } from "viem/siwe";
@@ -33,7 +33,11 @@ import type {
 	GasDripStepResult,
 	OnboardingChainClient,
 } from "../src/onboarding/chain.js";
-import type { OnboardingStatusResponse } from "../src/onboarding/service.js";
+import {
+	handleOnboardingJob,
+	type OnboardingJobData,
+	type OnboardingStatusResponse,
+} from "../src/onboarding/service.js";
 
 const testMasterKey =
 	"0000000000000000000000000000000000000000000000000000000000000000";
@@ -430,7 +434,7 @@ describe("@benzo/api", () => {
 	it("runs BenzoNet onboarding idempotently across concurrent starts", async () => {
 		const benzonetConfig: ApiConfig = {
 			...config,
-			benzonetChainId: 133_713,
+			benzonetChainId: 68_420,
 			chainEnv: "benzonet",
 		};
 		const pool = createPool(benzonetConfig);
@@ -522,6 +526,22 @@ describe("@benzo/api", () => {
 					}),
 				]),
 			});
+
+			const paginatedAdminResponse = await app.inject({
+				headers: { cookie: admin.cookie },
+				method: "GET",
+				url: "/admin/onboardings?status=complete&limit=1&offset=0",
+			});
+			const paginatedAdminBody = paginatedAdminResponse.json<{
+				limit: number;
+				offset: number;
+				onboardings: OnboardingStatusResponse[];
+			}>();
+
+			expect(paginatedAdminResponse.statusCode).toBe(200);
+			expect(paginatedAdminBody.limit).toBe(1);
+			expect(paginatedAdminBody.offset).toBe(0);
+			expect(paginatedAdminBody.onboardings.length).toBeLessThanOrEqual(1);
 		} finally {
 			await app.close();
 			await boss.stop().catch(() => undefined);
@@ -599,6 +619,201 @@ describe("@benzo/api", () => {
 				await firstApp.close();
 			}
 			await firstBoss.stop().catch(() => undefined);
+			await pool.end();
+		}
+	});
+
+	it("resumes pending KYC after service restart with original mock KYC data", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const firstBoss = createBoss(config);
+		const chain = createOnboardingChainStub({
+			chainEnv: "fuji",
+			registered: true,
+		});
+		const account = privateKeyToAccount(generatePrivateKey());
+		let firstApp: Awaited<ReturnType<typeof buildApp>> | undefined;
+		let firstBossStarted = false;
+		let secondBoss: PgBoss | undefined;
+		let secondApp: Awaited<ReturnType<typeof buildApp>> | undefined;
+
+		try {
+			await firstBoss.start();
+			firstBossStarted = true;
+			await ensureQueues(firstBoss);
+
+			firstApp = await buildApp({
+				boss: firstBoss,
+				config,
+				db,
+				logger: false,
+				onboardingChain: chain,
+				pool,
+				startBoss: false,
+			});
+
+			const { cookie } = await createAuthenticatedSession(
+				db,
+				config,
+				account.address,
+			);
+
+			const startResponse = await firstApp.inject({
+				headers: { cookie },
+				method: "POST",
+				payload: {
+					mockKyc: {
+						country: "gb",
+						name: "Pending Resume User",
+					},
+				},
+				url: "/onboarding/start",
+			});
+
+			expect(startResponse.statusCode).toBe(202);
+
+			const pendingOnboarding = await fetchOnboardingStatus(firstApp, cookie);
+			expect(pendingOnboarding.status).toBe("pending_kyc");
+			expect(pendingOnboarding.mockKyc).toMatchObject({
+				approvedAt: null,
+				payload: null,
+				provider: null,
+			});
+
+			await firstApp.close();
+			firstApp = undefined;
+			await firstBoss.stop();
+			firstBossStarted = false;
+
+			secondBoss = createBoss(config);
+			secondApp = await buildApp({
+				boss: secondBoss,
+				config,
+				db,
+				logger: false,
+				onboardingChain: chain,
+				pool,
+			});
+
+			await waitFor(async () => {
+				const onboarding = await fetchOnboardingStatus(secondApp!, cookie);
+				expect(onboarding.status).toBe("complete");
+				expect(onboarding.mockKyc?.payload).toEqual({
+					country: "GB",
+					label: "MOCK_KYC_NO_DOCUMENTS",
+					name: "Pending Resume User",
+				});
+			});
+		} finally {
+			await secondApp?.close();
+			await secondBoss?.stop().catch(() => undefined);
+			await firstApp?.close();
+			if (firstBossStarted) {
+				await firstBoss.stop().catch(() => undefined);
+			}
+			await pool.end();
+		}
+	});
+
+	it("marks an unhandled onboarding status failed instead of re-enqueueing forever", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const chain = createOnboardingChainStub({
+			chainEnv: "fuji",
+			registered: true,
+		});
+		const account = privateKeyToAccount(generatePrivateKey());
+
+		try {
+			const { userId } = await createAuthenticatedSession(
+				db,
+				config,
+				account.address,
+			);
+
+			await db.insert(onboardings).values({
+				chainEnv: config.chainEnv,
+				chainId: config.benzonetChainId,
+				status: "pending_kyc",
+				userId,
+			});
+			await db.execute(
+				sql`ALTER TYPE onboarding_status ADD VALUE IF NOT EXISTS 'mystery_status'`,
+			);
+			await db.execute(
+				sql`UPDATE onboardings SET status = 'mystery_status'::onboarding_status WHERE user_id = ${userId}`,
+			);
+
+			await handleOnboardingJob(
+				db,
+				{} as PgBoss,
+				{
+					chain,
+					config,
+					kycProvider: {
+						async approve() {
+							throw new Error("kyc_not_expected");
+						},
+						name: "mock",
+					},
+				},
+				{
+					data: {
+						address: account.address.toLowerCase(),
+						userId,
+					},
+					retryCount: 0,
+					retryLimit: 8,
+				} as JobWithMetadata<OnboardingJobData>,
+			);
+
+			const [row] = await db
+				.select({
+					error: onboardings.error,
+					status: onboardings.status,
+				})
+				.from(onboardings)
+				.where(eq(onboardings.userId, userId))
+				.limit(1);
+
+			expect(row).toEqual({
+				error: "unhandled_onboarding_status:mystery_status",
+				status: "failed",
+			});
+			expect(chain.calls.registrationPolls).toBe(0);
+		} finally {
+			await pool.end();
+		}
+	});
+
+	it("returns 404 before opening the status stream when onboarding is missing", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const account = privateKeyToAccount(generatePrivateKey());
+
+		try {
+			const { cookie } = await createAuthenticatedSession(
+				db,
+				config,
+				account.address,
+			);
+			const response = await app.inject({
+				headers: { cookie },
+				method: "GET",
+				url: "/onboarding/status/stream",
+			});
+
+			expect(response.statusCode).toBe(404);
+			expect(response.json()).toEqual({ error: "onboarding_not_started" });
+		} finally {
+			await app.close();
 			await pool.end();
 		}
 	});
@@ -765,7 +980,7 @@ function createOnboardingChainStub(input: {
 	return {
 		calls,
 		chainEnv: input.chainEnv,
-		chainId: input.chainId ?? (input.chainEnv === "fuji" ? 43_113 : 133_713),
+		chainId: input.chainId ?? (input.chainEnv === "fuji" ? 43_113 : 68_420),
 		async dripGas(_address, amountWei): Promise<GasDripStepResult> {
 			calls.drips += 1;
 			nativeBalance += amountWei;

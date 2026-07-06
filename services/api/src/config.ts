@@ -5,6 +5,8 @@ const privateKeyPattern = /^0x[0-9a-fA-F]{64}$/;
 const weiPattern = /^(0|[1-9][0-9]*)$/;
 const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
 const defaultDripWei = "500000000000000000";
+const fujiChainId = 43_113;
+const benzonetChainId = 68_420;
 
 const envSchema = z
 	.object({
@@ -60,6 +62,19 @@ const envSchema = z
 				path: ["API_DOMAIN"],
 			});
 		}
+
+		const chainEnv =
+			env.CHAIN_ENV ?? (env.BENZONET_CHAIN_ID === fujiChainId ? "fuji" : "benzonet");
+		const expectedChainId =
+			chainEnv === "fuji" ? fujiChainId : benzonetChainId;
+
+		if (env.BENZONET_CHAIN_ID !== expectedChainId) {
+			ctx.addIssue({
+				code: "custom",
+				message: `BENZONET_CHAIN_ID must be ${expectedChainId} when CHAIN_ENV=${chainEnv}`,
+				path: ["BENZONET_CHAIN_ID"],
+			});
+		}
 	})
 	.transform((env) => ({
 		appMasterKey: env.APP_MASTER_KEY,
@@ -67,7 +82,7 @@ const envSchema = z
 		benzonetChainId: env.BENZONET_CHAIN_ID,
 		benzonetRpcUrl: env.BENZONET_RPC_URL,
 		chainEnv:
-			env.CHAIN_ENV ?? (env.BENZONET_CHAIN_ID === 43_113 ? "fuji" : "benzonet"),
+			env.CHAIN_ENV ?? (env.BENZONET_CHAIN_ID === fujiChainId ? "fuji" : "benzonet"),
 		databaseUrl: env.DATABASE_URL,
 		dripBalanceThresholdWei: BigInt(env.DRIP_BALANCE_THRESHOLD_WEI),
 		dripWei: BigInt(env.DRIP_WEI),

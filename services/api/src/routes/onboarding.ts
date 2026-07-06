@@ -21,7 +21,9 @@ const startBodySchema = z
 	})
 	.optional();
 
-const statusQuerySchema = z.object({
+const adminOnboardingsQuerySchema = z.object({
+	limit: z.coerce.number().int().min(1).max(500).default(100),
+	offset: z.coerce.number().int().min(0).default(0),
 	status: z
 		.enum([
 			"pending_kyc",
@@ -98,6 +100,15 @@ export const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOptions> =
 					return reply.code(401).send({ error: "unauthorized" });
 				}
 
+				const initialOnboarding = await getOnboardingForUser(
+					options.db,
+					request.user.id,
+				);
+
+				if (!initialOnboarding) {
+					return reply.code(404).send({ error: "onboarding_not_started" });
+				}
+
 				reply.hijack();
 				reply.raw.writeHead(200, {
 					"cache-control": "no-cache, no-transform",
@@ -105,11 +116,22 @@ export const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOptions> =
 					"content-type": "text/event-stream",
 				});
 
-				const sendStatus = async (): Promise<boolean> => {
-					const onboarding = await getOnboardingForUser(
-						options.db,
-						request.user!.id,
-					);
+				const sendStatus = async (
+					knownOnboarding?: Awaited<ReturnType<typeof getOnboardingForUser>>,
+				): Promise<boolean> => {
+					const onboarding =
+						knownOnboarding ??
+						(await getOnboardingForUser(options.db, request.user!.id));
+
+					if (!onboarding) {
+						reply.raw.write(
+							`event: terminal\ndata: ${JSON.stringify({
+								error: "onboarding_not_started",
+								onboarding: null,
+							})}\n\n`,
+						);
+						return true;
+					}
 
 					reply.raw.write(
 						`event: status\ndata: ${JSON.stringify({ onboarding })}\n\n`,
@@ -120,31 +142,52 @@ export const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOptions> =
 					);
 				};
 
+				let closed = false;
+				let interval: ReturnType<typeof setInterval> | undefined;
+				const clearStatusInterval = (): void => {
+					if (interval) {
+						clearInterval(interval);
+						interval = undefined;
+					}
+				};
 				const close = (): void => {
-					clearInterval(interval);
+					if (closed) {
+						clearStatusInterval();
+						return;
+					}
+
+					closed = true;
+					clearStatusInterval();
 					reply.raw.end();
 				};
-				const interval = setInterval(() => {
-					void sendStatus()
-						.then((done) => {
-							if (done) {
-								close();
-							}
-						})
-						.catch((error: unknown) => {
-							request.log.error({ err: error }, "onboarding sse failed");
-							close();
-						});
-				}, 2_000);
 
 				request.raw.on("close", () => {
-					clearInterval(interval);
+					closed = true;
+					clearStatusInterval();
 				});
 
 				try {
-					if (await sendStatus()) {
+					if (await sendStatus(initialOnboarding)) {
 						close();
+						return;
 					}
+
+					if (closed) {
+						return;
+					}
+
+					interval = setInterval(() => {
+						void sendStatus()
+							.then((done) => {
+								if (done) {
+									close();
+								}
+							})
+							.catch((error: unknown) => {
+								request.log.error({ err: error }, "onboarding sse failed");
+								close();
+							});
+					}, 2_000);
 				} catch (error) {
 					request.log.error({ err: error }, "onboarding sse failed");
 					close();
@@ -156,18 +199,19 @@ export const onboardingRoutes: FastifyPluginAsync<OnboardingRoutesOptions> =
 			"/admin/onboardings",
 			{ preHandler: fastify.requireRole("network_admin") },
 			async (request, reply) => {
-				const query = statusQuerySchema.safeParse(request.query);
+				const query = adminOnboardingsQuerySchema.safeParse(request.query);
 
 				if (!query.success) {
-					return reply.code(400).send({ error: "invalid_status_filter" });
+					return reply.code(400).send({ error: "invalid_onboarding_query" });
 				}
 
-				const onboardings = await listAdminOnboardings(
-					options.db,
-					query.data.status as OnboardingStatus | undefined,
-				);
+				const result = await listAdminOnboardings(options.db, {
+					limit: query.data.limit,
+					offset: query.data.offset,
+					status: query.data.status as OnboardingStatus | undefined,
+				});
 
-				return reply.send({ onboardings });
+				return reply.send(result);
 			},
 		);
 	};

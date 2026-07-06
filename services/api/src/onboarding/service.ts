@@ -22,6 +22,8 @@ export const ONBOARDING_ADVANCE_QUEUE = "onboarding.advance";
 export const ONBOARDING_FAILED_QUEUE = "onboarding.failed";
 
 const retryLimit = 8;
+const defaultAdminOnboardingLimit = 100;
+const maxAdminOnboardingLimit = 500;
 const inProgressStatuses: OnboardingStatus[] = [
 	"pending_kyc",
 	"kyc_approved",
@@ -94,6 +96,7 @@ type OnboardingRecord = {
 	id: string;
 	kycApprovedAt: Date | null;
 	kycApprovedRecordAt: Date | null;
+	mockKycInput: MockKycInput | null;
 	kycPayload: MockKycPayload | null;
 	kycProvider: string | null;
 	registrationCompletedAt: Date | null;
@@ -107,6 +110,18 @@ export type OnboardingWorkerOptions = {
 	chain: OnboardingChainClient;
 	config: ApiConfig;
 	kycProvider: KycProvider;
+};
+
+export type ListAdminOnboardingsInput = {
+	limit?: number;
+	offset?: number;
+	status?: OnboardingStatus;
+};
+
+export type AdminOnboardingsResponse = {
+	limit: number;
+	offset: number;
+	onboardings: OnboardingStatusResponse[];
 };
 
 export async function startOnboarding(
@@ -124,12 +139,14 @@ export async function startOnboarding(
 			.values({
 				chainEnv: config.chainEnv,
 				chainId: config.benzonetChainId,
+				mockKycInput: input.mockKyc ?? null,
 				status: "pending_kyc",
 				userId: input.userId,
 			})
 			.onConflictDoNothing({ target: onboardings.userId })
 			.returning({
 				id: onboardings.id,
+				mockKycInput: onboardings.mockKycInput,
 				status: onboardings.status,
 			});
 		const row =
@@ -138,6 +155,7 @@ export async function startOnboarding(
 				await tx
 					.select({
 						id: onboardings.id,
+						mockKycInput: onboardings.mockKycInput,
 						status: onboardings.status,
 					})
 					.from(onboardings)
@@ -155,10 +173,26 @@ export async function startOnboarding(
 			};
 		}
 
+		const mockKycInput = row.mockKycInput ?? input.mockKyc ?? null;
+
+		if (
+			row.status === "pending_kyc" &&
+			row.mockKycInput === null &&
+			input.mockKyc
+		) {
+			await tx
+				.update(onboardings)
+				.set({
+					mockKycInput: input.mockKyc,
+					updatedAt: new Date(),
+				})
+				.where(eq(onboardings.userId, input.userId));
+		}
+
 		const jobId = await enqueueOnboardingAdvance(boss, {
 			data: {
 				address: input.address,
-				mockKyc: input.mockKyc,
+				mockKyc: mockKycInput ?? undefined,
 				userId: input.userId,
 			},
 			db: fromDrizzle(tx, sql),
@@ -190,18 +224,25 @@ export async function getOnboardingForUser(
 
 export async function listAdminOnboardings(
 	db: Database,
-	status?: OnboardingStatus,
-): Promise<OnboardingStatusResponse[]> {
+	input: ListAdminOnboardingsInput = {},
+): Promise<AdminOnboardingsResponse> {
+	const limit = normalizeAdminOnboardingLimit(input.limit);
+	const offset = normalizeAdminOnboardingOffset(input.offset);
 	const rows = await db
 		.select(selectOnboardingFields)
 		.from(onboardings)
 		.innerJoin(users, eq(onboardings.userId, users.id))
 		.leftJoin(kycRecords, eq(kycRecords.userId, onboardings.userId))
-		.where(status ? eq(onboardings.status, status) : undefined)
+		.where(input.status ? eq(onboardings.status, input.status) : undefined)
 		.orderBy(desc(onboardings.updatedAt))
-		.limit(100);
+		.limit(limit)
+		.offset(offset);
 
-	return rows.map(serializeOnboarding);
+	return {
+		limit,
+		offset,
+		onboardings: rows.map(serializeOnboarding),
+	};
 }
 
 export async function enqueueOutstandingOnboardings(
@@ -211,6 +252,8 @@ export async function enqueueOutstandingOnboardings(
 	const rows = await db
 		.select({
 			address: users.address,
+			mockKycInput: onboardings.mockKycInput,
+			status: onboardings.status,
 			userId: onboardings.userId,
 		})
 		.from(onboardings)
@@ -222,6 +265,10 @@ export async function enqueueOutstandingOnboardings(
 			enqueueOnboardingAdvance(boss, {
 				data: {
 					address: row.address,
+					mockKyc:
+						row.status === "pending_kyc"
+							? (row.mockKycInput ?? undefined)
+							: undefined,
 					userId: row.userId,
 				},
 			}),
@@ -278,7 +325,12 @@ async function advanceOnboarding(
 		}
 
 		if (row.status === "pending_kyc") {
-			await approveMockKyc(db, options.kycProvider, row, data.mockKyc);
+			await approveMockKyc(
+				db,
+				options.kycProvider,
+				row,
+				row.mockKycInput ?? data.mockKyc,
+			);
 			row = await requireOnboardingRecord(db, data.userId);
 			continue;
 		}
@@ -307,6 +359,13 @@ async function advanceOnboarding(
 			await pollRegistration(db, boss, options, row);
 			return;
 		}
+
+		await markOnboardingFailed(
+			db,
+			row.userId,
+			`unhandled_onboarding_status:${String(row.status)}`,
+		);
+		return;
 	}
 }
 
@@ -580,6 +639,7 @@ const selectOnboardingFields = {
 	id: onboardings.id,
 	kycApprovedAt: onboardings.kycApprovedAt,
 	kycApprovedRecordAt: kycRecords.approvedAt,
+	mockKycInput: onboardings.mockKycInput,
 	kycPayload: kycRecords.payload,
 	kycProvider: kycRecords.provider,
 	registrationCompletedAt: onboardings.registrationCompletedAt,
@@ -626,4 +686,23 @@ function serializeOnboarding(row: OnboardingRecord): OnboardingStatusResponse {
 		updatedAt: row.updatedAt.toISOString(),
 		userId: row.userId,
 	};
+}
+
+function normalizeAdminOnboardingLimit(limit: number | undefined): number {
+	if (!Number.isFinite(limit)) {
+		return defaultAdminOnboardingLimit;
+	}
+
+	return Math.min(
+		Math.max(Math.trunc(limit ?? defaultAdminOnboardingLimit), 1),
+		maxAdminOnboardingLimit,
+	);
+}
+
+function normalizeAdminOnboardingOffset(offset: number | undefined): number {
+	if (!Number.isFinite(offset)) {
+		return 0;
+	}
+
+	return Math.max(Math.trunc(offset ?? 0), 0);
 }

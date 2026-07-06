@@ -99,10 +99,15 @@ export function createOnboardingChainClient(
 	publicClient: PublicClient,
 ): OnboardingChainClient {
 	const account = privateKeyToAccount(config.opsPrivateKey as Hex);
+	let registrarAddressPromise: Promise<Address | null> | undefined;
 	const walletClient = createWalletClient({
 		account,
 		transport: http(config.benzonetRpcUrl),
 	});
+	const getRegistrarAddress = (): Promise<Address | null> => {
+		registrarAddressPromise ??= resolveRegistrarAddress(config);
+		return registrarAddressPromise;
+	};
 
 	return {
 		chainEnv: config.chainEnv,
@@ -184,7 +189,7 @@ export function createOnboardingChainClient(
 			});
 		},
 		async isUserRegistered(address) {
-			const registrarAddress = await resolveRegistrarAddress(config);
+			const registrarAddress = await getRegistrarAddress();
 
 			if (!registrarAddress) {
 				throw new Error("eerc_registrar_unconfigured");
@@ -220,6 +225,7 @@ async function resolveRegistrarAddress(
 
 	try {
 		const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
+		validateManifestMatchesConfig(manifest, config, manifestPath);
 		return findRegistrarAddress(manifest);
 	} catch (error) {
 		if (isMissingFileError(error)) {
@@ -227,6 +233,28 @@ async function resolveRegistrarAddress(
 		}
 
 		throw error;
+	}
+}
+
+function validateManifestMatchesConfig(
+	manifest: unknown,
+	config: ApiConfig,
+	manifestPath: string,
+): void {
+	const manifestNetwork = readStringPath(manifest, ["network"]);
+
+	if (manifestNetwork && manifestNetwork !== config.chainEnv) {
+		throw new Error(
+			`eerc_manifest_network_mismatch:${manifestPath}:${manifestNetwork}:${config.chainEnv}`,
+		);
+	}
+
+	const manifestChainId = readNumberPath(manifest, ["chainId"]);
+
+	if (manifestChainId !== null && manifestChainId !== config.benzonetChainId) {
+		throw new Error(
+			`eerc_manifest_chain_id_mismatch:${manifestPath}:${manifestChainId}:${config.benzonetChainId}`,
+		);
 	}
 }
 
@@ -260,6 +288,20 @@ function readStringPath(value: unknown, keys: string[]): string | null {
 	}
 
 	return typeof cursor === "string" ? cursor : null;
+}
+
+function readNumberPath(value: unknown, keys: string[]): number | null {
+	let cursor = value;
+
+	for (const key of keys) {
+		if (!cursor || typeof cursor !== "object" || !(key in cursor)) {
+			return null;
+		}
+
+		cursor = (cursor as Record<string, unknown>)[key];
+	}
+
+	return typeof cursor === "number" ? cursor : null;
 }
 
 function isMissingFileError(error: unknown): boolean {
