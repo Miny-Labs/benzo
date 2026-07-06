@@ -10,12 +10,21 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "zkit:make": "hardhat zkit make",
+    "zkit:verifiers": "hardhat zkit verifiers",
     "deploy:fuji": "hardhat run scripts/deploy.ts --network fuji"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.1.0",
+    "@solarity/chai-zkit": "^0.3.1",
+    "@solarity/hardhat-zkit": "^0.5.15",
+    "@zk-kit/baby-jubjub": "^1.0.3",
+    "circomlib": "^2.0.5",
     "dotenv": "^16.4.5",
     "hardhat": "^2.22.0",
+    "maci-crypto": "^2.0.0",
+    "poseidon-lite": "^0.3.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.0"
   }
