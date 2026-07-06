@@ -1,14 +1,13 @@
 # @benzo/contracts
 
-Hardhat workspace targeting Avalanche Fuji (chain id 43113). Currently a
-compile-checked scaffold; the eERC integration lands here.
+Hardhat workspace targeting Avalanche Fuji (chain id 43113). This workspace
+vendors Ava Labs EncryptedERC v0.0.4 for Benzo's private USDC payment layer.
 
-## eERC integration plan
+## Vendored eERC
 
-Vendor [`ava-labs/EncryptedERC`](https://github.com/ava-labs/EncryptedERC)
-v0.0.4 (or follow the
-[`eerc-backend-converter`](https://github.com/alejandro99so/eerc-backend-converter)
-layout from the Builder Hub course):
+[`ava-labs/EncryptedERC`](https://github.com/ava-labs/EncryptedERC) is vendored
+under `contracts/eerc/`; the exact upstream tag and commit are recorded in
+`contracts/eerc/VENDOR.md`.
 
 - Solidity 0.8.27, OpenZeppelin 5.x; circuits compiled with
   `@solarity/hardhat-zkit` (circom 2.1.9, Groth16).
@@ -19,13 +18,25 @@ layout from the Builder Hub course):
 - After `hardhat zkit make`, copy each circuit's `.wasm` + `.zkey` into the
   frontend's `public/` for the SDK's `circuitURLs`.
 - License: EncryptedERC is under the Ava Labs Ecosystem License v1.1
-  (Avalanche-platform-only).
+  (Avalanche-platform-only). Keep Benzo deployments and demos scoped to Fuji,
+  Avalanche C-Chain, or Avalanche L1s.
+
+The local `hardhat zkit make` flow uses `contributions: 0`. Treat its generated
+Groth16 setup as a dev trusted setup, not a ceremony. It is acceptable for Fuji
+testnet demos only and must not be represented as production ceremony output.
+The proving artifacts and downloaded `.ptau` files live under ignored `zkit/`
+paths.
+
+The ported upstream tests live in `test/eerc/`. Their only local deviations are
+path/import updates required by Benzo's `contracts/eerc/` vendor directory.
 
 ## Commands
 
 ```bash
 pnpm compile        # hardhat compile
 pnpm test           # hardhat test
+pnpm zkit:make      # hardhat zkit make
+pnpm zkit:verifiers # hardhat zkit verifiers
 pnpm deploy:fuji    # hardhat run scripts/deploy.ts --network fuji
 ```
 

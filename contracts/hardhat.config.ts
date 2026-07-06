@@ -1,4 +1,6 @@
 import "@nomicfoundation/hardhat-toolbox";
+import "@solarity/chai-zkit";
+import "@solarity/hardhat-zkit";
 import * as dotenv from "dotenv";
 import type { HardhatUserConfig } from "hardhat/config";
 import path from "node:path";
@@ -41,6 +43,34 @@ const config: HardhatUserConfig = {
         },
       },
     ],
+  },
+  zkit: {
+    compilerVersion: "2.1.9",
+    circuitsDir: "circuits",
+    compilationSettings: {
+      artifactsDir: "zkit/artifacts",
+      onlyFiles: [],
+      skipFiles: [],
+      c: false,
+      json: false,
+      optimization: "O2",
+    },
+    setupSettings: {
+      contributionSettings: {
+        provingSystem: "groth16",
+        contributions: 0,
+      },
+      onlyFiles: [],
+      skipFiles: [],
+      ptauDir: "zkit/ptau",
+      ptauDownload: true,
+    },
+    verifiersSettings: {
+      verifiersDir: "contracts/verifiers",
+      verifiersType: "sol",
+    },
+    typesDir: "generated-types/zkit",
+    quiet: false,
   },
 };
 

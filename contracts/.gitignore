@@ -1,0 +1,18 @@
+# Hardhat outputs
+/artifacts/
+/cache/
+/typechain-types/
+/coverage/
+/coverage.json
+
+# hardhat-zkit outputs
+/generated-types/
+/zkit/
+*.zkey
+*.wasm
+*.wtns
+*.r1cs
+*.ptau
+
+# Local reports
+gas-report.txt
