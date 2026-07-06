@@ -71,6 +71,25 @@ describe("GiftEscrow", () => {
 			.to.emit(escrow, "GiftCreated")
 			.withArgs(giftId, sender.address, claimWallet.address, GIFT_AMOUNT, expiry);
 
+		const tokenAddress = await token.getAddress();
+		const escrowAddress = await escrow.getAddress();
+		const transferTopic = token.interface.getEvent("Transfer").topicHash;
+		const giftCreatedTopic =
+			escrow.interface.getEvent("GiftCreated").topicHash;
+		const transferLogIndex =
+			receipt?.logs.findIndex(
+				(log) =>
+					log.address === tokenAddress && log.topics[0] === transferTopic,
+			) ?? -1;
+		const giftCreatedLogIndex =
+			receipt?.logs.findIndex(
+				(log) =>
+					log.address === escrowAddress && log.topics[0] === giftCreatedTopic,
+			) ?? -1;
+		expect(transferLogIndex).to.be.greaterThanOrEqual(0);
+		expect(giftCreatedLogIndex).to.be.greaterThanOrEqual(0);
+		expect(transferLogIndex).to.be.lessThan(giftCreatedLogIndex);
+
 		let gift = await escrow.getGift(giftId);
 		expect(gift.sender).to.equal(sender.address);
 		expect(gift.claimAddress).to.equal(claimWallet.address);

@@ -140,6 +140,12 @@ provide their eERC decryption keys with
 proofs and assert decrypted balances. It prints the serialized bearer payload
 and the before/after decrypted balances.
 
+The script funds the newly generated ephemeral wallet from `PRIVATE_KEY_2`
+before ephemeral eERC registration, then checks the same gas floor again before
+the final private-transfer sweep. `PRIVATE_GIFT_MIN_EPHEMERAL_AVAX` defaults to
+`0.02`, sized to cover both transactions on Fuji; raise it if gas prices or
+proof-verification costs increase.
+
 ## Commands
 
 ```bash

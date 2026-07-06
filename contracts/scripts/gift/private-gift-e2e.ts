@@ -105,6 +105,8 @@ const ADDRESS_DEPLOYMENT_KEYS = {
 	token: ["tUSDC", "tusdc", "testUSDC", "TestUSDC", "testUsdc", "USDC", "usdc"],
 };
 
+const DEFAULT_MIN_EPHEMERAL_AVAX = "0.02";
+
 const parseBigInt = (value: string, name: string) => {
 	try {
 		return BigInt(value);
@@ -474,10 +476,15 @@ const fundEphemeralGasFromClaimant = async (
 	ephemeralAddress: string,
 ) => {
 	const minimum = ethers.parseEther(
-		process.env.PRIVATE_GIFT_MIN_EPHEMERAL_AVAX ?? "0.02",
+		process.env.PRIVATE_GIFT_MIN_EPHEMERAL_AVAX ?? DEFAULT_MIN_EPHEMERAL_AVAX,
 	);
 	const balance = await ethers.provider.getBalance(ephemeralAddress);
 	if (balance >= minimum) {
+		console.log(
+			`Ephemeral address ${ephemeralAddress} already has ${ethers.formatEther(
+				balance,
+			)} AVAX; skipping gas top-up.`,
+		);
 		return;
 	}
 
@@ -563,6 +570,7 @@ const main = async () => {
 	const ephemeral = createUser(ephemeralWallet);
 
 	await registerIfNeeded(registrar, sender, chainId, "sender");
+	await fundEphemeralGasFromClaimant(claimantSigner, ephemeral.signer.address);
 	await registerIfNeeded(registrar, ephemeral, chainId, "ephemeral");
 	await registerIfNeeded(registrar, claimant, chainId, "claimant");
 

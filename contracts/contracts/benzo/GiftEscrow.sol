@@ -108,9 +108,9 @@ contract GiftEscrow {
             status: Status.Created
         });
 
-        emit GiftCreated(giftId, msg.sender, claimAddress, amount, expiry);
-
         token.safeTransferFrom(msg.sender, address(this), amount);
+
+        emit GiftCreated(giftId, msg.sender, claimAddress, amount, expiry);
     }
 
     /// @notice Claims a gift to `recipient` using a signature from the gift link's ephemeral key.
