@@ -6,6 +6,7 @@ import {
 	isNotNull,
 	lte,
 	or,
+	sql,
 	type SQL,
 } from "drizzle-orm";
 import type { ApiConfig } from "../config.js";
@@ -98,31 +99,67 @@ export async function buildAuditorReport(
 				toBlock: input.toBlock,
 			}),
 		)
-		.orderBy(events.blockNumber, events.logIndex)
-		.limit(5_000);
+		.orderBy(events.blockNumber, events.logIndex);
 	const decrypted = await decryptRows(db, config, input.actor, rows);
-	let inflow = 0n;
-	let outflow = 0n;
-
-	for (const row of decrypted) {
-		const amount = BigInt(row.amount);
-
-		if (row.toAddr === input.address) {
-			inflow += amount;
-		}
-
-		if (row.fromAddr === input.address) {
-			outflow += amount;
-		}
-	}
+	const aggregate = await aggregateAuditorReport(db, input.address, decrypted);
 
 	return {
 		address: input.address,
-		eventCount: decrypted.length,
+		eventCount: aggregate.eventCount,
 		fromBlock: input.fromBlock?.toString() ?? null,
-		inflow: inflow.toString(),
-		outflow: outflow.toString(),
+		inflow: aggregate.inflow,
+		outflow: aggregate.outflow,
 		toBlock: input.toBlock?.toString() ?? null,
+	};
+}
+
+async function aggregateAuditorReport(
+	db: Database,
+	address: string,
+	rows: AuditorEventRow[],
+): Promise<{ eventCount: number; inflow: string; outflow: string }> {
+	const payload = JSON.stringify(
+		rows.map((row) => ({
+			amount: row.amount,
+			from_addr: row.fromAddr,
+			to_addr: row.toAddr,
+		})),
+	);
+	const result = await db.execute(sql`
+		select
+			count(*)::int as event_count,
+			coalesce(
+				sum(
+					case
+						when decrypted.to_addr = ${address} then decrypted.amount::numeric
+						else 0::numeric
+					end
+				),
+				0::numeric
+			)::text as inflow,
+			coalesce(
+				sum(
+					case
+						when decrypted.from_addr = ${address} then decrypted.amount::numeric
+						else 0::numeric
+					end
+				),
+				0::numeric
+			)::text as outflow
+		from jsonb_to_recordset(${payload}::jsonb) as decrypted(
+			amount text,
+			from_addr text,
+			to_addr text
+		)
+	`);
+	const aggregate = result.rows[0] as
+		| { event_count: number; inflow: string; outflow: string }
+		| undefined;
+
+	return {
+		eventCount: aggregate?.event_count ?? 0,
+		inflow: aggregate?.inflow ?? "0",
+		outflow: aggregate?.outflow ?? "0",
 	};
 }
 
@@ -164,24 +201,23 @@ async function decryptRows(
 		}
 
 		const amount = decryptAuditorAmountPct(privateKey, row.amountPct);
-		decryptedRows.push(serializeAuditorEvent(row, amount, key.id));
-	}
+		const decryptedRow = serializeAuditorEvent(row, amount, key.id);
 
-	await db.insert(auditLog).values(
-		decryptedRows.map((row) => ({
+		await db.insert(auditLog).values({
 			action: "auditor_decrypt",
 			actor,
 			meta: {
-				auditorKeyId: row.auditorKeyId,
-				blockNumber: row.blockNumber,
-				eventName: row.eventName,
-				eventRowId: row.id,
-				logIndex: row.logIndex,
-				txHash: row.txHash,
+				auditorKeyId: decryptedRow.auditorKeyId,
+				blockNumber: decryptedRow.blockNumber,
+				eventName: decryptedRow.eventName,
+				eventRowId: decryptedRow.id,
+				logIndex: decryptedRow.logIndex,
+				txHash: decryptedRow.txHash,
 			},
-			subject: `${row.txHash}:${row.logIndex}`,
-		})),
-	);
+			subject: `${decryptedRow.txHash}:${decryptedRow.logIndex}`,
+		});
+		decryptedRows.push(decryptedRow);
+	}
 
 	return decryptedRows;
 }
@@ -190,12 +226,69 @@ function findKeyForEvent(
 	keys: AuditorKeyRow[],
 	row: EventRow,
 ): AuditorKeyRow | undefined {
-	return keys.find(
-		(key) =>
-			key.activatedBlockNumber <= row.blockNumber &&
-			(key.retiredBlockNumber === null ||
-				row.blockNumber < key.retiredBlockNumber),
+	return keys.find((key) => keyCoversEvent(key, row));
+}
+
+function keyCoversEvent(key: AuditorKeyRow, row: EventRow): boolean {
+	return isAtOrAfterActivation(key, row) && isBeforeRetirement(key, row);
+}
+
+function isAtOrAfterActivation(key: AuditorKeyRow, row: EventRow): boolean {
+	return (
+		compareEventToBoundary(row, {
+			blockNumber: key.activatedBlockNumber,
+			logIndex: key.activatedLogIndex,
+			requiresPosition: key.rotationTxHash !== null,
+			transactionIndex: key.activatedTransactionIndex,
+		}) >= 0
 	);
+}
+
+function isBeforeRetirement(key: AuditorKeyRow, row: EventRow): boolean {
+	if (key.retiredBlockNumber === null) {
+		return true;
+	}
+
+	return (
+		compareEventToBoundary(row, {
+			blockNumber: key.retiredBlockNumber,
+			logIndex: key.retiredLogIndex,
+			requiresPosition: true,
+			transactionIndex: key.retiredTransactionIndex,
+		}) < 0
+	);
+}
+
+function compareEventToBoundary(
+	row: EventRow,
+	boundary: {
+		blockNumber: bigint;
+		logIndex: number | null;
+		requiresPosition: boolean;
+		transactionIndex: number | null;
+	},
+): number {
+	if (row.blockNumber < boundary.blockNumber) {
+		return -1;
+	}
+
+	if (row.blockNumber > boundary.blockNumber) {
+		return 1;
+	}
+
+	if (boundary.logIndex !== null) {
+		return row.logIndex - boundary.logIndex;
+	}
+
+	if (boundary.transactionIndex !== null && row.transactionIndex !== null) {
+		return row.transactionIndex - boundary.transactionIndex;
+	}
+
+	if (boundary.requiresPosition) {
+		throw new Error(`auditor_key_ambiguous_for_event:${row.txHash}:${row.logIndex}`);
+	}
+
+	return 0;
 }
 
 function serializeAuditorEvent(

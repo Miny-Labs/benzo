@@ -1,14 +1,18 @@
-import { count, desc, eq, sql } from "drizzle-orm";
+import { and, count, desc, eq, sql } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import { getAddress, isAddress } from "viem";
 import { z } from "zod";
 import type {
 	AdminChainClient,
 	AllowlistAction,
+	AuditorRotationChainResult,
 } from "../admin/chain.js";
 import {
 	createAuditorKeypair,
 	parseAuditorPrivateKey,
+	publicKeyForPrivateKey,
+	type AuditorKeypair,
+	type AuditorPublicKey,
 } from "../auditor/crypto.js";
 import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
@@ -177,11 +181,14 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (
 				.select()
 				.from(auditLog)
 				.where(
-					query.data.actor
-						? eq(auditLog.actor, query.data.actor)
-						: query.data.subject
+					and(
+						query.data.actor
+							? eq(auditLog.actor, query.data.actor)
+							: undefined,
+						query.data.subject
 							? eq(auditLog.subject, query.data.subject)
 							: undefined,
+					),
 				)
 				.orderBy(desc(auditLog.at), desc(auditLog.id))
 				.limit(query.data.limit)
@@ -212,20 +219,42 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (
 				return reply.code(400).send({ error: "invalid_auditor_rotate_payload" });
 			}
 
-			const keypair =
-				body.data?.privateKey === undefined
-					? createAuditorKeypair()
-					: createAuditorKeypair(parseAuditorPrivateKey(body.data.privateKey));
 			const auditorAddress = normalizeOptionalAddress(body.data?.auditorAddress);
 
 			if (body.data?.auditorAddress !== undefined && !auditorAddress) {
 				return reply.code(400).send({ error: "invalid_auditor_rotate_payload" });
 			}
 
-			const rotation = await options.adminChain.rotateAuditor({
-				auditorAddress,
-				publicKey: keypair.publicKey,
-			});
+			if (auditorAddress && body.data?.privateKey === undefined) {
+				return reply.code(400).send({ error: "invalid_auditor_rotate_payload" });
+			}
+
+			let keypair: AuditorKeypair;
+
+			try {
+				keypair = createAuditorRotationKeypair(body.data?.privateKey);
+			} catch {
+				return reply.code(400).send({ error: "invalid_auditor_rotate_payload" });
+			}
+
+			let rotation: AuditorRotationChainResult;
+
+			try {
+				rotation = await options.adminChain.rotateAuditor({
+					auditorAddress,
+					publicKey: keypair.publicKey,
+				});
+			} catch (error) {
+				if (
+					error instanceof Error &&
+					error.message === "auditor_public_key_mismatch"
+				) {
+					return reply.code(400).send({ error: "auditor_public_key_mismatch" });
+				}
+
+				throw error;
+			}
+
 			const actor = request.user.address;
 			const [inserted] = await options.db.transaction(async (tx) => {
 				await tx
@@ -234,6 +263,8 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (
 						active: false,
 						retiredAt: rotation.blockTime,
 						retiredBlockNumber: rotation.blockNumber,
+						retiredLogIndex: rotation.rotationLogIndex,
+						retiredTransactionIndex: rotation.rotationTransactionIndex,
 					})
 					.where(eq(auditorKeys.active, true));
 
@@ -242,6 +273,8 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (
 					.values({
 						activatedAt: rotation.blockTime,
 						activatedBlockNumber: rotation.blockNumber,
+						activatedLogIndex: rotation.rotationLogIndex,
+						activatedTransactionIndex: rotation.rotationTransactionIndex,
 						active: true,
 						publicKeyX: keypair.publicKey[0],
 						publicKeyY: keypair.publicKey[1],
@@ -260,6 +293,8 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (
 						auditorAddress: rotation.auditorAddress,
 						auditorKeyId: row?.id,
 						publicKey: keypair.publicKey,
+						rotationLogIndex: rotation.rotationLogIndex,
+						rotationTransactionIndex: rotation.rotationTransactionIndex,
 						txHash: rotation.txHash,
 					},
 					subject: "auditor_keys",
@@ -512,6 +547,28 @@ function normalizeOptionalAddress(address: string | undefined): string | undefin
 	}
 
 	return normalizeAddress(address) ?? undefined;
+}
+
+function createAuditorRotationKeypair(privateKey: string | undefined): AuditorKeypair {
+	if (privateKey === undefined) {
+		return createAuditorKeypair();
+	}
+
+	const keypair = createAuditorKeypair(parseAuditorPrivateKey(privateKey));
+	const publicKey = publicKeyForPrivateKey(privateKey);
+
+	if (!auditorPublicKeysEqual(publicKey, keypair.publicKey)) {
+		throw new Error("invalid_auditor_private_key");
+	}
+
+	return keypair;
+}
+
+function auditorPublicKeysEqual(
+	left: AuditorPublicKey,
+	right: AuditorPublicKey,
+): boolean {
+	return left[0] === right[0] && left[1] === right[1];
 }
 
 function maxBigint(a: bigint, b: bigint): bigint {

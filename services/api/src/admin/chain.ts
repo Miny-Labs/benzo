@@ -56,6 +56,8 @@ export type AuditorRotationChainResult = {
 	auditorAddress: string | null;
 	blockNumber: bigint;
 	blockTime: Date;
+	rotationLogIndex: number | null;
+	rotationTransactionIndex: number | null;
 	txHash: string;
 };
 
@@ -135,6 +137,26 @@ const encryptedErcAddressAdminAbi = [
 		name: "setAuditorPublicKey",
 		outputs: [],
 		stateMutability: "nonpayable",
+		type: "function",
+	},
+] as const;
+
+const encryptedErcAuditorPublicKeyAbi = [
+	{
+		inputs: [],
+		name: "auditorPublicKey",
+		outputs: [{ name: "", type: "uint256[2]" }],
+		stateMutability: "view",
+		type: "function",
+	},
+] as const;
+
+const registrarPublicKeyAbi = [
+	{
+		inputs: [{ name: "user", type: "address" }],
+		name: "getUserPublicKey",
+		outputs: [{ name: "publicKey", type: "uint256[2]" }],
+		stateMutability: "view",
 		type: "function",
 	},
 ] as const;
@@ -304,8 +326,22 @@ export function createAdminChainClient(
 		},
 		async rotateAuditor(input) {
 			const encryptedErcAddress = normalizeAddress(config.eercEncryptedErcAddress);
-			const txHash =
+			const auditorAddress =
 				input.auditorAddress === undefined
+					? undefined
+					: normalizeAddress(input.auditorAddress);
+
+			if (auditorAddress !== undefined) {
+				await assertRegisteredAuditorPublicKey(
+					publicClient,
+					normalizeAddress(config.eercRegistrarAddress),
+					auditorAddress,
+					input.publicKey,
+				);
+			}
+
+			const txHash =
+				auditorAddress === undefined
 					? await walletClient.writeContract({
 							abi: encryptedErcPublicKeyAdminAbi,
 							account,
@@ -318,7 +354,7 @@ export function createAdminChainClient(
 							abi: encryptedErcAddressAdminAbi,
 							account,
 							address: encryptedErcAddress,
-							args: [normalizeAddress(input.auditorAddress)],
+							args: [auditorAddress],
 							chain: null,
 							functionName: "setAuditorPublicKey",
 						});
@@ -328,13 +364,22 @@ export function createAdminChainClient(
 			});
 			const blockNumber = receipt.blockNumber ?? (await publicClient.getBlockNumber());
 			const block = await publicClient.getBlock({ blockNumber });
+			const rotationLogIndex = firstReceiptLogIndex(receipt.logs);
+
+			if (auditorAddress !== undefined) {
+				await assertEncryptedErcAuditorPublicKey(
+					publicClient,
+					encryptedErcAddress,
+					input.publicKey,
+				);
+			}
 
 			return {
-				auditorAddress: input.auditorAddress
-					? normalizeAddress(input.auditorAddress).toLowerCase()
-					: null,
+				auditorAddress: auditorAddress?.toLowerCase() ?? null,
 				blockNumber,
 				blockTime: new Date(Number(block.timestamp) * 1_000),
+				rotationLogIndex,
+				rotationTransactionIndex: receipt.transactionIndex,
 				txHash,
 			};
 		},
@@ -355,4 +400,63 @@ async function readAllowList(
 
 function normalizeAddress(address: string): Address {
 	return getAddress(address) as Address;
+}
+
+async function assertRegisteredAuditorPublicKey(
+	publicClient: PublicClient,
+	registrarAddress: Address,
+	auditorAddress: Address,
+	expectedPublicKey: AuditorPublicKey,
+): Promise<void> {
+	const registeredPublicKey = await publicClient.readContract({
+		abi: registrarPublicKeyAbi,
+		address: registrarAddress,
+		args: [auditorAddress],
+		functionName: "getUserPublicKey",
+	});
+
+	if (!publicKeysEqual(registeredPublicKey, expectedPublicKey)) {
+		throw new Error("auditor_public_key_mismatch");
+	}
+}
+
+async function assertEncryptedErcAuditorPublicKey(
+	publicClient: PublicClient,
+	encryptedErcAddress: Address,
+	expectedPublicKey: AuditorPublicKey,
+): Promise<void> {
+	const onChainPublicKey = await publicClient.readContract({
+		abi: encryptedErcAuditorPublicKeyAbi,
+		address: encryptedErcAddress,
+		functionName: "auditorPublicKey",
+	});
+
+	if (!publicKeysEqual(onChainPublicKey, expectedPublicKey)) {
+		throw new Error("auditor_public_key_mismatch");
+	}
+}
+
+function publicKeysEqual(
+	left: readonly bigint[],
+	right: AuditorPublicKey,
+): boolean {
+	return (
+		left.length === 2 &&
+		left[0]?.toString() === right[0] &&
+		left[1]?.toString() === right[1]
+	);
+}
+
+function firstReceiptLogIndex(
+	logs: readonly { logIndex: number | null }[],
+): number | null {
+	return logs.reduce<number | null>((firstLogIndex, log) => {
+		if (log.logIndex === null) {
+			return firstLogIndex;
+		}
+
+		return firstLogIndex === null
+			? log.logIndex
+			: Math.min(firstLogIndex, log.logIndex);
+	}, null);
 }

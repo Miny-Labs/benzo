@@ -57,6 +57,13 @@
       "when": 1783345583333,
       "tag": "0007_military_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783347863000,
+      "tag": "0008_faint_boundary",
+      "breakpoints": true
     }
   ]
 }

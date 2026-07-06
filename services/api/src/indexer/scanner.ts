@@ -251,6 +251,7 @@ async function scanWindow(options: IndexerRunOptions & {
 			rawLog: serializeRawLog(log),
 			toAddr: decoded.toAddr,
 			txHash: log.transactionHash.toLowerCase(),
+			transactionIndex: log.transactionIndex,
 		});
 	}
 
@@ -479,6 +480,7 @@ async function upsertEvents(
 				indexedAt: new Date(),
 				rawLog: sql`excluded.raw_log`,
 				toAddr: sql`excluded.to_addr`,
+				transactionIndex: sql`excluded.transaction_index`,
 			},
 			target: [events.txHash, events.logIndex],
 		});
@@ -510,6 +512,7 @@ function serializeRawLog(log: ChainLog): Record<string, unknown> {
 		logIndex: log.logIndex,
 		topics: log.topics.map((topic) => topic.toLowerCase()),
 		transactionHash: log.transactionHash.toLowerCase(),
+		transactionIndex: log.transactionIndex,
 	};
 }
 

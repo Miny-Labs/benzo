@@ -243,8 +243,12 @@ export const auditorKeys = pgTable(
 		activatedBlockNumber: bigint("activated_block_number", {
 			mode: "bigint",
 		}).notNull(),
+		activatedLogIndex: integer("activated_log_index"),
+		activatedTransactionIndex: integer("activated_transaction_index"),
 		retiredAt: timestamp("retired_at", { withTimezone: true }),
 		retiredBlockNumber: bigint("retired_block_number", { mode: "bigint" }),
+		retiredLogIndex: integer("retired_log_index"),
+		retiredTransactionIndex: integer("retired_transaction_index"),
 		rotationTxHash: text("rotation_tx_hash"),
 	},
 	(table) => [
@@ -334,6 +338,7 @@ export const events = pgTable(
 			.generatedAlwaysAsIdentity(),
 		txHash: text("tx_hash").notNull(),
 		logIndex: integer("log_index").notNull(),
+		transactionIndex: integer("transaction_index"),
 		blockNumber: bigint("block_number", { mode: "bigint" }).notNull(),
 		blockHash: text("block_hash").notNull(),
 		blockTime: timestamp("block_time", { withTimezone: true }).notNull(),

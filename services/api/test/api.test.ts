@@ -1757,6 +1757,240 @@ describe("@benzo/api", () => {
 		}
 	});
 
+	it("audit-logs decrypted auditor rows before a later batch failure", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const auditor = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777b",
+		);
+		const subject = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777c",
+		);
+		const counterparty = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777d",
+		);
+		const key = createAuditorKeypair(303n);
+		const decryptedTxHash = txHash(303);
+
+		try {
+			await resetComplianceTables(db);
+			await db.insert(auditorKeys).values({
+				activatedBlockNumber: 20n,
+				active: true,
+				publicKeyX: key.publicKey[0],
+				publicKeyY: key.publicKey[1],
+				sealedKey: sealString(config.appMasterKey, key.privateKey),
+			});
+			await insertAuditorEvent(db, {
+				amount: 45n,
+				blockNumber: 20n,
+				from: subject,
+				logIndex: 2,
+				publicKey: key.publicKey,
+				to: counterparty,
+				txHash: decryptedTxHash,
+			});
+			await insertAuditorEvent(db, {
+				amount: 67n,
+				blockNumber: 10n,
+				from: subject,
+				logIndex: 1,
+				publicKey: key.publicKey,
+				to: counterparty,
+				txHash: txHash(304),
+			});
+
+			const auditorCookie = await createTestSession(db, config, auditor, [
+				"auditor",
+			]);
+			const response = await app.inject({
+				headers: { cookie: auditorCookie },
+				method: "GET",
+				url: `/auditor/events?address=${subject}`,
+			});
+
+			expect(response.statusCode).toBe(409);
+			expect(response.json()).toEqual({ error: "auditor_key_missing" });
+			const auditRows = await db
+				.select()
+				.from(auditLog)
+				.where(and(eq(auditLog.action, "auditor_decrypt"), eq(auditLog.actor, auditor)));
+			expect(auditRows).toHaveLength(1);
+			expect(auditRows[0]).toMatchObject({
+				subject: `${decryptedTxHash}:2`,
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("uses the rotation log boundary for auditor events in the rotation block", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const auditor = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777e",
+		);
+		const subject = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777f",
+		);
+		const counterparty = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777770",
+		);
+		const keyA = createAuditorKeypair(404n);
+		const keyB = createAuditorKeypair(405n);
+
+		try {
+			await resetComplianceTables(db);
+			await db.insert(auditorKeys).values([
+				{
+					activatedBlockNumber: 0n,
+					active: false,
+					publicKeyX: keyA.publicKey[0],
+					publicKeyY: keyA.publicKey[1],
+					retiredBlockNumber: 20n,
+					retiredLogIndex: 5,
+					sealedKey: sealString(config.appMasterKey, keyA.privateKey),
+				},
+				{
+					activatedBlockNumber: 20n,
+					activatedLogIndex: 5,
+					active: true,
+					publicKeyX: keyB.publicKey[0],
+					publicKeyY: keyB.publicKey[1],
+					rotationTxHash: txHash(405),
+					sealedKey: sealString(config.appMasterKey, keyB.privateKey),
+				},
+			]);
+			await insertAuditorEvent(db, {
+				amount: 12n,
+				blockNumber: 20n,
+				from: subject,
+				logIndex: 4,
+				publicKey: keyA.publicKey,
+				to: counterparty,
+				txHash: txHash(406),
+			});
+			await insertAuditorEvent(db, {
+				amount: 34n,
+				blockNumber: 20n,
+				from: counterparty,
+				logIndex: 6,
+				publicKey: keyB.publicKey,
+				to: subject,
+				txHash: txHash(407),
+			});
+
+			const auditorCookie = await createTestSession(db, config, auditor, [
+				"auditor",
+			]);
+			const response = await app.inject({
+				headers: { cookie: auditorCookie },
+				method: "GET",
+				url: `/auditor/events?address=${subject}`,
+			});
+
+			expect(response.statusCode).toBe(200);
+			expect(response.json()).toMatchObject({
+				events: [
+					{
+						amount: "34",
+						blockNumber: "20",
+						fromAddr: counterparty,
+						toAddr: subject,
+					},
+					{
+						amount: "12",
+						blockNumber: "20",
+						fromAddr: subject,
+						toAddr: counterparty,
+					},
+				],
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("reports exact auditor totals above the old 5,000 row cap", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const auditor = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777778",
+		);
+		const subject = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777779",
+		);
+		const counterparty = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777a",
+		);
+		const key = createAuditorKeypair(202n);
+
+		try {
+			await resetComplianceTables(db);
+			await db.insert(auditorKeys).values({
+				activatedBlockNumber: 0n,
+				active: true,
+				publicKeyX: key.publicKey[0],
+				publicKeyY: key.publicKey[1],
+				sealedKey: sealString(config.appMasterKey, key.privateKey),
+			});
+			await insertAuditorEvents(db, {
+				amount: 1n,
+				blockNumberStart: 1_000n,
+				count: 5_001,
+				from: counterparty,
+				publicKey: key.publicKey,
+				to: subject,
+				txHashStart: 10_000,
+			});
+
+			const auditorCookie = await createTestSession(db, config, auditor, [
+				"auditor",
+			]);
+			const response = await app.inject({
+				headers: { cookie: auditorCookie },
+				method: "GET",
+				url: `/auditor/report/${subject}`,
+			});
+
+			expect(response.statusCode).toBe(200);
+			expect(response.json()).toMatchObject({
+				report: {
+					address: subject,
+					eventCount: 5_001,
+					inflow: "5001",
+					outflow: "0",
+				},
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 	it("returns 403 and audit-logs non-auditor access to auditor routes", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
@@ -1919,6 +2153,76 @@ describe("@benzo/api", () => {
 					expect.objectContaining({ action: "allowlist_revoke", subject }),
 					expect.objectContaining({ action: "admin_drip", subject }),
 				]),
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("filters audit log by actor and subject together", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const admin = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777b",
+		);
+		const actor = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777c",
+		);
+		const otherActor = normalizeTestAddress(
+			"0x777777777777777777777777777777777777777d",
+		);
+		const subject = `audit-filter:${randomUUID()}`;
+		const otherSubject = `audit-filter:${randomUUID()}`;
+
+		try {
+			const adminCookie = await createTestSession(db, config, admin, [
+				"network_admin",
+			]);
+			await db.insert(auditLog).values([
+				{
+					action: "audit_filter_match",
+					actor,
+					meta: {},
+					subject,
+				},
+				{
+					action: "audit_filter_actor_only",
+					actor,
+					meta: {},
+					subject: otherSubject,
+				},
+				{
+					action: "audit_filter_subject_only",
+					actor: otherActor,
+					meta: {},
+					subject,
+				},
+			]);
+
+			const response = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "GET",
+				url: `/admin/audit-log?actor=${actor}&subject=${encodeURIComponent(subject)}`,
+			});
+
+			expect(response.statusCode).toBe(200);
+			const body = response.json() as {
+				entries: Array<{ action: string; actor: string; subject: string }>;
+			};
+
+			expect(body.entries).toHaveLength(1);
+			expect(body.entries[0]).toMatchObject({
+				action: "audit_filter_match",
+				actor,
+				subject,
 			});
 		} finally {
 			await app.close();
@@ -2394,6 +2698,7 @@ async function insertAuditorEvent(
 		logIndex: number;
 		publicKey: AuditorPublicKey;
 		to: string;
+		transactionIndex?: number;
 		txHash: Hex;
 	},
 ): Promise<void> {
@@ -2409,7 +2714,49 @@ async function insertAuditorEvent(
 		rawLog: {},
 		toAddr: input.to,
 		txHash: input.txHash,
+		transactionIndex: input.transactionIndex,
 	});
+}
+
+async function insertAuditorEvents(
+	db: Database,
+	input: {
+		amount: bigint;
+		blockNumberStart: bigint;
+		count: number;
+		from: string;
+		publicKey: AuditorPublicKey;
+		to: string;
+		txHashStart: number;
+	},
+): Promise<void> {
+	const amountPct = encryptAuditorAmountPct(input.amount, input.publicKey);
+	const rows: (typeof events.$inferInsert)[] = Array.from(
+		{ length: input.count },
+		(_, index) => {
+			const blockNumber = input.blockNumberStart + BigInt(index);
+
+			return {
+				amountPct,
+				blockHash: blockHash(blockNumber),
+				blockNumber,
+				blockTime: new Date(
+					(1_700_000_000 + Number(blockNumber)) * 1_000,
+				),
+				contract: testEncryptedErcAddress,
+				eventName: "PrivateTransfer",
+				fromAddr: input.from,
+				logIndex: index,
+				rawLog: {},
+				toAddr: input.to,
+				txHash: txHash(input.txHashStart + index),
+			};
+		},
+	);
+
+	for (let index = 0; index < rows.length; index += 1_000) {
+		await db.insert(events).values(rows.slice(index, index + 1_000));
+	}
 }
 
 async function createTestSession(
@@ -2449,6 +2796,8 @@ function createAdminChainStub(input: {
 	allowlistLevel?: bigint;
 	latestBlock?: bigint;
 	rotationBlock?: bigint;
+	rotationLogIndex?: number | null;
+	rotationTransactionIndex?: number | null;
 }): AdminChainStub {
 	let allowlistLevel = input.allowlistLevel ?? 0n;
 	let nextTxId = 1;
@@ -2528,6 +2877,8 @@ function createAdminChainStub(input: {
 				auditorAddress: rotationInput.auditorAddress ?? null,
 				blockNumber: input.rotationBlock ?? 20n,
 				blockTime: new Date("2026-07-06T00:00:20.000Z"),
+				rotationLogIndex: input.rotationLogIndex ?? null,
+				rotationTransactionIndex: input.rotationTransactionIndex ?? null,
 				txHash: txHash(nextTxId++),
 			};
 		},
@@ -2609,6 +2960,7 @@ function makeLog(input: {
 	logIndex: number;
 	topics: [Hex, ...Hex[]];
 	transactionHash: Hex;
+	transactionIndex?: number | null;
 }): ChainLog {
 	return {
 		address: input.address as Address,
@@ -2618,6 +2970,7 @@ function makeLog(input: {
 		logIndex: input.logIndex,
 		topics: input.topics,
 		transactionHash: input.transactionHash,
+		transactionIndex: input.transactionIndex ?? null,
 	};
 }
 
