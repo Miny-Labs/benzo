@@ -29,8 +29,8 @@ number from `BENZONET_RPC_URL`.
 | `KYC_PROVIDER` | No | Currently only `mock`. The mock provider records name/country only and never accepts documents. |
 | `DRIP_WEI` | No | Native gas amount to send/mint during onboarding. Defaults to `500000000000000000` (0.5 native). |
 | `DRIP_BALANCE_THRESHOLD_WEI` | No | Skip gas drip when the user balance is already at least this amount. Defaults to `500000000000000000`. |
-| `EERC_REGISTRAR_ADDRESS` | No | Registrar contract address, used both for onboarding registration polling and by the indexer. If omitted, the API looks in the deployment manifest (defaults to Fuji `0x9a63FEa9851097DBAf3757b636217fdde50ABaF0`). |
-| `EERC_DEPLOYMENT_MANIFEST` | No | Deployment manifest path used to discover the Registrar address. Defaults to `contracts/deployments/{CHAIN_ENV}.json`. |
+| `EERC_REGISTRAR_ADDRESS` | No | Registrar contract address, used both for onboarding registration polling and by the indexer. Defaults to Fuji `0x9a63FEa9851097DBAf3757b636217fdde50ABaF0`. |
+| `EERC_DEPLOYMENT_MANIFEST` | No | Deployment manifest path. A fallback source for the Registrar address, only consulted if `EERC_REGISTRAR_ADDRESS` resolves empty (it always has a default under the current schema, so this is effectively inert). Defaults to `contracts/deployments/{CHAIN_ENV}.json`. |
 | `ONBOARDING_REGISTRATION_POLL_SECONDS` | No | Registration polling interval. Defaults to `15`. |
 | `EERC_ENCRYPTED_ERC_ADDRESS` | No | EncryptedERC contract address to index. Defaults to Fuji `0x46688f1704a69a6c276cCCB823E36C80787B0FA2`. |
 | `INDEXER_CONFIRMATIONS` | No | Confirmation depth before logs are indexed. Defaults to `6`. |
@@ -60,11 +60,10 @@ number from `BENZONET_RPC_URL`.
 | Contacts | Plaintext user workflow data | Stored in `contacts` per owner wallet. Contact addresses and aliases are not payment privacy data. |
 | Invite tokens | Hashed secret | Only `sha256(raw_token)` is stored in `invites.token_hash`; raw claim URLs are returned once on creation and cannot be reconstructed from the DB. |
 | Gift metadata | Workflow metadata | Stored in `invites.kind`, `gift_amount`, and `note`; the API does not custody funds, keys, ciphertexts, or proofs. |
-| eERC decryption keys | Never server-side | Keys remain wallet-derived/client-side. This scaffold does not accept or persist them. |
+| eERC decryption keys | Never server-side (consumer) | Consumer keys stay wallet-derived/client-side and never leave the device; the API neither accepts nor persists them. The only planned exceptions are future org-treasury activity where an org opts into a managed key, and future auditor compliance views — separate authorization boundaries that must never be used for consumer activity. |
 | eERC event routing metadata | Plaintext | Stored in `events.tx_hash`, `events.log_index`, `events.block_number`, `events.block_hash`, `events.block_time`, `events.contract`, `events.event_name`, `events.from_addr`, and `events.to_addr` so participants can fetch activity without browser chain rescans. |
 | eERC raw log bytes | Opaque chain bytes | Stored in `events.raw_log` as `address`, `topics`, and ABI `data` hex for replay/debugging. The API does not materialize decoded consumer amount fields from these bytes into columns or response fields. |
 | eERC ciphertext/PCT blobs | Opaque bytes | Stored in `events.ciphertext` and `events.amount_pct`; returned as hex strings. The API does not decrypt, interpret, or convert these blobs to amounts. |
-| eERC decryption keys | Never server-side | Consumer keys remain wallet-derived/client-side and never leave the device. The server decrypts only future org-treasury activity where the org opts into a managed key, and future auditor compliance views; those are separate authorization boundaries and must not be used for consumer activity. |
 | Proving artifacts or secrets | Never server-side | Generated proving artifacts and secrets must not be committed or stored by the API. |
 
 ## Activity Indexer

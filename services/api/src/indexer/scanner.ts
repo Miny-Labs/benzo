@@ -63,8 +63,10 @@ export async function runIndexerOnce(
 	options: IndexerRunOptions,
 ): Promise<IndexerRunResult> {
 	const latestBlock = await options.chain.getBlockNumber();
-	const confirmedBlock =
-		latestBlock - BigInt(options.config.indexerConfirmations);
+	const confirmedBlock = maxBigint(
+		latestBlock - BigInt(options.config.indexerConfirmations),
+		0n,
+	);
 	const targetBlock =
 		options.toBlock === undefined
 			? confirmedBlock
@@ -114,9 +116,10 @@ async function scanContract(
 	},
 ): Promise<IndexerRunResult["contracts"][number]> {
 	const contractAddress = options.contract.address.toLowerCase();
-	const existingCursor = options.fromBlock
-		? undefined
-		: await loadCursor(options.db, contractAddress);
+	const existingCursor =
+		options.fromBlock !== undefined
+			? undefined
+			: await loadCursor(options.db, contractAddress);
 	let cursor = existingCursor ?? {
 		lastBlock: options.startBlock - 1n,
 		lastBlockHash: await getPreviousBlockHash(

@@ -1525,6 +1525,19 @@ describe("@benzo/api", () => {
 				url: `/receipts/${transferTx}`,
 			});
 			expect(outsiderReceiptResponse.statusCode).toBe(404);
+
+			// An invalid stream cursor must be rejected, not silently coerced to
+			// "latest" (which would skip events). This 400 is returned before the
+			// SSE hijack, so inject resolves instead of hanging on an open stream.
+			const badCursorStream = await app.inject({
+				headers: { cookie: senderCookie },
+				method: "GET",
+				url: `/activity/stream?address=${sender}&cursor=not-a-cursor`,
+			});
+			expect(badCursorStream.statusCode).toBe(400);
+			expect(badCursorStream.json()).toMatchObject({
+				error: "invalid_cursor",
+			});
 		} finally {
 			await app.close();
 			await pool.end();

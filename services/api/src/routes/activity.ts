@@ -139,8 +139,14 @@ export const activityRoutes: FastifyPluginAsync<ActivityRoutesOptions> = async (
 				return reply.code(403).send({ error: "forbidden" });
 			}
 
+			const parsedCursor = parseCursor(query.data.cursor);
+
+			if (query.data.cursor && !parsedCursor) {
+				return reply.code(400).send({ error: "invalid_cursor" });
+			}
+
 			let cursor =
-				parseCursor(query.data.cursor) ??
+				parsedCursor ??
 				(await loadLatestActivityCursor(options.db, address));
 
 			reply.hijack();
@@ -181,19 +187,31 @@ export const activityRoutes: FastifyPluginAsync<ActivityRoutesOptions> = async (
 					);
 				}
 			};
-			const interval = setInterval(() => {
-				void sendNewRows().catch((error: unknown) => {
-					request.log.error({ err: error }, "activity stream poll failed");
-				});
-			}, 5_000);
+			// Serialize polls: a slow DB query must not let the interval start a
+			// second sendNewRows() that races the mutable `cursor`. If a poll is
+			// still in flight when the timer fires, skip that tick.
+			let polling = false;
+			const runPoll = () => {
+				if (polling) {
+					return;
+				}
+				polling = true;
+				void sendNewRows()
+					.catch((error: unknown) => {
+						request.log.error({ err: error }, "activity stream poll failed");
+					})
+					.finally(() => {
+						polling = false;
+					});
+			};
+
+			const interval = setInterval(runPoll, 5_000);
 
 			request.raw.on("close", () => {
 				clearInterval(interval);
 			});
 
-			void sendNewRows().catch((error: unknown) => {
-				request.log.error({ err: error }, "activity stream poll failed");
-			});
+			runPoll();
 		},
 	);
 };

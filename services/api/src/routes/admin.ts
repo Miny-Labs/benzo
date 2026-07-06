@@ -33,8 +33,12 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesOptions> = async (
 					.from(events)
 					.groupBy(events.eventName),
 			]);
-			const confirmedBlock =
+			const rawConfirmedBlock =
 				latestBlock - BigInt(options.config.indexerConfirmations);
+			// Clamp at 0 so early-chain heights below the confirmation depth
+			// don't report a negative confirmed block (matches the scanner).
+			const confirmedBlock =
+				rawConfirmedBlock > 0n ? rawConfirmedBlock : 0n;
 			const minCursorBlock = cursors.reduce<bigint | null>(
 				(minBlock, cursor) =>
 					minBlock === null || cursor.lastBlock < minBlock
