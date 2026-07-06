@@ -51,13 +51,15 @@ echo "4) direct /ext path, no token -> 404"
 code="$(status -H "Origin: ${WALLET_ORIGIN}" "${BASE}/ext/bc/${BLOCKCHAIN_ID}/rpc")"
 [[ "$code" == "404" ]] && pass "bare /ext 404" || fail "expected 404, got $code"
 
-echo "5) node HTTP port 9650 not reachable from the internet"
+echo "5) node ports 9650 (HTTP) + 9651 (staking) not reachable from the internet"
 if command -v nc >/dev/null 2>&1; then
-  if nc -z -w 5 "$RPC_DOMAIN" 9650 2>/dev/null; then
-    fail "port 9650 is OPEN to the internet"
-  else
-    pass "port 9650 refused/filtered"
-  fi
+  for port in 9650 9651; do
+    if nc -z -w 5 "$RPC_DOMAIN" "$port" 2>/dev/null; then
+      fail "port $port is OPEN to the internet"
+    else
+      pass "port $port refused/filtered"
+    fi
+  done
 else
   echo "  (skipped: nc not installed)"
 fi

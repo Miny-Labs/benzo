@@ -26,6 +26,10 @@ services:
       - --http-host=0.0.0.0
       - --http-port=9650
       - --staking-port=9651
+      # avalanchego defaults --http-allowed-hosts to localhost, so it would
+      # reject the public Host header Caddy forwards. The node is internal-only
+      # (expose, not ports — Caddy is the sole reachable path), so '*' is safe.
+      - "--http-allowed-hosts=*"
     # expose (not ports): reachable on the docker network, never on the host.
     expose:
       - "9650"
@@ -61,7 +65,8 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - rpc-node
+      rpc-node:
+        condition: service_healthy
     networks:
       - benzonet
 

@@ -29,12 +29,13 @@
 		@wallet_no_origin {
 			method POST
 			not header Origin {$WALLET_ORIGIN}
-			not header Origin http://localhost:5173
+			not header Origin {$DEV_ORIGIN:https://disabled.invalid}
 		}
 		respond @wallet_no_origin 403
 		rate_limit {
 			zone wallet {
-				key wallet
+				# Per-client bucket (not a single global 20 r/s for all wallets).
+				key {remote_host}
 				events 20
 				window 1s
 			}
@@ -50,12 +51,12 @@
 		@console_no_origin {
 			method POST
 			not header Origin {$CONSOLE_ORIGIN}
-			not header Origin http://localhost:5173
+			not header Origin {$DEV_ORIGIN:https://disabled.invalid}
 		}
 		respond @console_no_origin 403
 		rate_limit {
 			zone console {
-				key console
+				key {remote_host}
 				events 20
 				window 1s
 			}
@@ -70,7 +71,7 @@
 		import preflight_204
 		rate_limit {
 			zone backend {
-				key backend
+				key {remote_host}
 				events 100
 				window 1s
 			}
@@ -90,7 +91,9 @@
 # blocks the response. Argument {args[0]} is the app's production origin.
 (app_cors) {
 	@origin_prod header Origin {args[0]}
-	@origin_dev header Origin http://localhost:5173
+	# Local dev origin, opt-in via DEV_ORIGIN (unset in prod → a value that
+	# never matches a real browser Origin, so the dev clause stays inert).
+	@origin_dev header Origin {$DEV_ORIGIN:https://disabled.invalid}
 	handle @origin_prod {
 		header Access-Control-Allow-Origin {http.request.header.Origin}
 	}
