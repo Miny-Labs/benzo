@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="880" viewBox="0 0 1400 880" role="img" aria-labelledby="title desc">
+  <title id="title">Benzo architecture</title>
+  <desc id="desc">Wallet and console prove through the eERC SDK, settle on Fuji contracts, and expose an auditor ciphertext path. BenzoNet is marked as stretch.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#8fd8ff" />
+    </marker>
+    <marker id="arrowWarm" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#ffc56e" />
+    </marker>
+    <style>
+      .bg { fill: #10151d; }
+      .panel { fill: #17212d; stroke: #38536b; stroke-width: 2; }
+      .panel-soft { fill: #1f2a36; stroke: #496478; stroke-width: 2; }
+      .panel-stretch { fill: #151b22; stroke: #8069d9; stroke-width: 2; stroke-dasharray: 10 8; }
+      .title { fill: #f7fafc; font: 700 44px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      .subtitle { fill: #b7c6d3; font: 400 22px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      .h { fill: #ffffff; font: 700 26px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      .body { fill: #c5d2dc; font: 400 20px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      .small { fill: #a8b7c4; font: 400 17px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      .tag { fill: #10151d; font: 700 15px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; letter-spacing: .8px; }
+      .line { stroke: #8fd8ff; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+      .warmline { stroke: #ffc56e; stroke-width: 4; fill: none; marker-end: url(#arrowWarm); }
+      .dashline { stroke: #ffc56e; stroke-width: 4; stroke-dasharray: 10 8; fill: none; marker-end: url(#arrowWarm); }
+    </style>
+  </defs>
+
+  <rect width="1400" height="880" class="bg" rx="28" />
+  <circle cx="1230" cy="110" r="130" fill="#213448" opacity=".35" />
+  <circle cx="170" cy="720" r="170" fill="#2a244b" opacity=".28" />
+
+  <text x="70" y="82" class="title">Benzo architecture</text>
+  <text x="72" y="123" class="subtitle">Client-side proofs, on-chain encrypted balances, and a demo auditor path on Avalanche Fuji</text>
+
+  <rect x="70" y="190" width="300" height="165" rx="18" class="panel" />
+  <rect x="93" y="214" width="92" height="26" rx="13" fill="#9ee6c7" />
+  <text x="110" y="233" class="tag">WALLET</text>
+  <text x="94" y="274" class="h">Mobile wallet</text>
+  <text x="94" y="310" class="body">Register, shield, send,</text>
+  <text x="94" y="338" class="body">withdraw, gift</text>
+
+  <rect x="70" y="380" width="300" height="165" rx="18" class="panel" />
+  <rect x="93" y="404" width="102" height="26" rx="13" fill="#ffd38a" />
+  <text x="110" y="423" class="tag">CONSOLE</text>
+  <text x="94" y="464" class="h">Business console</text>
+  <text x="94" y="500" class="body">Payroll, treasury,</text>
+  <text x="94" y="528" class="body">audit, invoices</text>
+
+  <rect x="505" y="250" width="340" height="240" rx="22" class="panel-soft" />
+  <rect x="532" y="280" width="120" height="26" rx="13" fill="#8fd8ff" />
+  <text x="548" y="299" class="tag">PROVER</text>
+  <text x="532" y="344" class="h">@avalabs/eerc-sdk</text>
+  <text x="532" y="386" class="body">wagmi + viem hooks</text>
+  <text x="532" y="418" class="body">snarkjs in browser</text>
+  <text x="532" y="450" class="body">circuitURLs for .wasm/.zkey</text>
+
+  <rect x="965" y="190" width="365" height="335" rx="22" class="panel" />
+  <rect x="994" y="220" width="86" height="26" rx="13" fill="#9ee6c7" />
+  <text x="1010" y="239" class="tag">FUJI</text>
+  <text x="994" y="284" class="h">On-chain settlement</text>
+  <text x="994" y="326" class="body">Registrar</text>
+  <text x="994" y="358" class="body">EncryptedERC converter</text>
+  <text x="994" y="390" class="body">5 Groth16 verifiers</text>
+  <text x="994" y="422" class="body">BabyJubJub library</text>
+  <text x="994" y="454" class="body">TestUSDC / ERC-20 deposits</text>
+
+  <rect x="965" y="585" width="365" height="150" rx="22" class="panel-soft" />
+  <rect x="994" y="613" width="108" height="26" rx="13" fill="#ffc56e" />
+  <text x="1010" y="632" class="tag">AUDITOR</text>
+  <text x="994" y="676" class="h">Demo auditor key</text>
+  <text x="994" y="714" class="body">Auditor PCT encrypted</text>
+  <text x="994" y="742" class="body">per private operation</text>
+
+  <rect x="70" y="655" width="775" height="145" rx="22" class="panel-stretch" />
+  <rect x="96" y="684" width="118" height="26" rx="13" fill="#b9a9ff" />
+  <text x="112" y="703" class="tag">STRETCH</text>
+  <text x="96" y="747" class="h">BenzoNet: Evergreen-style permissioned L1</text>
+  <text x="96" y="782" class="body">PoA validators, txAllowList KYC gate, BGAS valueless gas, validatorOnly read privacy</text>
+
+  <path d="M370 262 C425 262 448 315 505 315" class="line" />
+  <path d="M370 452 C425 452 448 425 505 425" class="line" />
+  <path d="M845 370 C900 370 916 356 965 356" class="line" />
+  <path d="M1148 525 L1148 585" class="dashline" />
+  <path d="M675 490 C675 585 675 625 675 655" class="warmline" />
+
+  <text x="410" y="240" class="small">user intent</text>
+  <text x="410" y="485" class="small">operator intent</text>
+  <text x="858" y="332" class="small">proof + tx</text>
+  <text x="1165" y="560" class="small">auditor ciphertext</text>
+  <text x="705" y="612" class="small">permissioned deployment path</text>
+</svg>

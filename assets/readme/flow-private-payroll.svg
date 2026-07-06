@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" role="img" aria-labelledby="title desc">
+  <title id="title">Private payroll flow</title>
+  <desc id="desc">Console payroll run sends encrypted eERC payments to employee wallets, with workflow data kept separate from amount privacy.</desc>
+  <defs>
+    <style>
+      .bg { fill: #10151d; }
+      .card { fill: #17212d; stroke: #38536b; stroke-width: 2; }
+      .screen { fill: #f7fafc; }
+      .ink { fill: #17212d; font: 700 24px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .muted { fill: #52606b; font: 400 17px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .white { fill: #ffffff; font: 700 34px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .sub { fill: #b7c6d3; font: 400 20px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .pill { fill: #10151d; font: 700 14px Inter, ui-sans-serif, system-ui, sans-serif; }
+    </style>
+  </defs>
+  <rect width="1100" height="620" rx="28" class="bg" />
+  <text x="60" y="78" class="white">Private payroll</text>
+  <text x="60" y="112" class="sub">Payroll approval is workflow data. Payment amounts settle as encrypted eERC transfers.</text>
+
+  <rect x="70" y="165" width="460" height="340" rx="22" class="card" />
+  <rect x="105" y="205" width="390" height="260" rx="16" class="screen" />
+  <text x="130" y="248" class="ink">Payroll run</text>
+  <text x="130" y="282" class="muted">June contractors</text>
+  <rect x="130" y="315" width="270" height="22" rx="11" fill="#dce5eb" />
+  <rect x="130" y="355" width="320" height="22" rx="11" fill="#dce5eb" />
+  <rect x="130" y="395" width="230" height="22" rx="11" fill="#dce5eb" />
+  <rect x="370" y="420" width="95" height="30" rx="15" fill="#9ee6c7" />
+  <text x="392" y="441" class="pill">PROVE</text>
+
+  <rect x="660" y="145" width="290" height="380" rx="36" class="card" />
+  <rect x="690" y="195" width="230" height="280" rx="24" class="screen" />
+  <text x="715" y="242" class="ink">Wallet</text>
+  <text x="715" y="276" class="muted">Private balance</text>
+  <rect x="715" y="312" width="180" height="70" rx="18" fill="#17212d" />
+  <text x="745" y="356" fill="#f7fafc" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="30" font-weight="700">****</text>
+  <text x="715" y="426" class="muted">Received payroll</text>
+
+  <path d="M530 335 C585 335 607 335 660 335" stroke="#8fd8ff" stroke-width="5" fill="none" marker-end="url(#arrow)" />
+  <defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M2,2 L10,6 L2,10 Z" fill="#8fd8ff" /></marker></defs>
+  <rect x="450" y="540" width="210" height="34" rx="17" fill="#ffd38a" />
+  <text x="481" y="563" class="pill">AUDITOR PCT INCLUDED</text>
+</svg>
