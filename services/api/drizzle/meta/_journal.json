@@ -15,6 +15,20 @@
       "when": 1783316855775,
       "tag": "0001_black_goliath",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783321160774,
+      "tag": "0002_open_dazzler",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783322522229,
+      "tag": "0003_mysterious_jack_murdock",
+      "breakpoints": true
     }
   ]
 }

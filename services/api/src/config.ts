@@ -2,6 +2,11 @@ import { z } from "zod";
 
 const hex32BytesPattern = /^(?:0x)?[0-9a-fA-F]{64}$/;
 const privateKeyPattern = /^0x[0-9a-fA-F]{64}$/;
+const weiPattern = /^(0|[1-9][0-9]*)$/;
+const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
+const defaultDripWei = "500000000000000000";
+const fujiChainId = 43_113;
+const benzonetChainId = 68_420;
 
 const envSchema = z
 	.object({
@@ -12,8 +17,23 @@ const envSchema = z
 		API_DOMAIN: z.string().trim().min(1).optional(),
 		BENZONET_CHAIN_ID: z.coerce.number().int().positive().default(43_113),
 		BENZONET_RPC_URL: z.url(),
+		CHAIN_ENV: z.enum(["fuji", "benzonet"]).optional(),
 		DATABASE_URL: z.url(),
+		DRIP_BALANCE_THRESHOLD_WEI: z
+			.string()
+			.regex(weiPattern, "DRIP_BALANCE_THRESHOLD_WEI must be a wei integer")
+			.default(defaultDripWei),
+		DRIP_WEI: z
+			.string()
+			.regex(weiPattern, "DRIP_WEI must be a wei integer")
+			.default(defaultDripWei),
+		EERC_REGISTRAR_ADDRESS: z
+			.string()
+			.regex(evmAddressPattern, "EERC_REGISTRAR_ADDRESS must be an EVM address")
+			.optional(),
+		EERC_DEPLOYMENT_MANIFEST: z.string().trim().min(1).optional(),
 		HOST: z.string().default("0.0.0.0"),
+		KYC_PROVIDER: z.enum(["mock"]).default("mock"),
 		LOG_LEVEL: z.string().default("info"),
 		NODE_ENV: z
 			.enum(["development", "test", "production"])
@@ -24,6 +44,11 @@ const envSchema = z
 				privateKeyPattern,
 				"OPS_PRIVATE_KEY must be a 0x-prefixed private key",
 			),
+		ONBOARDING_REGISTRATION_POLL_SECONDS: z.coerce
+			.number()
+			.int()
+			.positive()
+			.default(15),
 		PORT: z.coerce.number().int().positive().default(3000),
 		SESSION_COOKIE_NAME: z.string().min(1).default("benzo_session"),
 		SESSION_TTL_DAYS: z.coerce.number().int().positive().default(7),
@@ -37,16 +62,38 @@ const envSchema = z
 				path: ["API_DOMAIN"],
 			});
 		}
+
+		const chainEnv =
+			env.CHAIN_ENV ?? (env.BENZONET_CHAIN_ID === fujiChainId ? "fuji" : "benzonet");
+		const expectedChainId =
+			chainEnv === "fuji" ? fujiChainId : benzonetChainId;
+
+		if (env.BENZONET_CHAIN_ID !== expectedChainId) {
+			ctx.addIssue({
+				code: "custom",
+				message: `BENZONET_CHAIN_ID must be ${expectedChainId} when CHAIN_ENV=${chainEnv}`,
+				path: ["BENZONET_CHAIN_ID"],
+			});
+		}
 	})
 	.transform((env) => ({
 		appMasterKey: env.APP_MASTER_KEY,
 		apiDomain: env.API_DOMAIN ?? `localhost:${env.PORT}`,
 		benzonetChainId: env.BENZONET_CHAIN_ID,
 		benzonetRpcUrl: env.BENZONET_RPC_URL,
+		chainEnv:
+			env.CHAIN_ENV ?? (env.BENZONET_CHAIN_ID === fujiChainId ? "fuji" : "benzonet"),
 		databaseUrl: env.DATABASE_URL,
+		dripBalanceThresholdWei: BigInt(env.DRIP_BALANCE_THRESHOLD_WEI),
+		dripWei: BigInt(env.DRIP_WEI),
+		eercDeploymentManifest: env.EERC_DEPLOYMENT_MANIFEST,
+		eercRegistrarAddress: env.EERC_REGISTRAR_ADDRESS?.toLowerCase(),
 		host: env.HOST,
+		kycProvider: env.KYC_PROVIDER,
 		logLevel: env.LOG_LEVEL,
 		nodeEnv: env.NODE_ENV,
+		onboardingRegistrationPollSeconds:
+			env.ONBOARDING_REGISTRATION_POLL_SECONDS,
 		opsPrivateKey: env.OPS_PRIVATE_KEY,
 		port: env.PORT,
 		sessionCookieName: env.SESSION_COOKIE_NAME,
