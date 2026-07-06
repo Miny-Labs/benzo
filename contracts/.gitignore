@@ -16,3 +16,6 @@
 
 # Local reports
 gas-report.txt
+
+# Local bearer secrets
+.gift-link.local.txt

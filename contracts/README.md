@@ -187,6 +187,70 @@ payee observed off-chain after decrypting their own balance change. Late
 acknowledgement after expiry is allowed; cancelled invoices can never be marked
 paid.
 
+## Gift Links
+
+Benzo ships two gift-link tiers. The tiers are intentionally different products:
+Tier A is public-token escrow, while Tier B is an SDK-level private eERC flow.
+UI copy must not blur those guarantees.
+
+| Tier | Flow | What is private | What is public or not enforced |
+| --- | --- | --- | --- |
+| A - `GiftEscrow` public tUSDC | Sender creates `createGift(claimAddress, amount, expiry)`, escrowing tUSDC. The link carries the ephemeral private key for `claimAddress`. Before expiry, the claimant signs the recipient-bound claim digest and calls `claim(giftId, recipient, sig)`. At or after expiry, only the sender can refund. | Only the claim secret in the link. | Amount, sender, token timing, claim, recipient, and refund are public on-chain. Senders must see copy like "this amount will be visible on-chain." |
+| B - private eERC bearer link | Sender registers an ephemeral address in the eERC `Registrar`, privately transfers encrypted balance to it, serializes a link containing the ephemeral EVM private key and eERC decryption key, and the claimant privately transfers from the ephemeral address to their own registered address. | Amount is encrypted by eERC. Sender and claimant balances remain decryptable only by their keys and the auditor key. | Ephemeral address and transfer existence are public. The link is a bearer secret. There is no on-chain expiry or refund enforcement. The sender retains the ephemeral key and can sweep back any time, so sender and claimant can race. Funding the ephemeral address with gas AVAX creates public metadata; claimant-funded gas avoids a public sender -> ephemeral funding link. |
+
+`GiftEscrow` verifies a raw ECDSA signature over:
+
+```solidity
+keccak256(abi.encode(address(this), block.chainid, giftId, recipient))
+```
+
+Binding `recipient` prevents a mempool observer from copying a revealed secret
+and redirecting the claim. A raw secret-reveal claim design would be stealable.
+
+Deploy and Routescan-verify the public escrow tier on Fuji after the tUSDC
+deployment address is available:
+
+```bash
+pnpm deploy:gift-escrow
+```
+
+The deploy script reads the token from `GIFT_ESCROW_TOKEN_ADDRESS`,
+`TUSDC_ADDRESS`, `TEST_USDC_ADDRESS`, `USDC_ADDRESS`, or a matching tUSDC entry
+in `deployments/fuji.json`, then writes the verified `GiftEscrow` deployment
+metadata back to that file.
+
+Run the private bearer-link Fuji exercise after the converter stack, circuits,
+and registered/funded sender balance are available:
+
+```bash
+pnpm gift:private-e2e
+```
+
+The script needs Fuji `Registrar`, `EncryptedERC`, and tUSDC addresses from
+environment variables or `deployments/fuji.json`. It also needs two funded Fuji
+accounts (`PRIVATE_KEY` and `PRIVATE_KEY_2`). For already registered accounts,
+provide their eERC decryption keys with
+`PRIVATE_GIFT_SENDER_EERC_PRIVATE_KEY` and
+`PRIVATE_GIFT_CLAIMANT_EERC_PRIVATE_KEY` so the script can generate valid
+proofs and assert decrypted balances. It writes the serialized bearer payload to
+`contracts/.gift-link.local.txt`, prints only that file path plus a masked
+preview, and prints the before/after decrypted balances:
+
+```text
+gift link payload file: .gift-link.local.txt
+gift link payload preview: eyJjaGFp...fSJ9
+WARNING: the gift link payload file is a bearer secret; do not commit, share, or upload it.
+```
+
+The payload file is gitignored because it contains the ephemeral EVM private key
+and eERC decryption key. Treat it as a bearer secret.
+
+The script funds the newly generated ephemeral wallet from `PRIVATE_KEY_2`
+before ephemeral eERC registration, then checks the same gas floor again before
+the final private-transfer sweep. `PRIVATE_GIFT_MIN_EPHEMERAL_AVAX` defaults to
+`0.02`, sized to cover both transactions on Fuji; raise it if gas prices or
+proof-verification costs increase.
+
 ## Commands
 
 ```bash
@@ -198,6 +262,8 @@ pnpm zkit:make      # hardhat zkit make
 pnpm zkit:verifiers # hardhat zkit verifiers
 pnpm deploy:handle-registry   # hardhat run scripts/deploy/06-handle-registry.ts --network fuji
 pnpm deploy:invoice-registry  # hardhat run scripts/deploy/07-invoice-registry.ts --network fuji
+pnpm deploy:gift-escrow       # hardhat run scripts/deploy/08-gift-escrow.ts --network fuji
+pnpm gift:private-e2e         # hardhat run scripts/gift/private-gift-e2e.ts --network fuji
 ```
 
 Verification on testnet.snowtrace.io works via Routescan with the
