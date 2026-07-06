@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
 	bigint,
 	boolean,
+	customType,
 	index,
 	integer,
 	jsonb,
@@ -42,6 +43,41 @@ export const inviteStatus = pgEnum("invite_status", [
 	"expired",
 	"cancelled",
 ]);
+
+const bytea = customType<{ data: Buffer; driverData: Buffer | string }>({
+	dataType() {
+		return "bytea";
+	},
+	fromDriver(value) {
+		return coerceBuffer(value);
+	},
+});
+
+const byteaArray = customType<{
+	data: Buffer[];
+	driverData: Buffer[] | string;
+}>({
+	dataType() {
+		return "bytea[]";
+	},
+	fromDriver(value) {
+		if (Array.isArray(value)) {
+			return value.map((item) => coerceBuffer(item));
+		}
+
+		return [...value.matchAll(/\\{1,2}x([0-9a-fA-F]+)/g)].map((match) =>
+			Buffer.from(match[1] ?? "", "hex"),
+		);
+	},
+});
+
+function coerceBuffer(value: Buffer | string): Buffer {
+	if (Buffer.isBuffer(value)) {
+		return value;
+	}
+
+	return Buffer.from(value.replace(/^\\x/i, ""), "hex");
+}
 
 export const users = pgTable(
 	"users",
@@ -251,6 +287,78 @@ export const invites = pgTable(
 		index("invites_creator_user_id_idx").on(table.creatorUserId),
 		index("invites_claimed_by_idx").on(table.claimedBy),
 		index("invites_status_expires_at_idx").on(table.status, table.expiresAt),
+	],
+);
+
+export const chainCursor = pgTable("chain_cursor", {
+	contract: text("contract").primaryKey(),
+	lastBlock: bigint("last_block", { mode: "bigint" }).notNull(),
+	lastBlockHash: text("last_block_hash"),
+	updatedAt: timestamp("updated_at", { withTimezone: true })
+		.notNull()
+		.defaultNow(),
+});
+
+export const events = pgTable(
+	"events",
+	{
+		id: bigint("id", { mode: "bigint" })
+			.primaryKey()
+			.generatedAlwaysAsIdentity(),
+		txHash: text("tx_hash").notNull(),
+		logIndex: integer("log_index").notNull(),
+		blockNumber: bigint("block_number", { mode: "bigint" }).notNull(),
+		blockHash: text("block_hash").notNull(),
+		blockTime: timestamp("block_time", { withTimezone: true }).notNull(),
+		contract: text("contract").notNull(),
+		eventName: text("event_name").notNull(),
+		fromAddr: text("from_addr"),
+		toAddr: text("to_addr"),
+		ciphertext: byteaArray("ciphertext")
+			.notNull()
+			.default(sql`ARRAY[]::bytea[]`),
+		amountPct: bytea("amount_pct"),
+		rawLog: jsonb("raw_log").notNull(),
+		indexedAt: timestamp("indexed_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("events_tx_hash_log_index_uidx").on(
+			table.txHash,
+			table.logIndex,
+		),
+		index("events_from_addr_idx").on(table.fromAddr),
+		index("events_to_addr_idx").on(table.toAddr),
+		index("events_block_number_idx").on(table.blockNumber),
+		index("events_contract_block_number_idx").on(
+			table.contract,
+			table.blockNumber,
+		),
+	],
+);
+
+export const eventLinks = pgTable(
+	"event_links",
+	{
+		id: bigint("id", { mode: "bigint" })
+			.primaryKey()
+			.generatedAlwaysAsIdentity(),
+		txHash: text("tx_hash").notNull(),
+		objectType: text("object_type").notNull(),
+		objectId: text("object_id").notNull(),
+		label: text("label").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		index("event_links_tx_hash_idx").on(table.txHash),
+		uniqueIndex("event_links_object_uidx").on(
+			table.objectType,
+			table.objectId,
+			table.txHash,
+		),
 	],
 );
 

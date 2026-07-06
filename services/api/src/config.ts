@@ -7,6 +7,9 @@ const evmAddressPattern = /^0x[0-9a-fA-F]{40}$/;
 const defaultDripWei = "500000000000000000";
 const fujiChainId = 43_113;
 const benzonetChainId = 68_420;
+const fujiEncryptedErcAddress = "0x46688f1704a69a6c276cCCB823E36C80787B0FA2";
+const fujiRegistrarAddress = "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0";
+const fujiRpcUrl = "https://api.avax-test.network/ext/bc/C/rpc";
 
 const envSchema = z
 	.object({
@@ -16,7 +19,7 @@ const envSchema = z
 			.transform((value) => value.replace(/^0x/i, "").toLowerCase()),
 		API_DOMAIN: z.string().trim().min(1).optional(),
 		BENZONET_CHAIN_ID: z.coerce.number().int().positive().default(43_113),
-		BENZONET_RPC_URL: z.url(),
+		BENZONET_RPC_URL: z.url().default(fujiRpcUrl),
 		CHAIN_ENV: z.enum(["fuji", "benzonet"]).optional(),
 		DATABASE_URL: z.url(),
 		DRIP_BALANCE_THRESHOLD_WEI: z
@@ -27,12 +30,24 @@ const envSchema = z
 			.string()
 			.regex(weiPattern, "DRIP_WEI must be a wei integer")
 			.default(defaultDripWei),
+		EERC_DEPLOYMENT_MANIFEST: z.string().trim().min(1).optional(),
+		EERC_ENCRYPTED_ERC_ADDRESS: z
+			.string()
+			.regex(evmAddressPattern, "EERC_ENCRYPTED_ERC_ADDRESS must be an EVM address")
+			.default(fujiEncryptedErcAddress),
 		EERC_REGISTRAR_ADDRESS: z
 			.string()
 			.regex(evmAddressPattern, "EERC_REGISTRAR_ADDRESS must be an EVM address")
-			.optional(),
-		EERC_DEPLOYMENT_MANIFEST: z.string().trim().min(1).optional(),
+			.default(fujiRegistrarAddress),
 		HOST: z.string().default("0.0.0.0"),
+		INDEXER_CONFIRMATIONS: z.coerce.number().int().nonnegative().default(6),
+		INDEXER_ENABLED: z
+			.enum(["true", "false"])
+			.default("true")
+			.transform((value) => value === "true"),
+		INDEXER_MAX_WINDOW_BLOCKS: z.coerce.number().int().positive().default(2_000),
+		INDEXER_POLL_CRON: z.string().trim().min(1).default("*/5 * * * * *"),
+		INDEXER_START_BLOCK: z.coerce.number().int().nonnegative().default(0),
 		KYC_PROVIDER: z.enum(["mock"]).default("mock"),
 		LOG_LEVEL: z.string().default("info"),
 		NODE_ENV: z
@@ -87,8 +102,14 @@ const envSchema = z
 		dripBalanceThresholdWei: BigInt(env.DRIP_BALANCE_THRESHOLD_WEI),
 		dripWei: BigInt(env.DRIP_WEI),
 		eercDeploymentManifest: env.EERC_DEPLOYMENT_MANIFEST,
-		eercRegistrarAddress: env.EERC_REGISTRAR_ADDRESS?.toLowerCase(),
+		eercEncryptedErcAddress: env.EERC_ENCRYPTED_ERC_ADDRESS.toLowerCase(),
+		eercRegistrarAddress: env.EERC_REGISTRAR_ADDRESS.toLowerCase(),
 		host: env.HOST,
+		indexerConfirmations: env.INDEXER_CONFIRMATIONS,
+		indexerEnabled: env.INDEXER_ENABLED,
+		indexerMaxWindowBlocks: env.INDEXER_MAX_WINDOW_BLOCKS,
+		indexerPollCron: env.INDEXER_POLL_CRON,
+		indexerStartBlock: BigInt(env.INDEXER_START_BLOCK),
 		kycProvider: env.KYC_PROVIDER,
 		logLevel: env.LOG_LEVEL,
 		nodeEnv: env.NODE_ENV,

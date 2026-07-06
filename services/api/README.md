@@ -8,6 +8,7 @@ Drizzle migrations, pg-boss jobs, SIWE sessions, and health checks.
 ```bash
 pnpm --filter @benzo/api dev
 pnpm --filter @benzo/api db:migrate
+pnpm --filter @benzo/api index:backfill --from-block 12345
 pnpm --filter @benzo/api test
 pnpm --filter @benzo/api build
 ```
@@ -20,7 +21,7 @@ number from `BENZONET_RPC_URL`.
 | Variable | Required | Description |
 |---|---:|---|
 | `DATABASE_URL` | Yes | Postgres connection string used by Drizzle and pg-boss. |
-| `BENZONET_RPC_URL` | Yes | Avalanche Fuji, local anvil, or BenzoNet JSON-RPC URL used for health and SIWE signature verification fallbacks. |
+| `BENZONET_RPC_URL` | No | Avalanche Fuji, local anvil, or BenzoNet JSON-RPC URL used for health, SIWE signature verification fallbacks, and the eERC indexer. Defaults to the live Fuji RPC. |
 | `OPS_PRIVATE_KEY` | Yes | `0x`-prefixed operator key reserved for later workflow jobs. It is validated at boot but not logged. |
 | `APP_MASTER_KEY` | Yes | 32-byte hex key reserved for libsodium secretbox encrypted-at-rest fields. It may include `0x`; the service normalizes it internally. |
 | `BENZONET_CHAIN_ID` | No | SIWE chain id. Defaults to Fuji `43113`; set to BenzoNet `68420` when `CHAIN_ENV=benzonet`. |
@@ -28,9 +29,15 @@ number from `BENZONET_RPC_URL`.
 | `KYC_PROVIDER` | No | Currently only `mock`. The mock provider records name/country only and never accepts documents. |
 | `DRIP_WEI` | No | Native gas amount to send/mint during onboarding. Defaults to `500000000000000000` (0.5 native). |
 | `DRIP_BALANCE_THRESHOLD_WEI` | No | Skip gas drip when the user balance is already at least this amount. Defaults to `500000000000000000`. |
-| `EERC_REGISTRAR_ADDRESS` | No | Registrar contract override for onboarding registration polling. If omitted, the API looks in the deployment manifest. |
-| `EERC_DEPLOYMENT_MANIFEST` | No | Deployment manifest path used to discover the Registrar address. Defaults to `contracts/deployments/{CHAIN_ENV}.json`. |
+| `EERC_REGISTRAR_ADDRESS` | No | Registrar contract address, used both for onboarding registration polling and by the indexer. Defaults to Fuji `0x9a63FEa9851097DBAf3757b636217fdde50ABaF0`. |
+| `EERC_DEPLOYMENT_MANIFEST` | No | Deployment manifest path. A fallback source for the Registrar address, only consulted if `EERC_REGISTRAR_ADDRESS` resolves empty (it always has a default under the current schema, so this is effectively inert). Defaults to `contracts/deployments/{CHAIN_ENV}.json`. |
 | `ONBOARDING_REGISTRATION_POLL_SECONDS` | No | Registration polling interval. Defaults to `15`. |
+| `EERC_ENCRYPTED_ERC_ADDRESS` | No | EncryptedERC contract address to index. Defaults to Fuji `0x46688f1704a69a6c276cCCB823E36C80787B0FA2`. |
+| `INDEXER_CONFIRMATIONS` | No | Confirmation depth before logs are indexed. Defaults to `6`. |
+| `INDEXER_ENABLED` | No | Set to `false` to disable the pg-boss scheduled poller. Defaults to `true`. |
+| `INDEXER_MAX_WINDOW_BLOCKS` | No | Maximum log scan window. Defaults to `2000`. |
+| `INDEXER_POLL_CRON` | No | pg-boss cron expression for polling. Defaults to every 5 seconds, `*/5 * * * * *`. |
+| `INDEXER_START_BLOCK` | No | Initial block when no cursor exists. Defaults to `0`; set this to the deployment block in production. |
 | `PORT` | No | HTTP port. Defaults to `3000`. |
 | `HOST` | No | Listen host. Defaults to `0.0.0.0`. |
 | `LOG_LEVEL` | No | Pino log level. Defaults to `info`. |
@@ -53,8 +60,43 @@ number from `BENZONET_RPC_URL`.
 | Contacts | Plaintext user workflow data | Stored in `contacts` per owner wallet. Contact addresses and aliases are not payment privacy data. |
 | Invite tokens | Hashed secret | Only `sha256(raw_token)` is stored in `invites.token_hash`; raw claim URLs are returned once on creation and cannot be reconstructed from the DB. |
 | Gift metadata | Workflow metadata | Stored in `invites.kind`, `gift_amount`, and `note`; the API does not custody funds, keys, ciphertexts, or proofs. |
-| eERC decryption keys | Never server-side | Keys remain wallet-derived/client-side. This scaffold does not accept or persist them. |
+| eERC decryption keys | Never server-side (consumer) | Consumer keys stay wallet-derived/client-side and never leave the device; the API neither accepts nor persists them. The only planned exceptions are future org-treasury activity where an org opts into a managed key, and future auditor compliance views — separate authorization boundaries that must never be used for consumer activity. |
+| eERC event routing metadata | Plaintext | Stored in `events.tx_hash`, `events.log_index`, `events.block_number`, `events.block_hash`, `events.block_time`, `events.contract`, `events.event_name`, `events.from_addr`, and `events.to_addr` so participants can fetch activity without browser chain rescans. |
+| eERC raw log bytes | Opaque chain bytes | Stored in `events.raw_log` as `address`, `topics`, and ABI `data` hex for replay/debugging. The API does not materialize decoded consumer amount fields from these bytes into columns or response fields. |
+| eERC ciphertext/PCT blobs | Opaque bytes | Stored in `events.ciphertext` and `events.amount_pct`; returned as hex strings. The API does not decrypt, interpret, or convert these blobs to amounts. |
 | Proving artifacts or secrets | Never server-side | Generated proving artifacts and secrets must not be committed or stored by the API. |
+
+## Activity Indexer
+
+The pg-boss poller schedules `eerc.indexer.poll` every 5 seconds by default. It
+indexes confirmed logs from `EncryptedERC` and `Registrar` in windows of at most
+`INDEXER_MAX_WINDOW_BLOCKS`, upserts by `(tx_hash, log_index)`, and advances
+`chain_cursor.last_block` only after each batch commits. `chain_cursor` also
+stores the last block hash so a parent-hash mismatch can rewind and rescan the
+previous window.
+
+Indexed event names are `PrivateTransfer`, `Deposit`, `Withdraw`,
+`PrivateMint`, `PrivateBurn`, `Register`, and `AuditorChanged`.
+
+Routes:
+
+- `GET /activity?address=&cursor=&limit=` returns activity for the authenticated
+  wallet only. `cursor` is the returned `blockNumber:logIndex` value.
+- `GET /receipts/:txHash` returns receipt events and `event_links` labels only
+  when the authenticated wallet is a participant.
+- `GET /activity/stream` is a participant-scoped SSE stream for live activity.
+- `GET /admin/indexer` returns lag, cursors, and event counts for
+  `network_admin` users.
+
+`event_links` correlates tx hashes to product objects such as onboardings,
+invites, and later payroll items so receipts can show labels like
+`Payroll June` without changing indexed event privacy.
+
+The backfill command uses the same scanner path as the poller:
+
+```bash
+pnpm --filter @benzo/api index:backfill --from-block <n>
+```
 
 ## Auth Flow
 
