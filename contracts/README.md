@@ -28,6 +28,36 @@ testnet demos only and must not be represented as production ceremony output.
 The proving artifacts and downloaded `.ptau` files live under ignored `zkit/`
 paths.
 
+## eERC v0.0.4 Semantics Verdicts
+
+`test/eerc/SemanticsHarness.ts` is Benzo's local source of truth for M4 wallet
+and console copy. It deploys the converter stack to a Hardhat network with
+eERC decimals set to 2 and a 6-decimal tUSDC token, then proves these observed
+behaviors:
+
+- **Auditor rotation is event-time encryption, not history re-encryption.**
+  A `PrivateTransfer` emitted before `setAuditorPublicKey(B)` keeps
+  `auditorAddress == A` and its `auditorPCT` decrypts to the transfer amount
+  only with auditor A's key. A `PrivateTransfer` emitted after rotation keeps
+  `auditorAddress == B` and decrypts only with auditor B's key. New auditors
+  do not decrypt historical transfer events unless they already held the old
+  auditor key.
+- **6-decimal tUSDC deposits floor into 2-decimal private units and refund the
+  remainder as dust.** For token decimals greater than eERC decimals, the
+  converter computes `privateUnits = rawAmount / 10^(tokenDecimals -
+  eercDecimals)` and `dust = rawAmount % 10^(tokenDecimals - eercDecimals)`.
+  It transfers `rawAmount` in, returns `dust` to the depositor, emits
+  `Deposit(user, rawAmount, dust, tokenId)`, and increases the encrypted
+  balance by `privateUnits`. Example: `10.123456` tUSDC is `10_123_456` raw
+  units, so the encrypted balance increases by `1_012` private cents
+  (`10.12`) and `3_456` raw units (`0.003456` tUSDC) are returned. AmountText
+  must truncate to the eERC scale, not round up.
+- **Restore keys are deterministic for deterministic signers.** The SDK-style
+  registration message signature derives a byte-identical eERC decryption key
+  across fresh contexts for the same wallet, and the restored key decrypts the
+  user's encrypted converter balance. Wallets that produce non-reproducible
+  signatures still cannot promise restore from wallet alone.
+
 ## Circuit Artifact Pipeline
 
 The eERC SDK generates Groth16 proofs from circuit artifacts served to the
