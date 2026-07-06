@@ -132,4 +132,36 @@ expectAlloc(alloc, OPS, parseEther("100000"));
 expectAlloc(alloc, DRIPPER, parseEther("100000"));
 expectAlloc(alloc, BACKEND, parseEther("100000"));
 
+// Sovereign-L1 (ACP-77) requirements, learned by deploying to Fuji:
+// the PoA validator manager lives at the fixed vanity address 0x0feedc0de… and
+// MUST be a genesis predeploy (you can't deploy code to a chosen address), and
+// it reads the P-Chain conversion via a WARP message — so warpConfig must be
+// present and cannot activate before Durango (blockTimestamp >= durangoTimestamp).
+const managerProxyKey = Object.keys(alloc).find((key) =>
+  key.toLowerCase().replace(/^0x/, "").startsWith("0feedc0de"),
+);
+assert(
+  managerProxyKey !== undefined,
+  "validator manager proxy predeploy (0x0feedc0de…) is missing from alloc",
+);
+const managerProxy = objectAt(alloc, managerProxyKey);
+assert(
+  typeof managerProxy.code === "string" && managerProxy.code.length > 2,
+  "validator manager proxy must carry predeployed bytecode",
+);
+
+const warp = objectAt(config, "warpConfig");
+assert(
+  warp.blockTimestamp === GENESIS_TIMESTAMP,
+  "warpConfig.blockTimestamp must equal the genesis/Durango timestamp",
+);
+assert(
+  warp.quorumNumerator === 67,
+  "warpConfig.quorumNumerator must be 67 (the avalanche-cli PoA default)",
+);
+assert(
+  warp.requirePrimaryNetworkSigners === true,
+  "warpConfig.requirePrimaryNetworkSigners must be true for a sovereign L1",
+);
+
 console.log("BenzoNet genesis metadata is internally consistent.");
