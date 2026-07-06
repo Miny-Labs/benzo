@@ -334,17 +334,23 @@ contract EncryptedERC is
 
     /**
      * @notice Performs a private burn operation with additional metadata
-     * @param user The address of the user to burn tokens from
+     * BENZO PATCH (upstream v0.0.4): The first address argument is legacy ABI surface; burn execution uses msg.sender.
      * @param proof The zero-knowledge proof proving the validity of the burn operation
      * @param balancePCT The balance PCT for the user after the burn
      * @param message Additional metadata message to be emitted with the burn event
      */
     function privateBurn(
-        address user,
+        address,
         BurnProof calldata proof,
         uint256[7] calldata balancePCT,
         bytes calldata message
-    ) external onlyIfAuditorSet onlyForStandalone onlyIfUserRegistered(user) {
+    )
+        external
+        onlyIfAuditorSet
+        onlyForStandalone
+        // BENZO PATCH (upstream v0.0.4): Guard the actual burner, which _executePrivateBurn resolves from msg.sender.
+        onlyIfUserRegistered(msg.sender)
+    {
         _executePrivateBurn(proof, balancePCT, message);
     }
 

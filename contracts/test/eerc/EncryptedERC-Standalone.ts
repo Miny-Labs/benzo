@@ -770,6 +770,25 @@ describe("EncryptedERC - Standalone", () => {
 				).to.be.reverted;
 			});
 
+			// BENZO PATCH (upstream v0.0.4): Regression test for metadata burn guarding msg.sender, not the legacy user argument.
+			it("does not let an unregistered caller satisfy metadata burn with a different registered user", async () => {
+				const nonRegisteredCaller = users[5];
+				const registeredUser = users[1];
+
+				await expect(
+					encryptedERC
+						.connect(nonRegisteredCaller.signer)
+						[
+							"privateBurn(address,((uint256[2],uint256[2][2],uint256[2]),uint256[19]),uint256[7],bytes)"
+						](
+							registeredUser.signer.address,
+							validProof,
+							Array.from({ length: 7 }, () => 1n),
+							encryptedMetadata,
+						),
+				).to.be.revertedWithCustomError(encryptedERC, "UserNotRegistered");
+			});
+
 			it("user public key should match with proof, if not revert", async () => {
 				const notUser0 = users[4];
 

@@ -56,6 +56,9 @@ const config: HardhatUserConfig = {
       optimization: "O2",
     },
     setupSettings: {
+      // TESTNET-ONLY: contributions: 0 creates a development trusted setup.
+      // Verifiers generated into contracts/verifiers from this config must
+      // never back a mainnet deployment.
       contributionSettings: {
         provingSystem: "groth16",
         contributions: 0,
