@@ -10,6 +10,8 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "artifacts:export": "ts-node scripts/export-circuit-artifacts.ts",
+    "artifacts:verify": "ts-node scripts/verify-circuit-manifest.ts",
     "zkit:make": "hardhat zkit make",
     "zkit:verifiers": "hardhat zkit verifiers",
     "deploy:handle-registry": "hardhat run scripts/deploy/06-handle-registry.ts --network fuji",
@@ -20,6 +22,7 @@
     "@openzeppelin/contracts": "^5.1.0",
     "@solarity/chai-zkit": "^0.3.1",
     "@solarity/hardhat-zkit": "^0.5.15",
+    "@types/node": "^26.1.0",
     "@zk-kit/baby-jubjub": "^1.0.3",
     "circomlib": "^2.0.5",
     "dotenv": "^16.4.5",

@@ -15,8 +15,9 @@ under `contracts/eerc/`; the exact upstream tag and commit are recorded in
   transfers; standalone mode mints a native private token.
 - Deploy order: verifiers → `Registrar` → `EncryptedERC` →
   `setAuditorPublicKey`. Private ops revert until the auditor key is set.
-- After `hardhat zkit make`, copy each circuit's `.wasm` + `.zkey` into the
-  frontend's `public/` for the SDK's `circuitURLs`.
+- After `hardhat zkit make`, run `pnpm artifacts:export` to publish each
+  circuit's `.wasm` + `.zkey` and manifest into `@benzo/config` for all
+  provers.
 - License: EncryptedERC is under the Ava Labs Ecosystem License v1.1
   (Avalanche-platform-only). Keep Benzo deployments and demos scoped to Fuji,
   Avalanche C-Chain, or Avalanche L1s.
@@ -26,6 +27,100 @@ Groth16 setup as a dev trusted setup, not a ceremony. It is acceptable for Fuji
 testnet demos only and must not be represented as production ceremony output.
 The proving artifacts and downloaded `.ptau` files live under ignored `zkit/`
 paths.
+
+## Circuit Artifact Pipeline
+
+The eERC SDK generates Groth16 proofs from circuit artifacts served to the
+prover. Benzo keeps those artifacts generated, ignored, and integrity-checked:
+
+```bash
+pnpm hardhat zkit make && pnpm artifacts:export
+pnpm artifacts:verify
+```
+
+Run those commands from `contracts/`. `artifacts:export` reads
+`contracts/zkit/artifacts/` and writes the shared proving bundle to:
+
+```text
+packages/config/public/circuits/
+  registration.wasm
+  registration.zkey
+  transfer.wasm
+  transfer.zkey
+  mint.wasm
+  mint.zkey
+  withdraw.wasm
+  withdraw.zkey
+  burn.wasm
+  burn.zkey
+  manifest.json
+```
+
+`manifest.json` is a generated array with one entry per artifact:
+
+```ts
+{
+  circuit: "registration" | "transfer" | "mint" | "withdraw" | "burn";
+  file: "registration.wasm" | "registration.zkey" | "...";
+  sha256: string;
+  bytes: number;
+  zkitVersion: string;
+  circomVersion: "2.1.9";
+  upstreamTag: "v0.0.4";
+  builtAt: string;
+}
+```
+
+Git strategy: neither `contracts/zkit/` nor
+`packages/config/public/circuits/` is committed. CI and local dev regenerate
+with `pnpm hardhat zkit make && pnpm artifacts:export`, then run
+`pnpm artifacts:verify`. Any missing file, byte-size drift, or SHA-256 drift is
+a hard failure.
+
+The manifest records exact byte counts for the current build. Current generated
+sizes with `@solarity/hardhat-zkit` 0.5.18, circom 2.1.9, and upstream v0.0.4:
+
+| Circuit | `.wasm` bytes | `.zkey` bytes |
+| --- | ---: | ---: |
+| registration | 1,882,087 | 1,072,784 |
+| transfer | 2,049,197 | 15,132,544 |
+| mint | 2,734,086 | 10,567,988 |
+| withdraw | 1,985,692 | 7,131,820 |
+| burn | 2,002,607 | 10,138,808 |
+
+Expect the first proof for an operation to pay a network download plus browser
+parse/compile cost for that operation's `.wasm` and `.zkey`. Wallet and console
+flows should lazy-load the operation being performed instead of preloading every
+circuit.
+
+All provers consume this through `@benzo/config`, not hand-written paths. Browser
+apps must expose `packages/config/public/circuits/` at `/circuits`; the
+server-side payroll runner can read the same manifest from the package
+workspace during its build/deploy step.
+
+The SDK `circuitURLs` object is per operation, with `wasm` and `zkey` URLs:
+
+```ts
+import { buildCircuitURLs } from "@benzo/config";
+
+const circuitURLs = buildCircuitURLs("/circuits");
+// {
+//   registration: {
+//     wasm: "/circuits/registration.wasm",
+//     zkey: "/circuits/registration.zkey",
+//   },
+//   transfer: {
+//     wasm: "/circuits/transfer.wasm",
+//     zkey: "/circuits/transfer.zkey",
+//   },
+//   mint: { wasm: "/circuits/mint.wasm", zkey: "/circuits/mint.zkey" },
+//   withdraw: {
+//     wasm: "/circuits/withdraw.wasm",
+//     zkey: "/circuits/withdraw.zkey",
+//   },
+//   burn: { wasm: "/circuits/burn.wasm", zkey: "/circuits/burn.zkey" },
+// }
+```
 
 The ported upstream tests live in `test/eerc/`. Their only local deviations are
 path/import updates required by Benzo's `contracts/eerc/` vendor directory.
@@ -97,6 +192,8 @@ paid.
 ```bash
 pnpm compile        # hardhat compile
 pnpm test           # hardhat test
+pnpm artifacts:export # export zkit .wasm/.zkey into @benzo/config
+pnpm artifacts:verify # verify exported bytes against manifest.json
 pnpm zkit:make      # hardhat zkit make
 pnpm zkit:verifiers # hardhat zkit verifiers
 pnpm deploy:handle-registry   # hardhat run scripts/deploy/06-handle-registry.ts --network fuji

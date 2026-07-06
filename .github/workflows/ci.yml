@@ -19,6 +19,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm --filter @benzo/config test
       - run: pnpm --filter @benzo/contracts compile
+      - run: pnpm --filter @benzo/contracts zkit:make
+      - run: pnpm --filter @benzo/contracts artifacts:export
+      - run: pnpm --filter @benzo/contracts artifacts:verify
       # Report but don't fail on transitive advisories (triage signal).
       - run: pnpm audit --audit-level high || true
