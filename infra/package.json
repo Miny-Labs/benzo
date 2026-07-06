@@ -1,0 +1,24 @@
+{
+  "name": "@benzo/infra",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "BenzoNet genesis and local-network smoke tests",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "tsx scripts/validate-genesis.ts",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "viem": "^2.41.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
