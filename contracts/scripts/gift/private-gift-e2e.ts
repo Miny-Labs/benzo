@@ -18,6 +18,12 @@ const DEPLOYMENTS_PATH = path.join(
 	"deployments",
 	"fuji.json",
 );
+const GIFT_LINK_OUTPUT_PATH = path.join(
+	__dirname,
+	"..",
+	"..",
+	".gift-link.local.txt",
+);
 
 type BigNumberish = bigint | number | string;
 
@@ -113,6 +119,17 @@ const parseBigInt = (value: string, name: string) => {
 	} catch {
 		throw new Error(`${name} must be a decimal or 0x-prefixed integer`);
 	}
+};
+
+const maskBearerPayload = (value: string) => `${value.slice(0, 8)}...${value.slice(-4)}`;
+
+const writeBearerPayload = async (serializedLink: string) => {
+	await fs.writeFile(GIFT_LINK_OUTPUT_PATH, `${serializedLink}\n`, {
+		mode: 0o600,
+	});
+	await fs.chmod(GIFT_LINK_OUTPUT_PATH, 0o600);
+
+	return path.relative(process.cwd(), GIFT_LINK_OUTPUT_PATH);
 };
 
 const readDeployments = async (): Promise<Deployments> => {
@@ -593,7 +610,12 @@ const main = async () => {
 		amount,
 		ephemeral,
 	);
-	console.log(`gift link payload (base64url JSON): ${serializedLink}`);
+	const giftLinkOutputPath = await writeBearerPayload(serializedLink);
+	console.log(`gift link payload file: ${giftLinkOutputPath}`);
+	console.log(`gift link payload preview: ${maskBearerPayload(serializedLink)}`);
+	console.log(
+		"WARNING: the gift link payload file is a bearer secret; do not commit, share, or upload it.",
+	);
 
 	await fundEphemeralGasFromClaimant(claimantSigner, ephemeral.signer.address);
 	await transferPrivate(eerc, ephemeral, claimant, tokenId, amount, auditorPublicKey);

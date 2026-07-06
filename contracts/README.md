@@ -137,8 +137,18 @@ accounts (`PRIVATE_KEY` and `PRIVATE_KEY_2`). For already registered accounts,
 provide their eERC decryption keys with
 `PRIVATE_GIFT_SENDER_EERC_PRIVATE_KEY` and
 `PRIVATE_GIFT_CLAIMANT_EERC_PRIVATE_KEY` so the script can generate valid
-proofs and assert decrypted balances. It prints the serialized bearer payload
-and the before/after decrypted balances.
+proofs and assert decrypted balances. It writes the serialized bearer payload to
+`contracts/.gift-link.local.txt`, prints only that file path plus a masked
+preview, and prints the before/after decrypted balances:
+
+```text
+gift link payload file: .gift-link.local.txt
+gift link payload preview: eyJjaGFp...fSJ9
+WARNING: the gift link payload file is a bearer secret; do not commit, share, or upload it.
+```
+
+The payload file is gitignored because it contains the ephemeral EVM private key
+and eERC decryption key. Treat it as a bearer secret.
 
 The script funds the newly generated ephemeral wallet from `PRIVATE_KEY_2`
 before ephemeral eERC registration, then checks the same gas floor again before
