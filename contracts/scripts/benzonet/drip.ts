@@ -39,9 +39,17 @@ const main = async () => {
 	}
 	const dripper = new ethers.Wallet(dripperKey, ethers.provider);
 
+	// `??` alone would let an exported-but-empty DRIP_AMOUNT_BGAS through to
+	// parseEther(""); trim + length-check so an empty value falls back too.
+	const rawAmount = process.env.DRIP_AMOUNT_BGAS?.trim();
 	const amount = ethers.parseEther(
-		process.env.DRIP_AMOUNT_BGAS ?? DEFAULT_DRIP_BGAS,
+		rawAmount && rawAmount.length > 0 ? rawAmount : DEFAULT_DRIP_BGAS,
 	);
+	if (amount <= 0n) {
+		throw new Error(
+			`DRIP_AMOUNT_BGAS must be a positive BGAS amount; got "${process.env.DRIP_AMOUNT_BGAS}".`,
+		);
+	}
 	const threshold = ethers.parseEther(MIN_TOPUP_BGAS);
 
 	const balance = await ethers.provider.getBalance(target);

@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: BSD-3-Clause
+// SPDX-License-Identifier: MIT
 // Vendored from ava-labs/subnet-evm (contracts/interfaces/INativeMinter.sol).
+// Copyright (C) Ava Labs, Inc. Distributed under the MIT license these
+// Subnet-EVM precompile interface files carry upstream.
 pragma solidity 0.8.27;
 
 import {IAllowList} from "./IAllowList.sol";

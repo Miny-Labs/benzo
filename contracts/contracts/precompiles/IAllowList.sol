@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: BSD-3-Clause
+// SPDX-License-Identifier: MIT
 // Vendored from ava-labs/subnet-evm (contracts/interfaces/IAllowList.sol).
+// Copyright (C) Ava Labs, Inc. Distributed under the MIT license these
+// Subnet-EVM precompile interface files carry upstream.
 // The Subnet-EVM AllowList precompile stateful contract shares this ABI across
 // the deployer-allowlist (0x02..00), native-minter (0x02..01), tx-allowlist
 // (0x02..02) and fee-manager (0x02..03) precompiles. Kept as one source so

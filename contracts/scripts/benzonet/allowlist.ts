@@ -62,8 +62,12 @@ const main = async () => {
 
 	const managerKey = process.env.MANAGER_PRIVATE_KEY;
 	if (!managerKey) {
+		// Role required differs by action: setEnabled/setNone need Manager or
+		// Admin; setManager needs Admin (a Manager cannot grant Manager).
+		const need =
+			action === "setManager" ? "an Admin key" : "a Manager or Admin key";
 		throw new Error(
-			"Set MANAGER_PRIVATE_KEY to a Manager/Admin key for this allowlist (benzo-ops manages tx).",
+			`Set MANAGER_PRIVATE_KEY to ${need} for the ${listKey} allowlist (benzo-ops manages tx; benzo-admin-cold is Admin).`,
 		);
 	}
 	const manager = new ethers.Wallet(managerKey, ethers.provider);
