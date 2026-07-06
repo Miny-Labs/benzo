@@ -113,15 +113,26 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 
 		const userId = request.user!.id;
 		const created = await db.transaction(async (tx) => {
+			// ON CONFLICT DO NOTHING on the unique slug: a taken slug (or a race
+			// between two creators) returns no row and maps to 409 below, instead
+			// of the raw 23505 escaping the transaction as a 500.
 			const [org] = await tx
 				.insert(orgs)
 				.values({ name: body.data.name, slug: body.data.slug })
+				.onConflictDoNothing({ target: orgs.slug })
 				.returning();
+			if (!org) {
+				return null;
+			}
 			await tx
 				.insert(orgMembers)
-				.values({ orgId: org!.id, userId, role: "owner" });
+				.values({ orgId: org.id, userId, role: "owner" });
 			return org;
 		});
+
+		if (!created) {
+			return reply.code(409).send({ error: "slug_taken" });
+		}
 
 		return reply.code(201).send({ org: created, role: "owner" });
 	});

@@ -139,6 +139,16 @@ describe("@benzo/api orgs", () => {
 				url: "/orgs",
 			});
 			expect(outsiderList.json().orgs).toEqual([]);
+
+			// A duplicate slug is a 409, not a 500 from the unique constraint.
+			const dupe = await app.inject({
+				headers: { cookie: outsiderCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Acme Rival", slug: "acme" },
+			});
+			expect(dupe.statusCode).toBe(409);
+			expect(dupe.json().error).toBe("slug_taken");
 		} finally {
 			await app.close();
 			await pool.end();
