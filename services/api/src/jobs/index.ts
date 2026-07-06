@@ -4,6 +4,7 @@ import { fromDrizzle, PgBoss, type Job, type JobWithMetadata } from "pg-boss";
 import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
 import { auditLog } from "../db/schema.js";
+import { expireCreatedInvites } from "../identity/invites.js";
 import {
 	enqueueOutstandingOnboardings,
 	handleOnboardingFailedJob,
@@ -16,6 +17,7 @@ import {
 
 export const JOB_QUEUES = {
 	demoAudit: "demo.audit",
+	invitesExpire: "invites.expire",
 	onboardingAdvance: ONBOARDING_ADVANCE_QUEUE,
 	onboardingFailed: ONBOARDING_FAILED_QUEUE,
 } as const;
@@ -29,6 +31,10 @@ export type DemoAuditJobData = {
 export type EnqueueDemoAuditJobInput = {
 	actor: string;
 	subject: string;
+};
+
+export type InviteExpireJobData = {
+	scheduled: true;
 };
 
 export function createBoss(config: ApiConfig): PgBoss {
@@ -57,6 +63,17 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
 		retryBackoff: true,
 		retryLimit: 8,
 	});
+	await boss.createQueue(JOB_QUEUES.invitesExpire, {
+		deleteAfterSeconds: 86_400,
+		retryLimit: 3,
+		retentionSeconds: 604_800,
+	});
+	await boss.schedule(
+		JOB_QUEUES.invitesExpire,
+		"0 * * * *",
+		{ scheduled: true } satisfies InviteExpireJobData,
+		{ key: "hourly" },
+	);
 }
 
 export async function registerJobs(
@@ -78,6 +95,22 @@ export async function registerJobs(
 			logger.info(
 				{ jobId: job.id, queue: JOB_QUEUES.demoAudit },
 				"demo audit job processed",
+			);
+		},
+	);
+
+	await boss.work<InviteExpireJobData>(
+		JOB_QUEUES.invitesExpire,
+		{ batchSize: 1 },
+		async ([job]) => {
+			if (!job) {
+				return;
+			}
+
+			const expiredCount = await expireCreatedInvites(db);
+			logger.info(
+				{ expiredCount, jobId: job.id, queue: JOB_QUEUES.invitesExpire },
+				"expired stale invites",
 			);
 		},
 	);
