@@ -42,12 +42,15 @@ Privacy on Avalanche** (July 1–19, 2026).
   between public and private via deposit/withdraw. This is the
   shielded-stablecoin mode Benzo's flows are built around.
 
-**Permissioned L1 — access privacy for the whole chain (stretch goal).**
-A sovereign Avalanche L1 where Subnet-EVM allowlist precompiles
-(tx allowlist at `0x02…02`, deployer allowlist at `0x02…00`) gate who can
-transact, and `validatorOnly` node config restricts who can even read.
-eERC runs on custom L1s, so the two primitives stack: encrypted amounts on
-a gated chain.
+**Permissioned L1 — access privacy for the whole chain (live on Fuji).**
+**BenzoNet**, a sovereign Avalanche L1 (chain id `68420`, gas token `BGAS`), is
+**deployed and validating on Fuji**. Subnet-EVM allowlist precompiles
+(tx allowlist at `0x02…02`, deployer allowlist at `0x02…00`, native minter at
+`0x02…01`, fee manager at `0x02…03`) gate who can transact and deploy, and a
+`validatorOnly` node config restricts who can even read. eERC runs on custom
+L1s, so the two primitives stack: encrypted amounts on a gated chain. Full
+deploy record — subnet/blockchain IDs, validator, PoA validator manager — is in
+[`infra/benzonet-fuji.json`](infra/benzonet-fuji.json).
 
 ## Stack
 

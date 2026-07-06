@@ -1,0 +1,27 @@
+{
+  "network": "BenzoNet",
+  "kind": "sovereign-l1",
+  "parentNetwork": "Avalanche Fuji",
+  "chainId": 68420,
+  "nativeToken": "BGAS",
+  "deployedAt": "2026-07-06",
+  "subnetId": "28VKqNmnCoGyZNxk1u88MXSGz5gyE5qVemcu5MN9QQoqFrKWgw",
+  "blockchainId": "21iisL1nkpM2AauUadAz7p1gK3waRBZLEJme3LU3gsWpaxy792",
+  "vmId": "kLQAFbs4cRHeN6Ra8rXvHg7AZU2CxdexeCzZn1CfgpY6zLrWj",
+  "vm": "Subnet-EVM v0.8.0",
+  "avalanchego": "v1.14.0",
+  "validatorManager": {
+    "type": "proof-of-authority",
+    "address": "0x0feedc0de0000000000000000000000000000000",
+    "owner": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+    "initialized": true
+  },
+  "bootstrapValidator": {
+    "nodeId": "NodeID-GzjWs1qCPQK6mcF112KJKaLpQoUYJD5He",
+    "host": "benzonet-1 (GCP, asia-south1-a)",
+    "partialSyncPrimaryNetwork": true
+  },
+  "controlKey": "P-fuji1949x56kenxgh85uqdx8v37t5gefhwqk8x6yy6s",
+  "rpcPath": "/ext/bc/21iisL1nkpM2AauUadAz7p1gK3waRBZLEJme3LU3gsWpaxy792/rpc",
+  "notes": "Sovereign L1 (ACP-77) converted from a permissioned subnet on Fuji. Genesis carries four allowlist precompiles (tx/deployer/native-minter/fee-manager), the PoA validator-manager proxy predeploy at 0x0feedc0de…, and warpConfig (required for the manager to read the P-Chain conversion). Verified live: a BGAS transfer from the deployer mined successfully. Earlier abandoned subnets/chains from the multi-attempt bring-up hold small locked validator balances."
+}
