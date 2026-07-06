@@ -35,8 +35,9 @@ export const processPoseidonEncryption = (
 	const nonce = randomNonce();
 
 	let encRandom = genRandomBabyJubValue();
-	if (encRandom >= BASE_POINT_ORDER) {
-		encRandom = genRandomBabyJubValue() / 10n;
+	// BENZO PATCH (upstream v0.0.4): Rejection-sample BabyJubJub randomness to avoid biased division fallback.
+	while (encRandom >= BASE_POINT_ORDER) {
+		encRandom = genRandomBabyJubValue();
 	}
 
 	const poseidonEncryptionKey = mulPointEscalar(

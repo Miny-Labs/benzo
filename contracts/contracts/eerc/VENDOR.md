@@ -24,3 +24,26 @@ the private-transfer layer is pinned and reviewable in this repository.
 The test suite behavior is unchanged. Imports and linked-library source names
 were adjusted only because Benzo vendors eERC under `contracts/eerc/` and keeps
 the ported tests in `test/eerc/`.
+
+## Benzo patches
+
+- `contracts/contracts/eerc/Registrar.sol`: changed the duplicate-registration
+  guard from `isRegistered[registrationHash] && isUserRegistered(account)` to
+  `||`; prevents an already-registered address from submitting a fresh valid
+  registration proof with a new keypair and overwriting its public key. Review
+  source: PR #66 verified finding 1.
+- `contracts/src/jub/jub.ts`: replaced the `/ 100n` fallback in
+  `encryptMessage` with rejection sampling below `BASE_POINT_ORDER`; removes
+  biased ElGamal encryption randomness. Review source: PR #66 verified finding
+  2.
+- `contracts/src/poseidon/poseidon.ts`: replaced the `/ 10n` fallback in
+  `processPoseidonEncryption` with rejection sampling below `BASE_POINT_ORDER`;
+  removes biased Poseidon PCT encryption randomness. Review source: PR #66
+  verified finding 3.
+- `contracts/test/eerc/EncryptedERC-Standalone.ts`: added a regression test
+  where an already-registered signer attempts to register a fresh keypair with
+  a fresh valid proof; proves the registrar rejects same-account re-keying.
+  Review source: PR #66 verified finding 1.
+- `contracts/test/eerc/Randomness.ts`: added deterministic RNG-stub tests for
+  the rejection-sampling path plus repeated range checks for both randomness
+  helpers. Review source: PR #66 verified findings 2 and 3.

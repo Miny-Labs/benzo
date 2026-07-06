@@ -209,6 +209,35 @@ describe("EncryptedERC - Standalone", () => {
 				).to.be.revertedWithCustomError(registrar, "UserAlreadyRegistered");
 			});
 
+			// BENZO PATCH (upstream v0.0.4): Regression test for same-account re-key attempts with a fresh valid proof.
+			it("already registered user can not register again with a fresh keypair", async () => {
+				const alreadyRegisteredUser = users[4];
+				const rekeyedUser = new User(alreadyRegisteredUser.signer);
+				const chainId = await ethers.provider
+					.getNetwork()
+					.then((network) => network.chainId);
+
+				const registrationHash = rekeyedUser.genRegistrationHash(chainId);
+				const input = {
+					SenderPrivateKey: rekeyedUser.formattedPrivateKey,
+					SenderPublicKey: rekeyedUser.publicKey,
+					SenderAddress: BigInt(rekeyedUser.signer.address),
+					ChainID: chainId,
+					RegistrationHash: registrationHash,
+				};
+
+				const proof = await registrationCircuit.generateProof(input);
+				const calldata = await registrationCircuit.generateCalldata(proof);
+				await expect(registrationCircuit).to.verifyProof(proof);
+
+				await expect(
+					registrar.connect(rekeyedUser.signer).register({
+						proofPoints: calldata.proofPoints,
+						publicSignals: calldata.publicSignals,
+					}),
+				).to.be.revertedWithCustomError(registrar, "UserAlreadyRegistered");
+			});
+
 			it("should revert if sender is not matching", async () => {
 				// valid proof is for user[4] but we are using user[0]
 				const sender = users[0];

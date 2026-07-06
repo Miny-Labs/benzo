@@ -101,8 +101,8 @@ contract Registrar {
             revert InvalidRegistrationHash();
         }
 
-        // check if the user is already registered
-        if (isRegistered[registrationHash] && isUserRegistered(account)) {
+        /* BENZO PATCH (upstream v0.0.4): Reject reused registration hashes or re-key attempts for an existing account. */
+        if (isRegistered[registrationHash] || isUserRegistered(account)) {
             revert UserAlreadyRegistered();
         }
 

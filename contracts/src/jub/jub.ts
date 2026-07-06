@@ -40,8 +40,9 @@ export const encryptMessage = (
 	random = genRandomBabyJubValue(),
 ): { cipher: [bigint[], bigint[]]; random: bigint } => {
 	let encRandom = random;
-	if (encRandom >= BASE_POINT_ORDER) {
-		encRandom = genRandomBabyJubValue() / 100n;
+	// BENZO PATCH (upstream v0.0.4): Rejection-sample BabyJubJub randomness to avoid biased division fallback.
+	while (encRandom >= BASE_POINT_ORDER) {
+		encRandom = genRandomBabyJubValue();
 	}
 	const p = mulPointEscalar(Base8, message);
 
