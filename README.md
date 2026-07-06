@@ -46,10 +46,12 @@ Privacy on Avalanche** (July 1–19, 2026).
 **BenzoNet**, a sovereign Avalanche L1 (chain id `68420`, gas token `BGAS`), is
 **deployed and validating on Fuji**. Subnet-EVM allowlist precompiles
 (tx allowlist at `0x02…02`, deployer allowlist at `0x02…00`, native minter at
-`0x02…01`, fee manager at `0x02…03`) gate who can transact and deploy, and a
-`validatorOnly` node config restricts who can even read. eERC runs on custom
-L1s, so the two primitives stack: encrypted amounts on a gated chain. Full
-deploy record — subnet/blockchain IDs, validator, PoA validator manager — is in
+`0x02…01`, fee manager at `0x02…03`) gate who can transact and deploy. As a
+sovereign L1, BenzoNet can additionally restrict who may even read the chain via
+avalanchego's `validatorOnly` node config (a capability of the deployment, not
+enabled on the current public-RPC bring-up). eERC runs on custom L1s, so the two
+primitives stack: encrypted amounts on a gated chain. Full deploy record —
+subnet/blockchain IDs, validator, PoA validator manager — is in
 [`infra/benzonet-fuji.json`](infra/benzonet-fuji.json).
 
 ## Stack
