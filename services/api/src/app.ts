@@ -34,6 +34,7 @@ import { authRoutes } from "./routes/auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { identityRoutes } from "./routes/identity.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
+import { orgsRoutes } from "./routes/orgs.js";
 import type { PgBoss } from "pg-boss";
 import type { Pool } from "pg";
 
@@ -110,6 +111,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		await fastify.register(identityRoutes, { db, identityChain, onboarding });
 		await fastify.register(activityRoutes, { db });
 		await fastify.register(adminRoutes, { chain, config, db });
+		await fastify.register(orgsRoutes, { config, db });
 
 		if (options.startBoss !== false) {
 			await boss.start();

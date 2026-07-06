@@ -362,7 +362,150 @@ export const eventLinks = pgTable(
 	],
 );
 
+export const orgRole = pgEnum("org_role", [
+	"owner",
+	"admin",
+	"operator",
+	"viewer",
+]);
+
+export const payrollRunStatus = pgEnum("payroll_run_status", [
+	"draft",
+	"validating",
+	"ready",
+	"running",
+	"paused",
+	"complete",
+	"failed",
+]);
+
+export const payrollItemStatus = pgEnum("payroll_item_status", [
+	"pending",
+	"proving",
+	"submitted",
+	"confirmed",
+	"failed",
+]);
+
+export const orgs = pgTable(
+	"orgs",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		name: text("name").notNull(),
+		slug: text("slug").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [uniqueIndex("orgs_slug_uidx").on(table.slug)],
+);
+
+export const orgMembers = pgTable(
+	"org_members",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		orgId: uuid("org_id")
+			.notNull()
+			.references(() => orgs.id, { onDelete: "cascade" }),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		role: orgRole("role").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("org_members_org_user_uidx").on(table.orgId, table.userId),
+		index("org_members_user_id_idx").on(table.userId),
+	],
+);
+
+export const orgTreasuries = pgTable(
+	"org_treasuries",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		orgId: uuid("org_id")
+			.notNull()
+			.references(() => orgs.id, { onDelete: "cascade" }),
+		address: text("address").notNull(),
+		// Sealed under APP_MASTER_KEY (AES-256-GCM). Never returned in responses,
+		// never logged; unsealed only in the payroll worker. sealedEercKey is set
+		// when the treasury completes server-side eERC registration.
+		sealedEoaKey: bytea("sealed_eoa_key").notNull(),
+		sealedEercKey: bytea("sealed_eerc_key"),
+		// Custody is an explicit consent moment: "Benzo holds this treasury key
+		// on its servers." Recorded before the first run and surfaced to the console.
+		consentedAt: timestamp("consented_at", { withTimezone: true }),
+		consentedBy: uuid("consented_by").references(() => users.id, {
+			onDelete: "set null",
+		}),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("org_treasuries_org_uidx").on(table.orgId),
+		uniqueIndex("org_treasuries_address_uidx").on(table.address),
+	],
+);
+
+export const payrollRuns = pgTable(
+	"payroll_runs",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		orgId: uuid("org_id")
+			.notNull()
+			.references(() => orgs.id, { onDelete: "cascade" }),
+		status: payrollRunStatus("status").notNull().default("draft"),
+		itemCount: integer("item_count").notNull().default(0),
+		totalAmount: text("total_amount").notNull().default("0"),
+		createdBy: uuid("created_by").references(() => users.id, {
+			onDelete: "set null",
+		}),
+		error: text("error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [index("payroll_runs_org_id_idx").on(table.orgId)],
+);
+
+export const payrollItems = pgTable(
+	"payroll_items",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		runId: uuid("run_id")
+			.notNull()
+			.references(() => payrollRuns.id, { onDelete: "cascade" }),
+		rowIndex: integer("row_index").notNull(),
+		recipientInput: text("recipient_input").notNull(),
+		resolvedAddress: text("resolved_address"),
+		amount: text("amount").notNull(),
+		status: payrollItemStatus("status").notNull().default("pending"),
+		attempt: integer("attempt").notNull().default(0),
+		txHash: text("tx_hash"),
+		error: text("error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("payroll_items_run_row_uidx").on(table.runId, table.rowIndex),
+		index("payroll_items_run_status_idx").on(table.runId, table.status),
+	],
+);
+
 export type UserRole = (typeof userRole.enumValues)[number];
 export type OnboardingStatus = (typeof onboardingStatus.enumValues)[number];
 export type InviteKind = (typeof inviteKind.enumValues)[number];
 export type InviteStatus = (typeof inviteStatus.enumValues)[number];
+export type OrgRole = (typeof orgRole.enumValues)[number];
+export type PayrollRunStatus = (typeof payrollRunStatus.enumValues)[number];
+export type PayrollItemStatus = (typeof payrollItemStatus.enumValues)[number];
