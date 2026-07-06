@@ -58,6 +58,87 @@ behaviors:
   user's encrypted converter balance. Wallets that produce non-reproducible
   signatures still cannot promise restore from wallet alone.
 
+## eERC Converter Deploy
+
+Benzo's Fuji demo converter stack wraps `TestUSDC`, a public faucet token named
+`Test USD Coin` with symbol `tUSDC` and 6 decimals. The wallet Add Money flow
+can call `faucet()` directly; each address receives 1,000 tUSDC with a 24-hour
+per-address cooldown. Owner `mint(address,uint256)` is retained for controlled
+test setup only.
+
+Deploy order is strict:
+
+1. Groth16 verifiers from `contracts/verifiers/`: registration, mint, transfer,
+   withdraw, burn
+2. `Registrar`
+3. `TestUSDC`
+4. `BabyJubJub` library and `EncryptedERC` in converter mode with 6 eERC
+   decimals
+5. Dedicated auditor signer registration, then owner
+   `setAuditorPublicKey(auditor)`
+
+The numbered scripts are idempotent and merge into
+`deployments/<network>.json` without clobbering unrelated records:
+
+```bash
+pnpm hardhat run scripts/deploy/01-verifiers.ts --network fuji
+pnpm hardhat run scripts/deploy/02-registrar.ts --network fuji
+pnpm hardhat run scripts/deploy/03-tusdc.ts --network fuji
+pnpm hardhat run scripts/deploy/04-eerc-converter.ts --network fuji
+pnpm hardhat run scripts/deploy/05-auditor.ts --network fuji
+```
+
+The one-shot Fuji command is:
+
+```bash
+RPC_URL=<fuji-rpc> PRIVATE_KEY=<deployer-key> PRIVATE_KEY_2=<funded-auditor-key> pnpm deploy:eerc
+```
+
+`PRIVATE_KEY` owns `TestUSDC` and `EncryptedERC`. `PRIVATE_KEY_2` is a funded
+dedicated auditor signer used to register the generated BabyJubJub auditor
+public key. The script writes the BabyJubJub private half to ignored
+`contracts/.auditor-key.local.json` (it is never printed to stdout, to keep it
+out of CI logs and terminal history); M3 sealed storage must import that value
+later. Never commit this file.
+
+For Fuji, each deployment record includes address, deployer, transaction hash,
+block number, verification status, and a testnet Snowtrace address link. The
+stack lands under `contracts.eercConverter` in `deployments/fuji.json`, including
+`verifiers`, `registrar`, `testUSDC`, `libraries.babyJubJub`, `encryptedERC`,
+`wrappedToken`, and `auditor`.
+
+Routescan verification is attempted after each Fuji deployment record is
+persisted. A verification failure leaves the address and transaction hash in
+`deployments/fuji.json` with `verified: false` so the operator can retry without
+redeploying (Routescan can index a fresh contract minutes after deploy, so a
+first-attempt failure often just needs a re-run). To skip the verification step
+entirely — for example when Routescan hasn't indexed the just-deployed contracts
+yet — set `SKIP_VERIFY=1` on the command and verify later:
+
+```bash
+SKIP_VERIFY=1 RPC_URL=<fuji-rpc> PRIVATE_KEY=<deployer-key> PRIVATE_KEY_2=<funded-auditor-key> pnpm deploy:eerc
+```
+
+The live Fuji stack recorded here is fully verified: all nine contracts show
+`verified: true` with a `verifiedAt` timestamp and have browsable source on
+Snowtrace.
+
+After the Fuji deploy, run the end-to-end smoke:
+
+```bash
+RPC_URL=<fuji-rpc> PRIVATE_KEY=<deployer-key> PRIVATE_KEY_2=<funded-auditor-key> pnpm smoke:eerc
+```
+
+The smoke registers the deployer as a user, calls the public `tUSDC.faucet()`,
+approves and deposits into eERC, privately transfers to the registered auditor
+key, withdraws a portion, and asserts both public tUSDC balances and decrypted
+eERC balances. If rerunning against the same deployer account, pass the original
+`SMOKE_SENDER_BABYJUB_PRIVATE_KEY` because `Registrar` does not allow re-keying.
+`tUSDC.faucet()` also enforces a 24-hour per-address cooldown, so a rerun within
+that window can't top the sender up again — either wait for the cooldown to
+expire or point the smoke at a fresh, funded sender address. (The smoke tolerates
+a cooldown revert and continues if the sender still holds enough tUSDC.)
+
 ## Circuit Artifact Pipeline
 
 The eERC SDK generates Groth16 proofs from circuit artifacts served to the
@@ -290,6 +371,8 @@ pnpm artifacts:export # export zkit .wasm/.zkey into @benzo/config
 pnpm artifacts:verify # verify exported bytes against manifest.json
 pnpm zkit:make      # hardhat zkit make
 pnpm zkit:verifiers # hardhat zkit verifiers
+pnpm deploy:eerc    # deploy verifiers, Registrar, TestUSDC, converter eERC, auditor on Fuji
+pnpm smoke:eerc     # run faucet -> deposit -> private transfer -> withdraw on Fuji
 pnpm deploy:handle-registry   # hardhat run scripts/deploy/06-handle-registry.ts --network fuji
 pnpm deploy:invoice-registry  # hardhat run scripts/deploy/07-invoice-registry.ts --network fuji
 pnpm deploy:gift-escrow       # hardhat run scripts/deploy/08-gift-escrow.ts --network fuji

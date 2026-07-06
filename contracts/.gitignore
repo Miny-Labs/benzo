@@ -19,3 +19,6 @@ gas-report.txt
 
 # Local bearer secrets
 .gift-link.local.txt
+.auditor-key.local.json
+/deployments/hardhat.json
+/deployments/localhost.json
