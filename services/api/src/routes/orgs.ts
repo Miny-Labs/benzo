@@ -274,9 +274,17 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				eercAccount,
 				eoaPrivateKey,
 			});
+			// Persist the consent moment on every registration path. The insert
+			// branch already stamps consent, but an existing (pre-consent) treasury
+			// row reaching this point consented via this request's `consent: true`
+			// body — record it without clobbering an earlier timestamp.
 			await db
 				.update(orgTreasuries)
-				.set({ eercRegisteredAt: new Date() })
+				.set({
+					consentedAt: treasury.consentedAt ?? new Date(),
+					consentedBy: treasury.consentedBy ?? request.user!.id,
+					eercRegisteredAt: new Date(),
+				})
 				.where(eq(orgTreasuries.id, treasury.id));
 
 			return reply.code(createdTreasury ? 201 : 200).send({

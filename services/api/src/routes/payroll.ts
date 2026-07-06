@@ -279,7 +279,7 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 
 			const [treasury] = await db
 				.select({
-					registered: sql<boolean>`${orgTreasuries.sealedEercKey} is not null`,
+					registered: sql<boolean>`${orgTreasuries.eercRegisteredAt} is not null`,
 				})
 				.from(orgTreasuries)
 				.where(eq(orgTreasuries.orgId, run.orgId))

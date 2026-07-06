@@ -3,7 +3,7 @@ import type { Job, PgBoss } from "pg-boss";
 import type { Pool } from "pg";
 import type { Hex } from "viem";
 import type { ApiConfig } from "../config.js";
-import { unsealString } from "../crypto/seal.js";
+import { sealString, unsealString } from "../crypto/seal.js";
 import type { Database } from "../db/client.js";
 import {
 	eventLinks,
@@ -198,7 +198,12 @@ async function processPayrollItem(
 			row.run.id,
 			row.item.rowIndex,
 			row.item.txHash as Hex,
-			row.item.submissionRawTx as Hex | null,
+			row.item.submissionRawTx
+				? (unsealString(
+						options.config.appMasterKey,
+						row.item.submissionRawTx,
+					) as Hex)
+				: null,
 		);
 		return;
 	}
@@ -275,7 +280,10 @@ async function processPayrollItem(
 			.set({
 				error: null,
 				status: "submitted",
-				submissionRawTx: prepared.rawTransaction,
+				submissionRawTx: sealString(
+					options.config.appMasterKey,
+					prepared.rawTransaction,
+				),
 				txHash: prepared.txHash,
 				updatedAt: new Date(),
 			})
@@ -324,7 +332,14 @@ async function confirmSubmittedItem(
 		.set({
 			error: null,
 			status: "submitted",
-			...(rawTransaction ? { submissionRawTx: rawTransaction } : {}),
+			...(rawTransaction
+				? {
+						submissionRawTx: sealString(
+							options.config.appMasterKey,
+							rawTransaction,
+						),
+					}
+				: {}),
 			txHash,
 			updatedAt: new Date(),
 		})

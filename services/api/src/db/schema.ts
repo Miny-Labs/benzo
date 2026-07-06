@@ -522,7 +522,10 @@ export const payrollItems = pgTable(
 		attempt: integer("attempt").notNull().default(0),
 		confirmationAttempt: integer("confirmation_attempt").notNull().default(0),
 		txHash: text("tx_hash"),
-		submissionRawTx: text("submission_raw_tx"),
+		// Sealed under APP_MASTER_KEY: a signed raw transfer is re-broadcastable
+		// and reveals recipient/amount, so it is never stored in the clear. Held
+		// only between broadcast and confirmation, then cleared to null.
+		submissionRawTx: bytea("submission_raw_tx"),
 		error: text("error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
