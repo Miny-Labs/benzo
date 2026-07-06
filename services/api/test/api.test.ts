@@ -22,8 +22,16 @@ import { createSiweMessage } from "viem/siwe";
 import { buildApp } from "../src/app.js";
 import type { ApiConfig } from "../src/config.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
+import type { AdminChainClient } from "../src/admin/chain.js";
+import {
+	createAuditorKeypair,
+	encryptAuditorAmountPct,
+	type AuditorPublicKey,
+} from "../src/auditor/crypto.js";
+import { sealString } from "../src/crypto/seal.js";
 import {
 	auditLog,
+	auditorKeys,
 	chainCursor,
 	drips,
 	eventLinks,
@@ -1584,6 +1592,340 @@ describe("@benzo/api", () => {
 		}
 	});
 
+	it("decrypts auditor events across key rotation without persisting plaintext", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const adminChain = createAdminChainStub({ rotationBlock: 20n });
+		const app = await buildApp({
+			adminChain,
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const admin = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777771",
+		);
+		const auditor = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777772",
+		);
+		const subject = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777773",
+		);
+		const counterparty = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777774",
+		);
+		const keyA = createAuditorKeypair(101n);
+
+		try {
+			await resetComplianceTables(db);
+			await db.insert(auditorKeys).values({
+				activatedBlockNumber: 0n,
+				active: true,
+				publicKeyX: keyA.publicKey[0],
+				publicKeyY: keyA.publicKey[1],
+				sealedKey: sealString(config.appMasterKey, keyA.privateKey),
+			});
+			await insertAuditorEvent(db, {
+				amount: 12n,
+				blockNumber: 10n,
+				from: subject,
+				logIndex: 1,
+				publicKey: keyA.publicKey,
+				to: counterparty,
+				txHash: txHash(101),
+			});
+
+			const auditorCookie = await createTestSession(db, config, auditor, [
+				"auditor",
+			]);
+			const adminCookie = await createTestSession(db, config, admin, [
+				"network_admin",
+			]);
+
+			const beforeRotateResponse = await app.inject({
+				headers: { cookie: auditorCookie },
+				method: "GET",
+				url: `/auditor/events?address=${subject}`,
+			});
+			expect(beforeRotateResponse.statusCode).toBe(200);
+			expect(beforeRotateResponse.json()).toMatchObject({
+				events: [
+					{
+						amount: "12",
+						blockNumber: "10",
+						fromAddr: subject,
+						toAddr: counterparty,
+					},
+				],
+			});
+
+			const rotateResponse = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "POST",
+				url: "/admin/auditor/rotate",
+			});
+			expect(rotateResponse.statusCode).toBe(201);
+			expect(adminChain.rotations).toHaveLength(1);
+
+			const keyRows = await db
+				.select()
+				.from(auditorKeys)
+				.orderBy(auditorKeys.activatedBlockNumber);
+			expect(keyRows).toHaveLength(2);
+			expect(keyRows[0]).toMatchObject({
+				active: false,
+				retiredBlockNumber: 20n,
+			});
+			expect(keyRows[1]).toMatchObject({
+				active: true,
+				activatedBlockNumber: 20n,
+			});
+
+			const keyB = keyRows[1];
+			if (!keyB) {
+				throw new Error("rotated auditor key missing");
+			}
+			await insertAuditorEvent(db, {
+				amount: 34n,
+				blockNumber: 21n,
+				from: counterparty,
+				logIndex: 2,
+				publicKey: [keyB.publicKeyX, keyB.publicKeyY],
+				to: subject,
+				txHash: txHash(102),
+			});
+
+			const afterRotateResponse = await app.inject({
+				headers: { cookie: auditorCookie },
+				method: "GET",
+				url: `/auditor/events?address=${subject}`,
+			});
+			expect(afterRotateResponse.statusCode).toBe(200);
+			expect(afterRotateResponse.json()).toMatchObject({
+				events: [
+					{
+						amount: "34",
+						blockNumber: "21",
+						fromAddr: counterparty,
+						toAddr: subject,
+					},
+					{
+						amount: "12",
+						blockNumber: "10",
+						fromAddr: subject,
+						toAddr: counterparty,
+					},
+				],
+			});
+
+			const reportResponse = await app.inject({
+				headers: { cookie: auditorCookie },
+				method: "GET",
+				url: `/auditor/report/${subject}`,
+			});
+			expect(reportResponse.statusCode).toBe(200);
+			expect(reportResponse.json()).toMatchObject({
+				report: {
+					address: subject,
+					eventCount: 2,
+					inflow: "34",
+					outflow: "12",
+				},
+			});
+
+			const decryptAuditCount = await countAuditRowsByActor(
+				db,
+				"auditor_decrypt",
+				auditor,
+			);
+			expect(decryptAuditCount).toBe(5);
+			expect(
+				(
+					await db.execute(sql`
+						select column_name
+						from information_schema.columns
+						where table_name = 'events'
+							and column_name in ('amount', 'decrypted_amount', 'plaintext_amount')
+					`)
+				).rows,
+			).toEqual([]);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("returns 403 and audit-logs non-auditor access to auditor routes", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const nonAuditor = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777775",
+		);
+
+		try {
+			const cookie = await createTestSession(db, config, nonAuditor);
+			const response = await app.inject({
+				headers: { cookie },
+				method: "GET",
+				url: "/auditor/events",
+			});
+
+			expect(response.statusCode).toBe(403);
+			expect(response.json()).toEqual({ error: "forbidden" });
+			expect(
+				await countAuditRowsByActor(db, "auditor_access_denied", nonAuditor),
+			).toBe(1);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("serves network-admin role grants, audit log, allowlist, drips, and chain health", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const adminChain = createAdminChainStub({
+			allowlistLevel: 1n,
+			latestBlock: 50n,
+		});
+		const app = await buildApp({
+			adminChain,
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const admin = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777776",
+		);
+		const subject = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777777",
+		);
+
+		try {
+			await resetIndexerTables(db);
+			await db.insert(chainCursor).values({
+				contract: testEncryptedErcAddress,
+				lastBlock: 40n,
+			});
+
+			const adminCookie = await createTestSession(db, config, admin, [
+				"network_admin",
+			]);
+			const roleResponse = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "POST",
+				payload: {
+					address: subject,
+					role: "auditor",
+				},
+				url: "/admin/roles",
+			});
+			expect(roleResponse.statusCode).toBe(200);
+			expect(roleResponse.json()).toMatchObject({
+				user: {
+					address: subject,
+					roles: ["auditor"],
+				},
+			});
+
+			const revokeResponse = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "POST",
+				payload: {
+					action: "revoke",
+					address: subject,
+				},
+				url: "/admin/allowlist",
+			});
+			expect(revokeResponse.statusCode).toBe(200);
+			expect(revokeResponse.json()).toMatchObject({
+				allowlist: {
+					enabled: false,
+					result: "revoked",
+					txHash: txHash(1),
+				},
+			});
+
+			const statusResponse = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "GET",
+				url: `/admin/allowlist/${subject}`,
+			});
+			expect(statusResponse.statusCode).toBe(200);
+			expect(statusResponse.json()).toMatchObject({
+				allowlist: {
+					address: subject,
+					enabled: false,
+					level: "0",
+				},
+			});
+
+			const dripResponse = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "POST",
+				payload: {
+					address: subject,
+					amountWei: "123",
+				},
+				url: "/admin/drip",
+			});
+			expect(dripResponse.statusCode).toBe(200);
+			expect(dripResponse.json()).toMatchObject({
+				drip: {
+					address: subject,
+					amountWei: "123",
+					txHash: txHash(2),
+				},
+			});
+			expect(await countDripsForAddress(db, subject)).toBe(1);
+
+			const chainResponse = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "GET",
+				url: "/admin/chain",
+			});
+			expect(chainResponse.statusCode).toBe(200);
+			expect(chainResponse.json()).toMatchObject({
+				indexer: {
+					confirmedBlock: "44",
+					lagBlocks: "4",
+				},
+				latestBlock: "50",
+				opsBalance: {
+					balanceWei: "1000",
+				},
+			});
+
+			const auditResponse = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "GET",
+				url: `/admin/audit-log?actor=${admin}`,
+			});
+			expect(auditResponse.statusCode).toBe(200);
+			expect(auditResponse.json()).toMatchObject({
+				entries: expect.arrayContaining([
+					expect.objectContaining({ action: "role_grant", subject }),
+					expect.objectContaining({ action: "allowlist_revoke", subject }),
+					expect.objectContaining({ action: "admin_drip", subject }),
+				]),
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 });
 
 async function migrateTestDatabase(config: ApiConfig): Promise<void> {
@@ -1752,6 +2094,21 @@ async function countAuditRows(
 		})
 		.from(auditLog)
 		.where(and(eq(auditLog.action, action), eq(auditLog.subject, "demo:restart")));
+
+	return row?.count ?? 0;
+}
+
+async function countAuditRowsByActor(
+	db: Database,
+	action: string,
+	actor: string,
+): Promise<number> {
+	const [row] = await db
+		.select({
+			count: sql<number>`count(*)::int`,
+		})
+		.from(auditLog)
+		.where(and(eq(auditLog.action, action), eq(auditLog.actor, actor)));
 
 	return row?.count ?? 0;
 }
@@ -2023,6 +2380,38 @@ async function resetIndexerTables(db: Database): Promise<void> {
 	await db.delete(chainCursor);
 }
 
+async function resetComplianceTables(db: Database): Promise<void> {
+	await resetIndexerTables(db);
+	await db.delete(auditorKeys);
+}
+
+async function insertAuditorEvent(
+	db: Database,
+	input: {
+		amount: bigint;
+		blockNumber: bigint;
+		from: string;
+		logIndex: number;
+		publicKey: AuditorPublicKey;
+		to: string;
+		txHash: Hex;
+	},
+): Promise<void> {
+	await db.insert(events).values({
+		amountPct: encryptAuditorAmountPct(input.amount, input.publicKey),
+		blockHash: blockHash(input.blockNumber),
+		blockNumber: input.blockNumber,
+		blockTime: new Date((1_700_000_000 + Number(input.blockNumber)) * 1_000),
+		contract: testEncryptedErcAddress,
+		eventName: "PrivateTransfer",
+		fromAddr: input.from,
+		logIndex: input.logIndex,
+		rawLog: {},
+		toAddr: input.to,
+		txHash: input.txHash,
+	});
+}
+
 async function createTestSession(
 	db: Database,
 	config: ApiConfig,
@@ -2050,6 +2439,99 @@ async function createTestSession(
 	});
 
 	return `${config.sessionCookieName}=${sessionId}`;
+}
+
+type AdminChainStub = AdminChainClient & {
+	rotations: AuditorPublicKey[];
+};
+
+function createAdminChainStub(input: {
+	allowlistLevel?: bigint;
+	latestBlock?: bigint;
+	rotationBlock?: bigint;
+}): AdminChainStub {
+	let allowlistLevel = input.allowlistLevel ?? 0n;
+	let nextTxId = 1;
+	const rotations: AuditorPublicKey[] = [];
+
+	return {
+		rotations,
+		async applyAllowlist(address, action) {
+			const previousLevel = allowlistLevel;
+
+			if (action === "enable" && allowlistLevel >= 1n) {
+				return {
+					action,
+					address,
+					enabled: true,
+					previousLevel: previousLevel.toString(),
+					result: "already_enabled",
+					txHash: null,
+				};
+			}
+
+			if (action === "revoke" && allowlistLevel === 0n) {
+				return {
+					action,
+					address,
+					enabled: false,
+					previousLevel: previousLevel.toString(),
+					result: "already_revoked",
+					txHash: null,
+				};
+			}
+
+			allowlistLevel = action === "enable" ? 1n : 0n;
+
+			return {
+				action,
+				address,
+				enabled: action === "enable",
+				previousLevel: previousLevel.toString(),
+				result: action === "enable" ? "enabled" : "revoked",
+				txHash: txHash(nextTxId++),
+			};
+		},
+		async dripGas(address, amountWei) {
+			return {
+				address,
+				amountWei: amountWei.toString(),
+				mode: "fuji_plain_transfer",
+				txHash: txHash(nextTxId++),
+			};
+		},
+		async getAllowlistStatus(address) {
+			return {
+				address,
+				enabled: allowlistLevel >= 1n,
+				level: allowlistLevel.toString(),
+			};
+		},
+		async getChainHealth() {
+			const latestBlock = input.latestBlock ?? 20n;
+
+			return {
+				blockLagSeconds: 3,
+				blockTimestamp: new Date(Date.now() - 3_000).toISOString(),
+				latestBlock: latestBlock.toString(),
+				opsBalance: {
+					address: "0x0000000000000000000000000000000000000001",
+					balanceWei: "1000",
+				},
+				treasuryBalances: [],
+			};
+		},
+		async rotateAuditor(rotationInput) {
+			rotations.push(rotationInput.publicKey);
+
+			return {
+				auditorAddress: rotationInput.auditorAddress ?? null,
+				blockNumber: input.rotationBlock ?? 20n,
+				blockTime: new Date("2026-07-06T00:00:20.000Z"),
+				txHash: txHash(nextTxId++),
+			};
+		},
+	};
 }
 
 function createStubChain(logs: ChainLog[]): ChainLogSource {

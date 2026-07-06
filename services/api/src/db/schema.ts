@@ -229,6 +229,33 @@ export const auditLog = pgTable(
 	],
 );
 
+export const auditorKeys = pgTable(
+	"auditor_keys",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		sealedKey: bytea("sealed_key").notNull(),
+		publicKeyX: text("public_key_x").notNull(),
+		publicKeyY: text("public_key_y").notNull(),
+		active: boolean("active").notNull().default(true),
+		activatedAt: timestamp("activated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		activatedBlockNumber: bigint("activated_block_number", {
+			mode: "bigint",
+		}).notNull(),
+		retiredAt: timestamp("retired_at", { withTimezone: true }),
+		retiredBlockNumber: bigint("retired_block_number", { mode: "bigint" }),
+		rotationTxHash: text("rotation_tx_hash"),
+	},
+	(table) => [
+		index("auditor_keys_active_idx").on(table.active),
+		index("auditor_keys_block_range_idx").on(
+			table.activatedBlockNumber,
+			table.retiredBlockNumber,
+		),
+	],
+);
+
 export const handles = pgTable(
 	"handles",
 	{

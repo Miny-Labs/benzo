@@ -9,6 +9,10 @@ import { createPublicClient, http } from "viem";
 import { loadConfig, type ApiConfig } from "./config.js";
 import { createDb, createPool, type Database } from "./db/client.js";
 import {
+	createAdminChainClient,
+	type AdminChainClient,
+} from "./admin/chain.js";
+import {
 	createInMemoryIdentityChainClient,
 	isInMemoryIdentityChainClient,
 	type IdentityChainClient,
@@ -30,6 +34,7 @@ import { createKycProvider, type KycProvider } from "./onboarding/kyc.js";
 import authPlugin from "./plugins/auth.js";
 import { adminRoutes } from "./routes/admin.js";
 import { activityRoutes } from "./routes/activity.js";
+import { auditorRoutes } from "./routes/auditor.js";
 import { authRoutes } from "./routes/auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { identityRoutes } from "./routes/identity.js";
@@ -40,6 +45,7 @@ import type { PgBoss } from "pg-boss";
 import type { Pool } from "pg";
 
 export type BuildAppOptions = {
+	adminChain?: AdminChainClient;
 	boss?: PgBoss;
 	chain?: ChainLogSource;
 	config?: ApiConfig;
@@ -81,6 +87,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		createOnboardingChainClient(config, publicClient);
 	const kycProvider = options.kycProvider ?? createKycProvider(config);
 	const chain = options.chain ?? createViemChainLogSource(publicClient);
+	const adminChain =
+		options.adminChain ?? createAdminChainClient(config, publicClient);
 	let bossStarted = false;
 
 	fastify.addHook("onClose", async () => {
@@ -111,7 +119,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		await fastify.register(onboardingRoutes, { boss, config, db });
 		await fastify.register(identityRoutes, { db, identityChain, onboarding });
 		await fastify.register(activityRoutes, { db });
-		await fastify.register(adminRoutes, { chain, config, db });
+		await fastify.register(auditorRoutes, { config, db });
+		await fastify.register(adminRoutes, { adminChain, chain, config, db });
 		await fastify.register(orgsRoutes, { config, db });
 		await fastify.register(payrollRoutes, { db });
 
