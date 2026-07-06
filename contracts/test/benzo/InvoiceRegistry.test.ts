@@ -105,6 +105,26 @@ describe("InvoiceRegistry", () => {
 		expect(invoice.commitment).to.equal(commitment);
 	});
 
+	it("rejects non-zero expiries in the past", async () => {
+		const nextTimestamp = (await time.latest()) + 60;
+		const expiredAt = nextTimestamp - 1;
+		const commitment = invoiceCommitment(
+			1_000_000n,
+			token.address,
+			payee.address,
+			ethers.id("expired-invoice"),
+		);
+
+		await time.setNextBlockTimestamp(nextTimestamp);
+
+		await expect(
+			registry.connect(payee).createInvoice(commitment, payer.address, expiredAt),
+		).to.be.revertedWithCustomError(registry, "InvalidExpiry").withArgs(
+			expiredAt,
+			nextTimestamp,
+		);
+	});
+
 	it("cancels created invoices by payee only", async () => {
 		await createInvoice();
 
@@ -146,6 +166,14 @@ describe("InvoiceRegistry", () => {
 		const invoice = await registry.getInvoice(id);
 		expect(invoice.status).to.equal(Status.Paid);
 		expect(invoice.paymentRef).to.equal(paymentRef);
+	});
+
+	it("rejects empty payment references", async () => {
+		const { id } = await createInvoice();
+
+		await expect(
+			registry.connect(payee).markPaid(id, ethers.ZeroHash),
+		).to.be.revertedWithCustomError(registry, "InvalidPaymentRef");
 	});
 
 	it("does not allow paid invoices to be cancelled or marked paid again", async () => {

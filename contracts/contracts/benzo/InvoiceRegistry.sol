@@ -24,6 +24,8 @@ contract InvoiceRegistry {
     }
 
     error EmptyCommitment();
+    error InvalidExpiry(uint64 expiry, uint256 currentTimestamp);
+    error InvalidPaymentRef();
     error InvoiceNotFound(uint256 id);
     error InvoiceNotCreated(uint256 id, Status status);
     error OnlyPayee(uint256 id, address caller);
@@ -78,6 +80,9 @@ contract InvoiceRegistry {
         if (commitment == bytes32(0)) {
             revert EmptyCommitment();
         }
+        if (expiry != 0 && expiry <= block.timestamp) {
+            revert InvalidExpiry(expiry, block.timestamp);
+        }
 
         id = _nextInvoiceId++;
         _invoices[id] = Invoice({
@@ -115,6 +120,9 @@ contract InvoiceRegistry {
     function markPaid(uint256 id, bytes32 paymentRef) external {
         _requireCreated(id);
         _requirePayee(id);
+        if (paymentRef == bytes32(0)) {
+            revert InvalidPaymentRef();
+        }
 
         _invoices[id].status = Status.Paid;
         _invoices[id].paymentRef = paymentRef;

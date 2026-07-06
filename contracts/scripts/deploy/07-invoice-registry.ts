@@ -59,10 +59,19 @@ const main = async () => {
 
 	console.log(`InvoiceRegistry deployed to ${address}`);
 
-	await run("verify:verify", {
-		address,
-		constructorArguments: [],
-	});
+	let verified = false;
+	let verifiedAt: string | undefined;
+	try {
+		await run("verify:verify", {
+			address,
+			constructorArguments: [],
+		});
+		verified = true;
+		verifiedAt = new Date().toISOString();
+	} catch (error) {
+		console.warn("InvoiceRegistry verification failed; persisting deployment");
+		console.warn(error);
+	}
 
 	const deployments = await readDeployments();
 	deployments.network = "fuji";
@@ -74,8 +83,8 @@ const main = async () => {
 			deployer: deployer.address,
 			transactionHash: deploymentTransaction?.hash,
 			blockNumber: receipt?.blockNumber,
-			verified: true,
-			verifiedAt: new Date().toISOString(),
+			verified,
+			...(verifiedAt === undefined ? {} : { verifiedAt }),
 		},
 	};
 
