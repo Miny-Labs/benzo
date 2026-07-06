@@ -508,10 +508,17 @@ async function withOrgPayrollLock<T>(
 		]);
 		return await fn();
 	} finally {
+		// A session-level advisory lock is bound to the connection. If the unlock
+		// query fails, returning the connection to the pool would leave the next
+		// borrower holding this org's payroll lock — so evict it (release(true))
+		// to guarantee the lock dies with the connection.
+		let unlockFailed = false;
 		await client
 			.query("select pg_advisory_unlock(hashtextextended($1, 0))", [key])
-			.catch(() => undefined);
-		client.release();
+			.catch(() => {
+				unlockFailed = true;
+			});
+		client.release(unlockFailed);
 	}
 }
 
