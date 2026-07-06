@@ -9,11 +9,6 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "audit:prod-env": "node scripts/audit-production-env.mjs",
-    "audit:prod-db": "node scripts/audit-production-db.mjs",
-    "audit:privacy": "node scripts/audit-privacy-payloads.mjs",
-    "audit:actions": "node scripts/audit-action-coverage.mjs",
-    "smoke:wallet-account-freedom": "node scripts/smoke-wallet-account-freedom.mjs",
     "test": "pnpm -r test",
     "lint": "biome lint",
     "lint:fix": "biome lint --write"
