@@ -24,6 +24,21 @@ const intakeSchema = z.object({
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 // Positive decimal with at most 6 fractional digits (tUSDC precision).
 const AMOUNT = /^\d+(\.\d{1,6})?$/;
+// Cap recipients per run (a payroll of tens of thousands is a mistake, and it
+// bounds the downstream proving work).
+const MAX_ROWS = 10_000;
+// Postgres binds one parameter per value; keep every query well under the
+// 65,535 wire-protocol limit. payroll_items binds ~7 values per row.
+const ITEM_INSERT_BATCH = 5_000;
+const QUERY_BATCH = 10_000;
+
+const chunk = <T>(arr: T[], size: number): T[][] => {
+	const out: T[][] = [];
+	for (let i = 0; i < arr.length; i += size) {
+		out.push(arr.slice(i, i + size));
+	}
+	return out;
+};
 
 type ParsedRow = {
 	rowIndex: number;
@@ -93,19 +108,30 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 			if (parsed.length === 0) {
 				return reply.code(400).send({ error: "empty_payroll" });
 			}
+			if (parsed.length > MAX_ROWS) {
+				return reply
+					.code(400)
+					.send({ error: "too_many_rows", maxRows: MAX_ROWS });
+			}
 
-			// Batch-resolve @handles to wallet addresses in one query.
-			const handleInputs = parsed
-				.map((r) => r.recipientInput)
-				.filter((r) => r !== "" && !EVM_ADDRESS.test(r))
-				.map((r) => r.replace(/^@/, "").toLowerCase());
+			// Batch-resolve @handles to wallet addresses. Dedupe the handles and
+			// chunk the lookup so the IN clause never exceeds Postgres's 65,535
+			// bind-parameter limit on a large CSV.
+			const handleInputs = [
+				...new Set(
+					parsed
+						.map((r) => r.recipientInput)
+						.filter((r) => r !== "" && !EVM_ADDRESS.test(r))
+						.map((r) => r.replace(/^@/, "").toLowerCase()),
+				),
+			];
 			const handleToAddress = new Map<string, string>();
-			if (handleInputs.length > 0) {
+			for (const group of chunk(handleInputs, QUERY_BATCH)) {
 				const found = await db
 					.select({ handle: handles.handle, address: users.address })
 					.from(handles)
 					.innerJoin(users, eq(handles.userId, users.id))
-					.where(inArray(handles.handle, handleInputs));
+					.where(inArray(handles.handle, group));
 				for (const row of found) {
 					handleToAddress.set(row.handle.toLowerCase(), row.address);
 				}
@@ -166,17 +192,20 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 					})
 					.returning();
 				const runId = created!.id;
-				await tx.insert(payrollItems).values(
-					items.map((i) => ({
-						runId,
-						rowIndex: i.rowIndex,
-						recipientInput: i.recipientInput,
-						resolvedAddress: i.resolvedAddress,
-						amount: i.amount,
-						status: i.status,
-						error: i.error,
-					})),
-				);
+				const rows = items.map((i) => ({
+					runId,
+					rowIndex: i.rowIndex,
+					recipientInput: i.recipientInput,
+					resolvedAddress: i.resolvedAddress,
+					amount: i.amount,
+					status: i.status,
+					error: i.error,
+				}));
+				// Chunk so a large run never exceeds Postgres's 65,535 bind-param
+				// cap (payroll_items binds ~7 values per row).
+				for (const group of chunk(rows, ITEM_INSERT_BATCH)) {
+					await tx.insert(payrollItems).values(group);
+				}
 				return created;
 			});
 

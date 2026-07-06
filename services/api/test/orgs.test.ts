@@ -411,4 +411,55 @@ describe("@benzo/api orgs", () => {
 			await pool.end();
 		}
 	});
+
+	it("caps run size and chunks large item inserts past the param limit", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({ config, logger: false, startBoss: false });
+		const owner = `0x${"33".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Scaleco", slug: "scaleco" },
+			});
+			const orgId = created.json().org.id as string;
+
+			const addr = (i: number) => `0x${i.toString(16).padStart(40, "0")}`;
+
+			// Over the cap → 400.
+			const tooMany = Array.from({ length: 10_001 }, (_, i) => `${addr(i)},1`);
+			const capped = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/payroll`,
+				payload: { csv: tooMany.join("\n") },
+			});
+			expect(capped.statusCode).toBe(400);
+			expect(capped.json().error).toBe("too_many_rows");
+
+			// 6000 rows crosses the 5000-row insert batch → two chunks, must persist all.
+			const rows = Array.from({ length: 6_000 }, (_, i) => `${addr(i)},1`);
+			const res = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/payroll`,
+				payload: { csv: rows.join("\n") },
+			});
+			expect(res.statusCode).toBe(201);
+			expect(res.json().summary).toMatchObject({ valid: 6_000, invalid: 0 });
+
+			const persisted = await db
+				.select()
+				.from(payrollItems)
+				.where(eq(payrollItems.runId, res.json().runId as string));
+			expect(persisted).toHaveLength(6_000);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
 });
