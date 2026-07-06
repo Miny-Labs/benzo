@@ -5,6 +5,18 @@ import * as dotenv from "dotenv";
 import type { HardhatUserConfig } from "hardhat/config";
 import path from "node:path";
 
+if (process.argv.includes("zkit")) {
+  // hardhat-zkit stores downloaded circom compilers under os.homedir().
+  process.env.HOME = path.join(__dirname, "zkit", "home");
+
+  if (__dirname.includes(" ") || process.env.BENZO_ZKIT_FORCE_WASM === "1") {
+    const { CircomCompilerDownloader } = require("@solarity/hardhat-zkit/dist/src/core/compiler/CircomCompilerDownloader") as {
+      CircomCompilerDownloader: { getCompilerPlatformBinary: () => string };
+    };
+    CircomCompilerDownloader.getCompilerPlatformBinary = () => "circom.wasm";
+  }
+}
+
 // Root .env so contracts/ and future apps/ share one config.
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
 

@@ -26,6 +26,9 @@ importers:
       '@solarity/hardhat-zkit':
         specifier: ^0.5.15
         version: 0.5.18(hardhat@2.28.6(ts-node@10.9.2(@types/node@26.1.0)(typescript@5.9.3))(typescript@5.9.3))
+      '@types/node':
+        specifier: ^26.1.0
+        version: 26.1.0
       '@zk-kit/baby-jubjub':
         specifier: ^1.0.3
         version: 1.0.3
@@ -63,6 +66,15 @@ importers:
       tsx:
         specifier: ^4.21.0
         version: 4.23.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/config:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.0
+        version: 26.1.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

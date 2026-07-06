@@ -21,9 +21,14 @@ coverage.json
 zkit/
 generated-types/
 *.zkey
+*.wasm
 *.ptau
 *.wtns
 *.r1cs
+packages/config/public/circuits/
+apps/*/public/circuits/*.wasm
+apps/*/public/circuits/*.zkey
+apps/*/public/circuits/manifest.json
 
 # --- os / editor ---
 .DS_Store
