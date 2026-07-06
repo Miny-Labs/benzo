@@ -43,6 +43,13 @@
       "when": 1783331475787,
       "tag": "0005_acoustic_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783335338737,
+      "tag": "0006_huge_maestro",
+      "breakpoints": true
     }
   ]
 }

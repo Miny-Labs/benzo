@@ -65,6 +65,32 @@ number from `BENZONET_RPC_URL`.
 | eERC raw log bytes | Opaque chain bytes | Stored in `events.raw_log` as `address`, `topics`, and ABI `data` hex for replay/debugging. The API does not materialize decoded consumer amount fields from these bytes into columns or response fields. |
 | eERC ciphertext/PCT blobs | Opaque bytes | Stored in `events.ciphertext` and `events.amount_pct`; returned as hex strings. The API does not decrypt, interpret, or convert these blobs to amounts. |
 | Proving artifacts or secrets | Never server-side | Generated proving artifacts and secrets must not be committed or stored by the API. |
+| Org treasury keys | Sealed at rest (opt-in, org-scoped) | The managed treasury EOA key (and, once registered, its eERC key) are stored **only** as `org_treasuries.sealed_eoa_key` / `sealed_eerc_key`, sealed under `APP_MASTER_KEY` with AES-256-GCM. They are never returned in a response, never logged, and unsealed only in the payroll worker. Custody requires explicit recorded consent. These sealed keys are spendable funds — see the disaster-recovery issue. |
+
+## Organizations & Managed Treasury
+
+Businesses run payroll from an **org**. Membership is role-ranked
+(`owner` > `admin` > `operator` > `viewer`); org routes gate on a minimum role
+and return `404` (not `403`) to non-members so org existence isn't leaked.
+
+| Route | Min role | Purpose |
+|---|---|---|
+| `POST /orgs` | authenticated | Create an org; the creator becomes `owner`. |
+| `GET /orgs` | authenticated | Orgs the caller belongs to, with their role. |
+| `GET /orgs/:id` · `GET /orgs/:id/members` | `viewer` | Org detail / member list. |
+| `POST /orgs/:id/members` | `admin` | Add/update a member by wallet address (must be a known SIWE user). |
+| `POST /orgs/:id/treasury` | `admin` | Provision the managed treasury (see below). |
+| `GET /orgs/:id/treasury` | `viewer` | Custody status only — never key material. |
+
+**Managed treasury custody.** eERC transfer proofs need the *sender's* key, so a
+payroll run can't prove client-side without pinning a browser tab. Each org may
+opt into a server-held treasury: `POST /orgs/:id/treasury` generates an EOA,
+seals its private key under `APP_MASTER_KEY` (AES-256-GCM — equivalent AEAD
+guarantee to libsodium secretbox, no native dependency), and records the
+custody consent moment (`consent: true` is required). The sealed key is unsealed
+only in the payroll worker; it is never returned or logged. Server-side eERC
+registration (which populates `sealed_eerc_key`) and the CSV intake + proving
+runner land in a follow-up.
 
 ## Activity Indexer
 
