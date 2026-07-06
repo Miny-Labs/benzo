@@ -21,8 +21,9 @@
     "deploy:invoice-registry": "hardhat run scripts/deploy/07-invoice-registry.ts --network fuji",
     "deploy:gift-escrow": "hardhat run scripts/deploy/08-gift-escrow.ts --network fuji",
     "gift:private-e2e": "hardhat run scripts/gift/private-gift-e2e.ts --network fuji",
-    "seed": "hardhat run scripts/seed.ts",
-    "seed:local": "BENZO_SEED_TARGET=local hardhat run scripts/seed.ts",
+    "seed": "BENZO_SEED_TARGET=local hardhat run scripts/seed.ts --network hardhat",
+    "seed:local": "BENZO_SEED_TARGET=local hardhat run scripts/seed.ts --network hardhat",
+    "seed:localhost": "BENZO_SEED_TARGET=local hardhat run scripts/seed.ts --network localhost",
     "seed:fuji": "BENZO_SEED_TARGET=fuji hardhat run scripts/seed.ts --network fuji",
     "seed:benzonet": "BENZO_SEED_TARGET=benzonet hardhat run scripts/seed.ts --network benzonet"
   },

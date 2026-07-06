@@ -3,6 +3,7 @@ import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers"
 import { ethers, network } from "hardhat";
 import {
 	buildGiftInvite,
+	buildGiftEscrowLink,
 	buildInvoiceLink,
 	buildSeedConfig,
 	deriveDemoAccounts,
@@ -95,7 +96,9 @@ async function main() {
 	const chainId = Number(chain.chainId);
 
 	assertTargetMatchesNetwork(config.target, chainId);
-	const state = await loadSeedState(config.outputPath, config, chainId);
+	const state = await loadSeedState(config.outputPath, config, chainId, {
+		ignoreCache: shouldIgnoreSeedCache(config.target),
+	});
 	const accounts = deriveDemoAccounts(config).map((account) => ({
 		...account,
 		signer: new ethers.Wallet(account.privateKey, ethers.provider),
@@ -223,6 +226,10 @@ function assertTargetMatchesNetwork(target: SeedTarget, chainId: number): void {
 	if (target === "local" && (chainId === 43_113 || chainId === 68_420)) {
 		throw new Error("BENZO_SEED_TARGET=local must not run against Fuji or BenzoNet");
 	}
+}
+
+function shouldIgnoreSeedCache(target: SeedTarget): boolean {
+	return target === "local" && network.name === "hardhat";
 }
 
 async function resolveSigners(target: SeedTarget): Promise<SeedSigners> {
@@ -608,7 +615,7 @@ async function claimHandleIfAvailable(
 	}
 
 	const currentOwner = (await registry.resolve(account.handle)).toLowerCase();
-	if (currentOwner === account.address) {
+	if (currentOwner === account.address.toLowerCase()) {
 		return;
 	}
 	if (currentOwner !== ZERO_ADDRESS) {
@@ -789,7 +796,11 @@ async function seedGiftFixture(input: {
 	};
 	const existing = input.state.gift;
 	if (existing?.escrowTxHash || existing?.escrowStatus === "already_created") {
-		return { ...existing, link: invite.link, token: invite.token };
+		return {
+			...existing,
+			link: buildGiftEscrowLink(invite.link, existing.escrowGiftId),
+			token: invite.token,
+		};
 	}
 	if (!input.workflowContracts.giftEscrowAddress) {
 		return base;
@@ -829,7 +840,7 @@ async function seedGiftFixture(input: {
 		escrowStatus: "created",
 		escrowTxHash: tx.hash,
 		expiresAt: new Date(Number(expiry) * 1000).toISOString(),
-		link: `${invite.link}?escrowGiftId=${giftId.toString()}`,
+		link: buildGiftEscrowLink(invite.link, giftId),
 	};
 }
 

@@ -147,6 +147,9 @@ const DEFAULT_PAYROLL_CSV_PATH = path.join(
 const APP_MASTER_KEY_BYTES = 32;
 const SEAL_NONCE_BYTES = 12;
 const SEAL_TAG_BYTES = 16;
+const SECP256K1_ORDER = BigInt(
+	"0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+);
 
 export function buildSeedConfig(env: NodeJS.ProcessEnv): SeedConfig {
 	const target = parseTarget(env.BENZO_SEED_TARGET);
@@ -250,23 +253,26 @@ export async function loadSeedState(
 	filePath: string,
 	config: SeedConfig,
 	chainId: number,
+	options: { ignoreCache?: boolean } = {},
 ): Promise<SeedState> {
-	try {
-		const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as SeedState;
-		if (
-			parsed.version === 1 &&
-			parsed.seedId === config.seedId &&
-			parsed.target === config.target &&
-			parsed.chainId === chainId
-		) {
-			return {
-				...parsed,
-				transfers: parsed.transfers ?? {},
-			};
-		}
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-			throw error;
+	if (!options.ignoreCache) {
+		try {
+			const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as SeedState;
+			if (
+				parsed.version === 1 &&
+				parsed.seedId === config.seedId &&
+				parsed.target === config.target &&
+				parsed.chainId === chainId
+			) {
+				return {
+					...parsed,
+					transfers: parsed.transfers ?? {},
+				};
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				throw error;
+			}
 		}
 	}
 
@@ -287,7 +293,6 @@ export async function writeSeedState(
 	await fs.writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, {
 		mode: 0o600,
 	});
-	await fs.chmod(filePath, 0o600);
 }
 
 export function buildInvoiceLink(input: {
@@ -324,6 +329,23 @@ export function buildGiftInvite(config: SeedConfig): Omit<
 		token,
 		tokenHash,
 	};
+}
+
+export function buildGiftEscrowLink(
+	inviteLink: string,
+	escrowGiftId: bigint | string | null | undefined,
+): string {
+	if (escrowGiftId === null || escrowGiftId === undefined) {
+		return inviteLink;
+	}
+
+	const id = escrowGiftId.toString();
+	if (id === "") {
+		return inviteLink;
+	}
+
+	const params = new URLSearchParams({ escrowGiftId: id });
+	return `${inviteLink}?${params.toString()}`;
 }
 
 export function transferPlans(accounts: DemoAccount[]): Array<{
@@ -475,7 +497,8 @@ function deterministicPrivateKey(
 
 	for (let attempt = 0; attempt < 8; attempt += 1) {
 		const candidate = hashHex(`${material}\n${attempt}`);
-		if (BigInt(`0x${candidate}`) > 0n) {
+		const value = BigInt(`0x${candidate}`);
+		if (value > 0n && value < SECP256K1_ORDER) {
 			return `0x${candidate}`;
 		}
 		material = hashHex(material);
@@ -684,6 +707,10 @@ async function seedOrg(
 	accounts: DemoAccount[],
 	userIds: string[],
 ): Promise<string> {
+	if (accounts.length === 0) {
+		throw new Error("seed_org_requires_accounts");
+	}
+
 	const org = await client.query<{ id: string }>(
 		`
 			insert into orgs(name, slug)
@@ -703,10 +730,6 @@ async function seedOrg(
 			`,
 			[orgId, userId, index === 0 ? "owner" : index === 1 ? "operator" : "viewer"],
 		);
-	}
-
-	if (accounts.length === 0) {
-		throw new Error("seed_org_requires_accounts");
 	}
 
 	return orgId;
