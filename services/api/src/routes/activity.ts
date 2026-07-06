@@ -191,7 +191,9 @@ export const activityRoutes: FastifyPluginAsync<ActivityRoutesOptions> = async (
 				clearInterval(interval);
 			});
 
-			void sendNewRows();
+			void sendNewRows().catch((error: unknown) => {
+				request.log.error({ err: error }, "activity stream poll failed");
+			});
 		},
 	);
 };
@@ -352,7 +354,12 @@ function parseCursor(cursor: string | undefined): Cursor | undefined {
 
 	const [blockNumber, logIndex] = cursor.split(":");
 
-	if (!blockNumber || !logIndex || !/^\d+$/.test(blockNumber)) {
+	if (
+		!blockNumber ||
+		!logIndex ||
+		!/^\d+$/.test(blockNumber) ||
+		!/^\d+$/.test(logIndex)
+	) {
 		return undefined;
 	}
 

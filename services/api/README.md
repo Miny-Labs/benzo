@@ -29,12 +29,10 @@ number from `BENZONET_RPC_URL`.
 | `KYC_PROVIDER` | No | Currently only `mock`. The mock provider records name/country only and never accepts documents. |
 | `DRIP_WEI` | No | Native gas amount to send/mint during onboarding. Defaults to `500000000000000000` (0.5 native). |
 | `DRIP_BALANCE_THRESHOLD_WEI` | No | Skip gas drip when the user balance is already at least this amount. Defaults to `500000000000000000`. |
-| `EERC_REGISTRAR_ADDRESS` | No | Registrar contract override for onboarding registration polling. If omitted, the API looks in the deployment manifest. |
+| `EERC_REGISTRAR_ADDRESS` | No | Registrar contract address, used both for onboarding registration polling and by the indexer. If omitted, the API looks in the deployment manifest (defaults to Fuji `0x9a63FEa9851097DBAf3757b636217fdde50ABaF0`). |
 | `EERC_DEPLOYMENT_MANIFEST` | No | Deployment manifest path used to discover the Registrar address. Defaults to `contracts/deployments/{CHAIN_ENV}.json`. |
 | `ONBOARDING_REGISTRATION_POLL_SECONDS` | No | Registration polling interval. Defaults to `15`. |
-| `BENZONET_CHAIN_ID` | No | SIWE chain id. Defaults to Fuji `43113` until the BenzoNet VM chain id is assigned. |
 | `EERC_ENCRYPTED_ERC_ADDRESS` | No | EncryptedERC contract address to index. Defaults to Fuji `0x46688f1704a69a6c276cCCB823E36C80787B0FA2`. |
-| `EERC_REGISTRAR_ADDRESS` | No | Registrar contract address to index. Defaults to Fuji `0x9a63FEa9851097DBAf3757b636217fdde50ABaF0`. |
 | `INDEXER_CONFIRMATIONS` | No | Confirmation depth before logs are indexed. Defaults to `6`. |
 | `INDEXER_ENABLED` | No | Set to `false` to disable the pg-boss scheduled poller. Defaults to `true`. |
 | `INDEXER_MAX_WINDOW_BLOCKS` | No | Maximum log scan window. Defaults to `2000`. |
