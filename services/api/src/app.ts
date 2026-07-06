@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import cookie from "@fastify/cookie";
+import rateLimit from "@fastify/rate-limit";
 import Fastify, {
 	type FastifyBaseLogger,
 	type FastifyServerOptions,
@@ -7,6 +8,14 @@ import Fastify, {
 import { createPublicClient, http } from "viem";
 import { loadConfig, type ApiConfig } from "./config.js";
 import { createDb, createPool, type Database } from "./db/client.js";
+import {
+	createInMemoryIdentityChainClient,
+	type IdentityChainClient,
+} from "./identity/chain.js";
+import {
+	createNoopOnboardingOrchestrator,
+	type OnboardingOrchestrator,
+} from "./identity/onboarding.js";
 import { createBoss, registerJobs } from "./jobs/index.js";
 import {
 	createOnboardingChainClient,
@@ -16,6 +25,7 @@ import { createKycProvider, type KycProvider } from "./onboarding/kyc.js";
 import authPlugin from "./plugins/auth.js";
 import { authRoutes } from "./routes/auth.js";
 import { healthRoutes } from "./routes/health.js";
+import { identityRoutes } from "./routes/identity.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import type { PgBoss } from "pg-boss";
 import type { Pool } from "pg";
@@ -24,8 +34,10 @@ export type BuildAppOptions = {
 	boss?: PgBoss;
 	config?: ApiConfig;
 	db?: Database;
+	identityChain?: IdentityChainClient;
 	kycProvider?: KycProvider;
 	logger?: FastifyServerOptions["logger"];
+	onboarding?: OnboardingOrchestrator;
 	onboardingChain?: OnboardingChainClient;
 	pool?: Pool;
 	startBoss?: boolean;
@@ -42,6 +54,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	const pool = options.pool ?? createPool(config, fastify.log);
 	const db = options.db ?? createDb(pool);
 	const boss = options.boss ?? createBoss(config);
+	const identityChain =
+		options.identityChain ?? createInMemoryIdentityChainClient();
+	const onboarding =
+		options.onboarding ?? createNoopOnboardingOrchestrator();
 	const ownsBoss = !options.boss;
 	const ownsPool = !options.pool;
 	const publicClient = createPublicClient({
@@ -74,10 +90,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		});
 
 		await fastify.register(cookie);
+		await fastify.register(rateLimit, { global: false });
 		await fastify.register(authPlugin, { config, db });
 		await fastify.register(healthRoutes, { db, publicClient });
 		await fastify.register(authRoutes, { config, db, publicClient });
 		await fastify.register(onboardingRoutes, { boss, config, db });
+		await fastify.register(identityRoutes, { db, identityChain, onboarding });
 
 		if (options.startBoss !== false) {
 			await boss.start();

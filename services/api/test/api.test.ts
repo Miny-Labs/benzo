@@ -17,11 +17,19 @@ import { createDb, createPool, type Database } from "../src/db/client.js";
 import {
 	auditLog,
 	drips,
+	handles,
+	invites,
 	onboardings,
 	sessions,
 	users,
 	type UserRole,
 } from "../src/db/schema.js";
+import { InMemoryIdentityChainClient } from "../src/identity/chain.js";
+import { hashInviteToken } from "../src/identity/invites.js";
+import type {
+	OnboardingOrchestrator,
+	OnboardingStartInput,
+} from "../src/identity/onboarding.js";
 import {
 	createBoss,
 	enqueueDemoAuditJob,
@@ -817,6 +825,313 @@ describe("@benzo/api", () => {
 			await pool.end();
 		}
 	});
+
+	it("claims handles through the chain boundary and resolves authoritative chain state with HTTP cache headers", async () => {
+		const identityChain = new InMemoryIdentityChainClient();
+		const app = await buildApp({
+			config,
+			identityChain,
+			logger: false,
+			startBoss: false,
+		});
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const account = privateKeyToAccount(generatePrivateKey());
+		const staleAccount = privateKeyToAccount(generatePrivateKey());
+		const handle = uniqueHandle("alice");
+
+		identityChain.setRegistered(account.address, true);
+
+		try {
+			const cookie = await signIn(app, account, config);
+			const claimResponse = await app.inject({
+				headers: { cookie },
+				method: "POST",
+				payload: { handle },
+				url: "/handles",
+			});
+
+			expect(claimResponse.statusCode).toBe(201);
+			expect(claimResponse.json()).toEqual({
+				address: account.address.toLowerCase(),
+				handle,
+				registeredOnEerc: true,
+				source: "chain",
+			});
+
+			await mirrorStaleHandle(db, handle, staleAccount.address.toLowerCase());
+
+			const resolveResponse = await app.inject({
+				method: "GET",
+				url: `/resolve/${handle}`,
+			});
+
+			expect(resolveResponse.statusCode).toBe(200);
+			expect(resolveResponse.headers["cache-control"]).toBe(
+				"public, max-age=60",
+			);
+			expect(resolveResponse.headers.etag).toEqual(expect.any(String));
+			expect(resolveResponse.json()).toEqual({
+				address: account.address.toLowerCase(),
+				registeredOnEerc: true,
+				source: "chain",
+			});
+			expect(await cachedHandleOwner(db, handle)).toBe(
+				account.address.toLowerCase(),
+			);
+
+			const notModifiedResponse = await app.inject({
+				headers: {
+					"if-none-match": resolveResponse.headers.etag,
+				},
+				method: "GET",
+				url: `/resolve/${handle}`,
+			});
+
+			expect(notModifiedResponse.statusCode).toBe(304);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("manages per-user contacts and enriches list responses with handles and eERC registration status", async () => {
+		const owner = privateKeyToAccount(generatePrivateKey());
+		const contact = privateKeyToAccount(generatePrivateKey());
+		const identityChain = new InMemoryIdentityChainClient({
+			registeredAddresses: [contact.address],
+		});
+		const app = await buildApp({
+			config,
+			identityChain,
+			logger: false,
+			startBoss: false,
+		});
+		const contactHandle = uniqueHandle("bob");
+
+		try {
+			const ownerCookie = await signIn(app, owner, config);
+			const contactCookie = await signIn(app, contact, config);
+
+			const handleResponse = await app.inject({
+				headers: { cookie: contactCookie },
+				method: "POST",
+				payload: { handle: contactHandle },
+				url: "/handles",
+			});
+			expect(handleResponse.statusCode).toBe(201);
+
+			const createResponse = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				payload: {
+					alias: "Payroll lead",
+					contactAddress: contact.address,
+					favorite: true,
+				},
+				url: "/contacts",
+			});
+			expect(createResponse.statusCode).toBe(201);
+			expect(createResponse.json()).toMatchObject({
+				contact: {
+					address: contact.address.toLowerCase(),
+					alias: "Payroll lead",
+					favorite: true,
+					handle: contactHandle,
+					registeredOnEerc: true,
+				},
+			});
+
+			const listResponse = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "GET",
+				url: "/contacts",
+			});
+			expect(listResponse.statusCode).toBe(200);
+			expect(listResponse.json()).toEqual({
+				contacts: [
+					{
+						address: contact.address.toLowerCase(),
+						alias: "Payroll lead",
+						favorite: true,
+						handle: contactHandle,
+						registeredOnEerc: true,
+					},
+				],
+			});
+
+			const patchResponse = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "PATCH",
+				payload: {
+					alias: "Ops lead",
+					favorite: false,
+				},
+				url: `/contacts/${contact.address}`,
+			});
+			expect(patchResponse.statusCode).toBe(200);
+			expect(patchResponse.json()).toMatchObject({
+				contact: {
+					alias: "Ops lead",
+					favorite: false,
+				},
+			});
+
+			const deleteResponse = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "DELETE",
+				url: `/contacts/${contact.address}`,
+			});
+			expect(deleteResponse.statusCode).toBe(204);
+
+			const emptyListResponse = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "GET",
+				url: "/contacts",
+			});
+			expect(emptyListResponse.json()).toEqual({ contacts: [] });
+		} finally {
+			await app.close();
+		}
+	});
+
+	it("runs invite lifecycle without storing raw tokens and rejects token reuse", async () => {
+		const identityChain = new InMemoryIdentityChainClient();
+		const onboarding = new RecordingOnboardingOrchestrator();
+		const app = await buildApp({
+			config,
+			identityChain,
+			logger: false,
+			onboarding,
+			startBoss: false,
+		});
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const creator = privateKeyToAccount(generatePrivateKey());
+		const claimant = privateKeyToAccount(generatePrivateKey());
+		const creatorHandle = uniqueHandle("maker");
+
+		identityChain.setRegistered(claimant.address, true);
+
+		try {
+			const creatorCookie = await signIn(app, creator, config);
+			const claimantCookie = await signIn(app, claimant, config);
+
+			const handleResponse = await app.inject({
+				headers: { cookie: creatorCookie },
+				method: "POST",
+				payload: { handle: creatorHandle },
+				url: "/handles",
+			});
+			expect(handleResponse.statusCode).toBe(201);
+
+			const createResponse = await app.inject({
+				headers: { cookie: creatorCookie },
+				method: "POST",
+				payload: {
+					giftAmount: "25.50",
+					kind: "gift",
+					note: "Welcome aboard",
+				},
+				url: "/invites",
+			});
+
+			expect(createResponse.statusCode).toBe(201);
+			const createBody = createResponse.json<{
+				invite: { id: string; kind: string; note: string; status: string };
+				token: string;
+			}>();
+			expect(createBody.invite).toMatchObject({
+				kind: "gift",
+				note: "Welcome aboard",
+				status: "created",
+			});
+			expect(createBody.token).toEqual(expect.any(String));
+
+			const [storedInvite] = await db
+				.select({
+					giftAmount: invites.giftAmount,
+					id: invites.id,
+					status: invites.status,
+					tokenHash: invites.tokenHash,
+				})
+				.from(invites)
+				.where(eq(invites.id, createBody.invite.id))
+				.limit(1);
+			expect(storedInvite?.tokenHash).toBe(hashInviteToken(createBody.token));
+			expect(JSON.stringify(storedInvite)).not.toContain(createBody.token);
+
+			const fetchResponse = await app.inject({
+				method: "GET",
+				url: `/invites/${createBody.token}`,
+			});
+			expect(fetchResponse.statusCode).toBe(200);
+			expect(fetchResponse.json()).toEqual({
+				invite: {
+					creatorHandle,
+					expiresAt: expect.any(String),
+					kind: "gift",
+					note: "Welcome aboard",
+					status: "created",
+				},
+			});
+			expect(fetchResponse.body).not.toContain(createBody.token);
+			expect(fetchResponse.body).not.toContain("25.50");
+
+			const claimResponse = await app.inject({
+				headers: { cookie: claimantCookie },
+				method: "POST",
+				url: `/invites/${createBody.token}/claim`,
+			});
+			expect(claimResponse.statusCode).toBe(200);
+			expect(claimResponse.json()).toMatchObject({
+				claimant: {
+					address: claimant.address.toLowerCase(),
+					registeredOnEerc: true,
+				},
+				invite: {
+					creatorHandle,
+					kind: "gift",
+					note: "Welcome aboard",
+					status: "claimed",
+				},
+			});
+			expect(onboarding.starts).toHaveLength(1);
+			expect(onboarding.starts[0]).toMatchObject({
+				address: claimant.address.toLowerCase(),
+				inviteId: createBody.invite.id,
+			});
+
+			const [claimedInvite] = await db
+				.select({
+					claimedBy: invites.claimedBy,
+					status: invites.status,
+				})
+				.from(invites)
+				.where(eq(invites.id, createBody.invite.id))
+				.limit(1);
+			const [claimantUser] = await db
+				.select({ id: users.id })
+				.from(users)
+				.where(eq(users.address, claimant.address.toLowerCase()))
+				.limit(1);
+			expect(claimedInvite).toEqual({
+				claimedBy: claimantUser?.id,
+				status: "claimed",
+			});
+
+			const replayResponse = await app.inject({
+				headers: { cookie: claimantCookie },
+				method: "POST",
+				url: `/invites/${createBody.token}/claim`,
+			});
+			expect(replayResponse.statusCode).toBe(409);
+			expect(replayResponse.json()).toEqual({ error: "invite_claimed" });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
 });
 
 async function migrateTestDatabase(config: ApiConfig): Promise<void> {
@@ -844,6 +1159,110 @@ function extractCookie(header: string | string[] | number | undefined): string {
 	}
 
 	return "";
+}
+
+type TestAccount = ReturnType<typeof privateKeyToAccount>;
+
+async function signIn(
+	app: Awaited<ReturnType<typeof buildApp>>,
+	account: TestAccount,
+	config: ApiConfig,
+): Promise<string> {
+	const nonceResponse = await app.inject({
+		method: "GET",
+		url: `/auth/nonce?address=${account.address}`,
+	});
+	expect(nonceResponse.statusCode).toBe(200);
+	const { nonce } = nonceResponse.json<{ nonce: string }>();
+	const message = createSiweMessage({
+		address: account.address,
+		chainId: config.benzonetChainId,
+		domain: "localhost",
+		issuedAt: new Date(),
+		nonce,
+		uri: "http://localhost",
+		version: "1",
+	});
+	const signature = await account.signMessage({ message });
+	const verifyResponse = await app.inject({
+		headers: {
+			host: "localhost",
+		},
+		method: "POST",
+		payload: {
+			message,
+			signature,
+		},
+		url: "/auth/verify",
+	});
+
+	expect(verifyResponse.statusCode).toBe(200);
+	return extractCookie(verifyResponse.headers["set-cookie"]);
+}
+
+function uniqueHandle(prefix: string): string {
+	return `${prefix}_${randomSlug()}`.slice(0, 20);
+}
+
+function randomSlug(): string {
+	return Math.random().toString(36).slice(2, 10);
+}
+
+async function mirrorStaleHandle(
+	db: Database,
+	handle: string,
+	address: string,
+): Promise<void> {
+	await db.transaction(async (tx) => {
+		const [insertedUser] = await tx
+			.insert(users)
+			.values({
+				address,
+			})
+			.onConflictDoNothing({ target: users.address })
+			.returning({ id: users.id });
+		const [existingUser] =
+			insertedUser === undefined
+				? await tx
+						.select({ id: users.id })
+						.from(users)
+						.where(eq(users.address, address))
+						.limit(1)
+				: [];
+		const user = insertedUser ?? existingUser;
+
+		if (!user) {
+			throw new Error("stale user lookup failed");
+		}
+
+		await tx.delete(handles).where(eq(handles.handle, handle));
+		await tx.insert(handles).values({
+			handle,
+			userId: user.id,
+		});
+	});
+}
+
+async function cachedHandleOwner(
+	db: Database,
+	handle: string,
+): Promise<string | null> {
+	const [row] = await db
+		.select({ address: users.address })
+		.from(handles)
+		.innerJoin(users, eq(users.id, handles.userId))
+		.where(eq(handles.handle, handle))
+		.limit(1);
+
+	return row?.address ?? null;
+}
+
+class RecordingOnboardingOrchestrator implements OnboardingOrchestrator {
+	readonly starts: OnboardingStartInput[] = [];
+
+	async startForInviteClaim(input: OnboardingStartInput): Promise<void> {
+		this.starts.push(input);
+	}
 }
 
 async function countAuditRows(

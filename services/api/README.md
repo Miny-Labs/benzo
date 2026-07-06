@@ -49,6 +49,10 @@ number from `BENZONET_RPC_URL`.
 | Mock KYC payload | Plaintext MOCK workflow data | Stored in `kyc_records.payload` as name/country only with `MOCK_KYC_NO_DOCUMENTS`. Do not store documents or real-provider payloads here. |
 | Onboarding state | Plaintext workflow state | Stored in `onboardings` and `drips`, including status, tx hashes, and operational errors. This is workflow tracking, not payment privacy. |
 | Audit metadata | Plaintext by default | Stored in `audit_log.meta`; do not put private payment details here. Future fields that need at-rest privacy should use `APP_MASTER_KEY` and libsodium secretbox before insertion. |
+| Handles | Plaintext public routing data | Stored in `handles.handle` and mirrored from HandleRegistry. Contract state is authoritative; the table is a read cache. |
+| Contacts | Plaintext user workflow data | Stored in `contacts` per owner wallet. Contact addresses and aliases are not payment privacy data. |
+| Invite tokens | Hashed secret | Only `sha256(raw_token)` is stored in `invites.token_hash`; raw claim URLs are returned once on creation and cannot be reconstructed from the DB. |
+| Gift metadata | Workflow metadata | Stored in `invites.kind`, `gift_amount`, and `note`; the API does not custody funds, keys, ciphertexts, or proofs. |
 | eERC decryption keys | Never server-side | Keys remain wallet-derived/client-side. This scaffold does not accept or persist them. |
 | Proving artifacts or secrets | Never server-side | Generated proving artifacts and secrets must not be committed or stored by the API. |
 
@@ -69,3 +73,17 @@ The role decorators are `requireAuth` and `requireRole("network_admin" |
 - `GET /onboarding/status` returns the authenticated user's current workflow state and tx hashes.
 - `GET /onboarding/status/stream` streams status updates as SSE and closes once the workflow reaches `complete` or `failed`.
 - `GET /admin/onboardings?status=` lists recent onboarding rows for `network_admin` operators.
+
+## Identity Routes
+
+- `POST /handles` claims a lowercase `@handle` through the injected
+  HandleRegistry client and mirrors the result to Postgres.
+- `GET /resolve/:handle` returns public routing data with `Cache-Control:
+  public, max-age=60`, an `ETag`, and a `source` field (`chain` or `cache`).
+- `GET/POST/PATCH/DELETE /contacts` manages the authenticated user's contact
+  book and enriches list responses with cached handles plus eERC registration
+  status from the chain client.
+- `POST /invites` creates invite or gift-link metadata and returns the raw token
+  exactly once. `GET /invites/:token` exposes kind, note, creator handle, and
+  status, never gift amount. `POST /invites/:token/claim` marks the invite
+  claimed and triggers the onboarding orchestrator interface for the claimant.

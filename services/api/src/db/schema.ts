@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
 	bigint,
+	boolean,
 	index,
 	integer,
 	jsonb,
@@ -8,6 +9,7 @@ import {
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core";
 
@@ -32,6 +34,14 @@ export type MockKycInputPayload = {
 	country?: string;
 	name?: string;
 };
+
+export const inviteKind = pgEnum("invite_kind", ["invite", "gift"]);
+export const inviteStatus = pgEnum("invite_status", [
+	"created",
+	"claimed",
+	"expired",
+	"cancelled",
+]);
 
 export const users = pgTable(
 	"users",
@@ -183,5 +193,68 @@ export const auditLog = pgTable(
 	],
 );
 
+export const handles = pgTable(
+	"handles",
+	{
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		handle: text("handle").notNull(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+	},
+	(table) => [
+		uniqueIndex("handles_handle_idx").on(table.handle),
+		uniqueIndex("handles_user_id_idx").on(table.userId),
+	],
+);
+
+export const contacts = pgTable(
+	"contacts",
+	{
+		alias: text("alias"),
+		contactAddress: text("contact_address").notNull(),
+		favorite: boolean("favorite").notNull().default(false),
+		ownerUserId: uuid("owner_user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+	},
+	(table) => [
+		uniqueIndex("contacts_owner_contact_idx").on(
+			table.ownerUserId,
+			table.contactAddress,
+		),
+		index("contacts_owner_user_id_idx").on(table.ownerUserId),
+	],
+);
+
+export const invites = pgTable(
+	"invites",
+	{
+		claimedBy: uuid("claimed_by").references(() => users.id, {
+			onDelete: "set null",
+		}),
+		creatorUserId: uuid("creator_user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		giftAmount: text("gift_amount"),
+		id: uuid("id").defaultRandom().primaryKey(),
+		kind: inviteKind("kind").notNull(),
+		note: text("note"),
+		status: inviteStatus("status").notNull().default("created"),
+		tokenHash: text("token_hash").notNull(),
+	},
+	(table) => [
+		uniqueIndex("invites_token_hash_idx").on(table.tokenHash),
+		index("invites_creator_user_id_idx").on(table.creatorUserId),
+		index("invites_claimed_by_idx").on(table.claimedBy),
+		index("invites_status_expires_at_idx").on(table.status, table.expiresAt),
+	],
+);
+
 export type UserRole = (typeof userRole.enumValues)[number];
 export type OnboardingStatus = (typeof onboardingStatus.enumValues)[number];
+export type InviteKind = (typeof inviteKind.enumValues)[number];
+export type InviteStatus = (typeof inviteStatus.enumValues)[number];
