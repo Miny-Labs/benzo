@@ -192,6 +192,24 @@ describe("@benzo/api orgs", () => {
 				payload: { consent: true },
 			});
 			expect(operatorTreasury.statusCode).toBe(403);
+
+			// An admin may not demote the owner (who outranks them and could never
+			// be restored, since "owner" isn't a settable role).
+			const admin = `0x${"e5".repeat(20)}`;
+			const adminCookie = await session(db, config, admin);
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members`,
+				payload: { address: admin, role: "admin" },
+			});
+			const adminDemotesOwner = await app.inject({
+				headers: { cookie: adminCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members`,
+				payload: { address: owner, role: "operator" },
+			});
+			expect(adminDemotesOwner.statusCode).toBe(403);
 		} finally {
 			await app.close();
 			await pool.end();

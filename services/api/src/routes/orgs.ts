@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyPluginAsync, preHandlerAsyncHookHandler } from "fastify";
 import { getAddress } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -195,6 +195,19 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				return reply.code(404).send({ error: "user_not_found" });
 			}
 
+			// A caller may not modify a member whose current role outranks or
+			// equals their own — otherwise an admin could demote the owner (whom
+			// they can never restore, since "owner" isn't a settable role). This
+			// also blocks demoting/self-editing at the same rank.
+			const existingRole = await loadMembership(orgId, user.id);
+			const callerRole = request.orgRole!;
+			if (
+				existingRole !== null &&
+				ROLE_RANK[existingRole] >= ROLE_RANK[callerRole]
+			) {
+				return reply.code(403).send({ error: "forbidden" });
+			}
+
 			await db
 				.insert(orgMembers)
 				.values({ orgId, userId: user.id, role: body.data.role })
@@ -223,26 +236,29 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					.send({ error: "consent_required" });
 			}
 
-			const existing = await db
-				.select({ address: orgTreasuries.address })
-				.from(orgTreasuries)
-				.where(eq(orgTreasuries.orgId, orgId))
-				.limit(1);
-			if (existing.length > 0) {
-				return reply.code(409).send({ error: "treasury_exists" });
-			}
-
 			const privateKey = generatePrivateKey();
 			const account = privateKeyToAccount(privateKey);
 			const sealedEoaKey = sealString(options.config.appMasterKey, privateKey);
 
-			await db.insert(orgTreasuries).values({
-				orgId,
-				address: account.address.toLowerCase(),
-				sealedEoaKey,
-				consentedAt: new Date(),
-				consentedBy: request.user!.id,
-			});
+			// Atomic: the unique index on org_id makes this race-safe. A second
+			// concurrent request conflicts and returns no row (409) instead of
+			// throwing on the constraint; the losing request's generated key was
+			// never persisted, so nothing leaks.
+			const inserted = await db
+				.insert(orgTreasuries)
+				.values({
+					orgId,
+					address: account.address.toLowerCase(),
+					sealedEoaKey,
+					consentedAt: new Date(),
+					consentedBy: request.user!.id,
+				})
+				.onConflictDoNothing({ target: orgTreasuries.orgId })
+				.returning({ id: orgTreasuries.id });
+
+			if (inserted.length === 0) {
+				return reply.code(409).send({ error: "treasury_exists" });
+			}
 
 			return reply.code(201).send({
 				address: account.address,
@@ -259,11 +275,13 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 		{ preHandler: requireOrgRole("viewer") },
 		async (request, reply) => {
 			const orgId = (request.params as { id: string }).id;
+			// Push the "registered" boolean into the query so the sealed eERC key
+			// bytea is never pulled into the API process just to null-check it.
 			const [treasury] = await db
 				.select({
 					address: orgTreasuries.address,
 					consentedAt: orgTreasuries.consentedAt,
-					sealedEercKey: orgTreasuries.sealedEercKey,
+					registered: sql<boolean>`${orgTreasuries.sealedEercKey} is not null`,
 				})
 				.from(orgTreasuries)
 				.where(eq(orgTreasuries.orgId, orgId))
@@ -277,7 +295,7 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				address: getAddress(treasury.address),
 				custody: "managed",
 				consented: treasury.consentedAt !== null,
-				registered: treasury.sealedEercKey !== null,
+				registered: treasury.registered,
 			});
 		},
 	);
