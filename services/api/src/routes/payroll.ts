@@ -8,7 +8,7 @@ import {
 	payrollRuns,
 	users,
 } from "../db/schema.js";
-import { ROLE_RANK, loadMembership, makeRequireOrgRole } from "../orgs/access.js";
+import { loadMembership, makeRequireOrgRole } from "../orgs/access.js";
 
 type PayrollRoutesOptions = {
 	db: Database;
@@ -45,12 +45,14 @@ const isPositive = (amount: string): boolean => {
 	return /[1-9]/.test(amount);
 };
 
-// Parse CSV text into rows, skipping a leading header line and blank lines.
+// Parse CSV text into rows, skipping blank lines and an optional header. The
+// header is the FIRST non-empty line whose amount column isn't numeric — keyed
+// to content, not raw line index, so leading blank lines don't hide it.
 const parseCsv = (csv: string): ParsedRow[] => {
 	const rows: ParsedRow[] = [];
-	const lines = csv.split(/\r?\n/);
 	let rowIndex = 0;
-	for (const [i, raw] of lines.entries()) {
+	let firstContentSeen = false;
+	for (const raw of csv.split(/\r?\n/)) {
 		const line = raw.trim();
 		if (line === "") {
 			continue;
@@ -58,9 +60,11 @@ const parseCsv = (csv: string): ParsedRow[] => {
 		const cols = line.split(",").map((c) => c.trim());
 		const recipientInput = cols[0] ?? "";
 		const amount = cols[1] ?? "";
-		// Skip a header row (first non-empty line whose amount isn't numeric).
-		if (i === 0 && !AMOUNT.test(amount)) {
-			continue;
+		if (!firstContentSeen) {
+			firstContentSeen = true;
+			if (!AMOUNT.test(amount)) {
+				continue;
+			}
 		}
 		rows.push({ rowIndex: rowIndex++, recipientInput, amount });
 	}
@@ -209,9 +213,11 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 				return reply.code(404).send({ error: "run_not_found" });
 			}
 
-			// 404 (not 403) to non-members so run/org existence isn't leaked.
+			// Any org member may view a run. 404 (not 403) to non-members so
+			// run/org existence isn't leaked. viewer is the lowest rank, so
+			// membership alone is sufficient.
 			const role = await loadMembership(db, run.orgId, request.user!.id);
-			if (role === null || ROLE_RANK[role] < ROLE_RANK.viewer) {
+			if (role === null) {
 				return reply.code(404).send({ error: "run_not_found" });
 			}
 

@@ -344,14 +344,15 @@ describe("@benzo/api orgs", () => {
 			});
 			const orgId = created.json().org.id as string;
 
-			const csv = [
+			// Leading blank lines (common from export tools) must not hide the header.
+			const csv = `\n\n${[
 				"recipient,amount", // header — skipped
 				`@alice,100.50`, // valid → alice
 				`${rawAddr},25`, // valid → raw address
 				`@nobody,10`, // unknown handle
 				`@alice,5`, // duplicate of alice
 				`0x${"ca".repeat(20)},abc`, // invalid amount
-			].join("\n");
+			].join("\n")}`;
 
 			const res = await app.inject({
 				headers: { cookie: ownerCookie },
