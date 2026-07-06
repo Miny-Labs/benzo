@@ -23,12 +23,13 @@ dotenv.config({ path: path.join(__dirname, "..", ".env") });
 const FUJI_RPC =
   process.env.RPC_URL ?? "https://api.avax-test.network/ext/bc/C/rpc";
 // BenzoNet is Benzo's sovereign Avalanche L1 (chain id 68420, gas token BGAS).
-// The RPC is a node endpoint for the L1 blockchain; pass it explicitly per
-// deployment since the blockchain id / host is environment-specific.
+// Unlike Fuji's C-Chain there is no public RPC — you reach the L1 through a
+// node you run (or an SSH tunnel to one), so BENZONET_RPC_URL must point at a
+// BenzoNet node's blockchain RPC. The localhost default is the local-node /
+// tunnel convention; `||` (not `??`) so an empty env var falls back too.
 const BENZONET_RPC =
-  process.env.BENZONET_RPC_URL ??
+  process.env.BENZONET_RPC_URL ||
   "http://127.0.0.1:9650/ext/bc/21iisL1nkpM2AauUadAz7p1gK3waRBZLEJme3LU3gsWpaxy792/rpc";
-const BENZONET_CHAIN_ID = Number(process.env.BENZONET_CHAIN_ID ?? 68420);
 const accounts = [process.env.PRIVATE_KEY, process.env.PRIVATE_KEY_2].filter(
   (k): k is string => Boolean(k),
 );
@@ -49,7 +50,7 @@ const config: HardhatUserConfig = {
     },
     benzonet: {
       url: BENZONET_RPC,
-      chainId: BENZONET_CHAIN_ID,
+      chainId: 68420,
       accounts,
     },
   },

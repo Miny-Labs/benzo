@@ -11,7 +11,9 @@ import {
 } from "./eerc-crypto";
 
 const FUJI_CHAIN_ID = 43113;
-const BENZONET_CHAIN_ID = Number(process.env.BENZONET_CHAIN_ID ?? 68420);
+// Fixed by the BenzoNet genesis; kept a hardcoded constant like FUJI_CHAIN_ID
+// so the deploy guard can't be loosened by a stray env var.
+const BENZONET_CHAIN_ID = 68420;
 const CONTRACTS_WORKSPACE = path.join(__dirname, "..", "..");
 const DEPLOYMENTS_DIR = path.join(CONTRACTS_WORKSPACE, "deployments");
 const AUDITOR_KEY_PATH = path.join(CONTRACTS_WORKSPACE, ".auditor-key.local.json");

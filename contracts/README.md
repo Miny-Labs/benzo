@@ -146,7 +146,7 @@ Avalanche L1 (chain id `68420`), so encrypted balances run on a gated chain —
 the two privacy primitives stacked. Same tooling, a `benzonet` Hardhat network:
 
 ```bash
-BENZONET_RPC_URL=<l1-rpc> BENZONET_CHAIN_ID=68420 SKIP_VERIFY=1 \
+BENZONET_RPC_URL=<l1-rpc> SKIP_VERIFY=1 \
   PRIVATE_KEY=<deployer-key> PRIVATE_KEY_2=<funded-auditor-key> pnpm deploy:benzonet
 ```
 
