@@ -13,7 +13,13 @@ import { buildApp } from "../src/app.js";
 import type { ApiConfig } from "../src/config.js";
 import { unsealString } from "../src/crypto/seal.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
-import { orgTreasuries, sessions, users } from "../src/db/schema.js";
+import {
+	handles,
+	orgTreasuries,
+	payrollItems,
+	sessions,
+	users,
+} from "../src/db/schema.js";
 
 const testMasterKey =
 	"0000000000000000000000000000000000000000000000000000000000000000";
@@ -307,6 +313,150 @@ describe("@benzo/api orgs", () => {
 				registered: false,
 			});
 			expect(JSON.stringify(status.json())).not.toContain(recoveredKey);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("validates a payroll CSV into a ready run and flags bad rows", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({ config, logger: false, startBoss: false });
+		const owner = `0x${"11".repeat(20)}`;
+		const aliceAddr = `0x${"22".repeat(20)}`;
+		const rawAddr = `0x${"be".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			// Register @alice as a handle so the CSV can resolve it.
+			const [alice] = await db
+				.insert(users)
+				.values({ address: aliceAddr, roles: [] })
+				.returning({ id: users.id });
+			await db.insert(handles).values({ handle: "alice", userId: alice!.id });
+
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Payco", slug: "payco" },
+			});
+			const orgId = created.json().org.id as string;
+
+			// Leading blank lines (common from export tools) must not hide the header.
+			const csv = `\n\n${[
+				"recipient,amount", // header — skipped
+				`@alice,100.50`, // valid → alice
+				`${rawAddr},25`, // valid → raw address
+				`@nobody,10`, // unknown handle
+				`@alice,5`, // duplicate of alice
+				`0x${"ca".repeat(20)},abc`, // invalid amount
+			].join("\n")}`;
+
+			const res = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/payroll`,
+				payload: { csv },
+			});
+			expect(res.statusCode).toBe(201);
+			const preview = res.json();
+			expect(preview.status).toBe("ready");
+			expect(preview.summary).toMatchObject({
+				total: 5,
+				valid: 2,
+				invalid: 3,
+				totalAmount: "125.5",
+			});
+			// Per-row verdicts.
+			const byRow = Object.fromEntries(
+				preview.items.map((i: { rowIndex: number }) => [i.rowIndex, i]),
+			);
+			expect(byRow[0]).toMatchObject({
+				status: "pending",
+				resolvedAddress: aliceAddr,
+			});
+			expect(byRow[1]).toMatchObject({ status: "pending", resolvedAddress: rawAddr });
+			expect(byRow[2]).toMatchObject({ status: "failed", error: "unknown_recipient" });
+			expect(byRow[3]).toMatchObject({ status: "failed", error: "duplicate_recipient" });
+			expect(byRow[4]).toMatchObject({ status: "failed", error: "invalid_amount" });
+
+			// Persisted: GET returns the run + all rows, ordered.
+			const runId = preview.runId as string;
+			const persistedItems = await db
+				.select()
+				.from(payrollItems)
+				.where(eq(payrollItems.runId, runId));
+			expect(persistedItems).toHaveLength(5);
+
+			const getRun = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "GET",
+				url: `/payroll/${runId}`,
+			});
+			expect(getRun.statusCode).toBe(200);
+			expect(getRun.json().run).toMatchObject({ status: "ready", itemCount: 2 });
+
+			// A non-member can't see the run (404, existence not leaked).
+			const outsiderCookie = await session(db, config, `0x${"99".repeat(20)}`);
+			const forbidden = await app.inject({
+				headers: { cookie: outsiderCookie },
+				method: "GET",
+				url: `/payroll/${runId}`,
+			});
+			expect(forbidden.statusCode).toBe(404);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("caps run size and chunks large item inserts past the param limit", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({ config, logger: false, startBoss: false });
+		const owner = `0x${"33".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Scaleco", slug: "scaleco" },
+			});
+			const orgId = created.json().org.id as string;
+
+			const addr = (i: number) => `0x${i.toString(16).padStart(40, "0")}`;
+
+			// Over the cap → 400.
+			const tooMany = Array.from({ length: 10_001 }, (_, i) => `${addr(i)},1`);
+			const capped = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/payroll`,
+				payload: { csv: tooMany.join("\n") },
+			});
+			expect(capped.statusCode).toBe(400);
+			expect(capped.json().error).toBe("too_many_rows");
+
+			// 6000 rows crosses the 5000-row insert batch → two chunks, must persist all.
+			const rows = Array.from({ length: 6_000 }, (_, i) => `${addr(i)},1`);
+			const res = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/payroll`,
+				payload: { csv: rows.join("\n") },
+			});
+			expect(res.statusCode).toBe(201);
+			expect(res.json().summary).toMatchObject({ valid: 6_000, invalid: 0 });
+
+			const persisted = await db
+				.select()
+				.from(payrollItems)
+				.where(eq(payrollItems.runId, res.json().runId as string));
+			expect(persisted).toHaveLength(6_000);
 		} finally {
 			await app.close();
 			await pool.end();
