@@ -127,6 +127,30 @@ const isDeploymentRecord = (value: unknown): value is DeploymentRecord =>
 const hasCode = async (address: string) =>
 	(await ethers.provider.getCode(address)) !== "0x";
 
+// isDeploymentRecord only confirms an address shape; it does not confirm the
+// address actually has bytecode on the current network. A manifest carried
+// over from another chain (or a fresh in-process Hardhat run) can point a
+// prerequisite at an address with no code, which then reverts deep inside a
+// later contract call with an opaque "unrecognized selector". Fail loud here.
+const requireDeployedRecord = async (
+	record: unknown,
+	name: string,
+): Promise<DeploymentRecord> => {
+	if (!isDeploymentRecord(record)) {
+		throw new Error(`${name} must be deployed first`);
+	}
+
+	if (!(await hasCode(record.address))) {
+		throw new Error(
+			`${name} record ${record.address} has no bytecode on this network — ` +
+				"the deployment manifest is stale or points at a different chain. " +
+				`Re-deploy ${name} or clear the manifest before continuing.`,
+		);
+	}
+
+	return record;
+};
+
 class VerificationTimeoutError extends Error {
 	constructor(address: string) {
 		super(
@@ -396,14 +420,10 @@ export const deployVerifiers = async (context: DeployContext) => ({
 
 export const deployRegistrar = async (context: DeployContext) => {
 	const eercDeployment = getEercDeployment(context.deployments);
-	const registrationVerifier = getPath(eercDeployment, [
-		"verifiers",
-		"registration",
-	]);
-
-	if (!isDeploymentRecord(registrationVerifier)) {
-		throw new Error("Registration verifier must be deployed before Registrar");
-	}
+	const registrationVerifier = await requireDeployedRecord(
+		getPath(eercDeployment, ["verifiers", "registration"]),
+		"Registration verifier",
+	);
 
 	return deployContract({
 		context,
@@ -438,9 +458,7 @@ export const deployEncryptedERC = async (context: DeployContext) => {
 		burnVerifier,
 		testUSDC,
 	})) {
-		if (!isDeploymentRecord(record)) {
-			throw new Error(`${name} must be deployed before EncryptedERC`);
-		}
+		await requireDeployedRecord(record, `${name} (required by EncryptedERC)`);
 	}
 
 	const babyJubJub = await deployContract({
@@ -489,7 +507,16 @@ const readAuditorKeyFile = async () =>
 	});
 
 const writeAuditorKeyFile = async (keyFile: AuditorKeyFile) => {
-	await writeJson(AUDITOR_KEY_PATH, keyFile);
+	await fs.mkdir(path.dirname(AUDITOR_KEY_PATH), { recursive: true });
+	// 0600: this file holds the raw auditor private key. writeFile's `mode`
+	// only applies when the file is created, so chmod afterwards to also tighten
+	// an existing file that may have been written with looser permissions.
+	await fs.writeFile(
+		AUDITOR_KEY_PATH,
+		`${JSON.stringify(keyFile, null, 2)}\n`,
+		{ mode: 0o600 },
+	);
+	await fs.chmod(AUDITOR_KEY_PATH, 0o600);
 };
 
 export const loadStoredAuditorAccount = async (auditorAddress: string) => {

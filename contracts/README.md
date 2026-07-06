@@ -111,9 +111,17 @@ Routescan verification is attempted after each Fuji deployment record is
 persisted. A verification failure leaves the address and transaction hash in
 `deployments/fuji.json` with `verified: false` so the operator can retry without
 redeploying (Routescan can index a fresh contract minutes after deploy, so a
-first-attempt failure often just needs a re-run). The live Fuji stack recorded
-here is fully verified: all nine contracts show `verified: true` with a
-`verifiedAt` timestamp and have browsable source on Snowtrace.
+first-attempt failure often just needs a re-run). To skip the verification step
+entirely — for example when Routescan hasn't indexed the just-deployed contracts
+yet — set `SKIP_VERIFY=1` on the command and verify later:
+
+```bash
+SKIP_VERIFY=1 RPC_URL=<fuji-rpc> PRIVATE_KEY=<deployer-key> PRIVATE_KEY_2=<funded-auditor-key> pnpm deploy:eerc
+```
+
+The live Fuji stack recorded here is fully verified: all nine contracts show
+`verified: true` with a `verifiedAt` timestamp and have browsable source on
+Snowtrace.
 
 After the Fuji deploy, run the end-to-end smoke:
 
@@ -126,6 +134,10 @@ approves and deposits into eERC, privately transfers to the registered auditor
 key, withdraws a portion, and asserts both public tUSDC balances and decrypted
 eERC balances. If rerunning against the same deployer account, pass the original
 `SMOKE_SENDER_BABYJUB_PRIVATE_KEY` because `Registrar` does not allow re-keying.
+`tUSDC.faucet()` also enforces a 24-hour per-address cooldown, so a rerun within
+that window can't top the sender up again — either wait for the cooldown to
+expire or point the smoke at a fresh, funded sender address. (The smoke tolerates
+a cooldown revert and continues if the sender still holds enough tUSDC.)
 
 ## Circuit Artifact Pipeline
 
