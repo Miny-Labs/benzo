@@ -1,0 +1,2 @@
+# Enabled Caddy sites are dropped here (e.g. grafana.caddy for monitoring).
+# The base stack keeps this empty; the .caddy files here are gitignored.

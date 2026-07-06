@@ -1,0 +1,58 @@
+# BenzoNet alert rules. A PoA L1 has two silent failure modes — a node quietly
+# going unhealthy, and the P-Chain continuous-validator fee balance draining to
+# zero (which stops validation). These catch both plus the basics.
+#
+# Metric names for avalanchego are version-specific; verify the chain-height
+# metric against the live /ext/metrics before relying on the stall alert.
+groups:
+  - name: benzonet
+    rules:
+      # rpc-node scrape failing (proxy for unhealthy/down) for >2m.
+      - alert: RpcNodeUnhealthy
+        expr: up{job="rpc-node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BenzoNet RPC node is unreachable/unhealthy"
+          runbook: "infra/vm/README.md#verify"
+
+      # Validator scrape failing for >2m — validation may be down.
+      - alert: ValidatorDown
+        expr: up{job="validator"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BenzoNet validator is unreachable"
+
+      # No new blocks accepted in 5m at the 2s target rate = a stall.
+      # `avalanche_snowman_accepted_count` is the accepted-block counter per
+      # chain; confirm the exact series name/labels against /ext/metrics.
+      - alert: ChainHeightStalled
+        expr: increase(avalanche_snowman_accepted_count{job="rpc-node"}[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BenzoNet chain height has not advanced in 5m"
+
+      # Disk >80% on any mounted filesystem (node-exporter).
+      - alert: DiskHigh
+        expr: (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage above 80% on the BenzoNet VM"
+
+      # P-Chain continuous-validator balance below 1 AVAX (textfile metric from
+      # pchain-balance-check.sh). Below zero, validation stops entirely.
+      - alert: PChainBalanceLow
+        expr: benzonet_pchain_validator_balance_avax < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "P-Chain validator fee balance below 1 AVAX — top up"
+          runbook: "infra/runbooks/p-chain-topup.md"

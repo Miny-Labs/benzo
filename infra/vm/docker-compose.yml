@@ -60,8 +60,13 @@ services:
       - "443:443"
     env_file:
       - .env
+      # Grafana basic_auth hash — its own file so compose can't mangle the '$'
+      # in the bcrypt hash. Optional: only needed for the monitoring profile.
+      - path: caddy/grafana-auth.env
+        required: false
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/sites-enabled:/etc/caddy/sites-enabled:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
@@ -70,16 +75,54 @@ services:
     networks:
       - benzonet
 
-  # --- monitoring: stubbed here, configured in #28 (docker compose --profile monitoring) ---
+  # --- monitoring (docker compose --profile monitoring up -d) ---
   prometheus:
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
     profiles: ["monitoring"]
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     expose:
       - "9090"
+    depends_on:
+      - alertmanager
+    networks:
+      - benzonet
+
+  # Delivers firing alerts. Default receiver is a no-op sink — wire a real
+  # channel in prometheus/alertmanager.yml for the demo.
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    volumes:
+      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    expose:
+      - "9093"
+    networks:
+      - benzonet
+
+  # Host metrics (disk) + the P-Chain balance textfile metric written by
+  # infra/scripts/pchain-balance-check.sh (via cron) into ./prometheus/textfile.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    # Mount the host root read-only and point node-exporter at it, otherwise it
+    # only sees its own overlay fs and the DiskHigh alert (which excludes
+    # overlay/tmpfs) has nothing to watch.
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.textfile.directory=/host/textfile
+    volumes:
+      - /:/host:ro,rslave
+      - ./prometheus/textfile:/host/textfile:ro
+    expose:
+      - "9100"
     networks:
       - benzonet
 
@@ -106,6 +149,7 @@ volumes:
   caddy-data:
   caddy-config:
   prometheus-data:
+  alertmanager-data:
   grafana-data:
 
 networks:

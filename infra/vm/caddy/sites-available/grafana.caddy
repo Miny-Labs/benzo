@@ -1,0 +1,12 @@
+# Grafana monitoring site — TLS + basic_auth in front of Grafana's own login.
+# Enable ONLY with the monitoring profile:
+#   cp caddy/sites-available/grafana.caddy caddy/sites-enabled/grafana.caddy
+# and set GRAFANA_DOMAIN + caddy/grafana-auth.env (see grafana-auth.env.example),
+# then `docker compose up -d caddy`. Kept out of the base Caddyfile so an unset
+# GRAFANA_BASIC_AUTH_HASH can never break the RPC edge.
+{$GRAFANA_DOMAIN} {
+	basic_auth {
+		{$GRAFANA_USER} {$GRAFANA_BASIC_AUTH_HASH}
+	}
+	reverse_proxy grafana:3000
+}

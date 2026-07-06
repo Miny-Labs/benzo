@@ -80,7 +80,49 @@ Start a scratch avalanchego node that tracks the subnet but is **not** in
 - Start with **≥ 100 GB SSD** on the RPC node (`pruning-enabled: false` keeps
   full state for the explorer in #29); the validator can prune
   (`pruning-enabled: true`) and run smaller.
-- Monitor disk in #28 (alert at 80%).
+- Monitor disk in the monitoring stack (alert at 80%).
+
+## Monitoring
+
+Opt-in profile (Prometheus + Alertmanager + node-exporter + Grafana). Before
+starting it, enable the Grafana edge site and set its secrets:
+
+```sh
+cd infra/vm
+cp caddy/sites-available/grafana.caddy caddy/sites-enabled/grafana.caddy
+cp caddy/grafana-auth.env.example caddy/grafana-auth.env   # then edit the hash
+# set GRAFANA_DOMAIN in .env (+ a DNS A-record for it)
+docker compose --profile monitoring up -d
+```
+
+The base RPC stack (`docker compose up -d`) does **not** need any `GRAFANA_*`
+values — the Grafana site lives in `sites-enabled/` (empty by default), so an
+unset auth hash can never break the RPC edge.
+
+- **Prometheus** (`prometheus/prometheus.yml`) scrapes the rpc-node and
+  validator `/ext/metrics` and node-exporter every 15s; alert rules live in
+  `prometheus/alerts.yml` and fire to **Alertmanager**
+  (`prometheus/alertmanager.yml` — default receiver is a no-op sink; wire an
+  email/Slack/PagerDuty channel there to actually get paged).
+- **node-exporter** mounts the host root read-only (`--path.rootfs=/host`) so
+  the `DiskHigh` alert sees the VM's real filesystems, not the container overlay.
+- **Grafana** is provisioned with the Prometheus datasource and the *BenzoNet
+  Overview* dashboard (`grafana/dashboards/`); import the richer ava-labs
+  [avalanche-monitoring](https://github.com/ava-labs/avalanche-monitoring)
+  dashboards for full node internals. Served through Caddy at `GRAFANA_DOMAIN`
+  behind `basic_auth` — generate the hash with `caddy hash-password`, then
+  double every `$` to `$$` in `caddy/grafana-auth.env` (compose mangles a bare
+  `$`).
+- **Alerts**: rpc-node/validator down (>2m), chain height stalled (>5m), disk
+  >80%, and the P-Chain fee balance <1 AVAX. **Verify the chain-height metric
+  name** in `alerts.yml` against the live `/ext/metrics` — avalanchego metric
+  names are version-specific, and a wrong name makes that one alert inert
+  (node-down is still caught by `RpcNodeUnhealthy`).
+- **P-Chain balance**: cron `infra/scripts/pchain-balance-check.sh` (needs
+  `VALIDATION_ID`) writes a node-exporter textfile metric and alerts below
+  threshold → `infra/runbooks/p-chain-topup.md`.
+- **Go/no-go**: `infra/scripts/healthcheck.sh` checks TLS, chainId, advancing
+  blocks, validator health, and P-Chain balance in one shot before a demo.
 
 ## Validator
 
