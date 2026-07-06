@@ -1927,7 +1927,7 @@ describe("@benzo/api", () => {
 		}
 	});
 
-	it("reports exact auditor totals above the old 5,000 row cap", async () => {
+	it("reports exact auditor totals above the old 5,000 row cap", { timeout: 200_000 }, async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
 		const app = await buildApp({

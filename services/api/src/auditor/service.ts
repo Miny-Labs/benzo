@@ -179,44 +179,62 @@ async function decryptRows(
 		.orderBy(auditorKeys.activatedBlockNumber);
 	const privateKeys = new Map<string, string>();
 	const decryptedRows: AuditorEventRow[] = [];
+	const auditRows: (typeof auditLog.$inferInsert)[] = [];
 
-	for (const row of rows) {
-		if (!row.amountPct) {
-			continue;
+	// Flush accumulated audit-log rows in chunks (auditLog has ~5 columns, well
+	// under Postgres's 65,535 bind-param limit at 1,000 rows). Run this in a
+	// `finally` so events decrypted before a mid-loop failure are still logged —
+	// the invariant is "every decrypt is audit-logged" — without doing one
+	// INSERT round-trip per event (which timed out on large reports).
+	const flushAuditRows = async () => {
+		const AUDIT_BATCH = 1_000;
+		for (let index = 0; index < auditRows.length; index += AUDIT_BATCH) {
+			await db.insert(auditLog).values(auditRows.slice(index, index + AUDIT_BATCH));
 		}
+		auditRows.length = 0;
+	};
 
-		const key = findKeyForEvent(keys, row);
+	try {
+		for (const row of rows) {
+			if (!row.amountPct) {
+				continue;
+			}
 
-		if (!key) {
-			throw new Error(
-				`auditor_key_missing_for_event:${row.txHash}:${row.logIndex}`,
-			);
+			const key = findKeyForEvent(keys, row);
+
+			if (!key) {
+				throw new Error(
+					`auditor_key_missing_for_event:${row.txHash}:${row.logIndex}`,
+				);
+			}
+
+			let privateKey = privateKeys.get(key.id);
+
+			if (!privateKey) {
+				privateKey = unsealString(config.appMasterKey, key.sealedKey);
+				privateKeys.set(key.id, privateKey);
+			}
+
+			const amount = decryptAuditorAmountPct(privateKey, row.amountPct);
+			const decryptedRow = serializeAuditorEvent(row, amount, key.id);
+
+			auditRows.push({
+				action: "auditor_decrypt",
+				actor,
+				meta: {
+					auditorKeyId: decryptedRow.auditorKeyId,
+					blockNumber: decryptedRow.blockNumber,
+					eventName: decryptedRow.eventName,
+					eventRowId: decryptedRow.id,
+					logIndex: decryptedRow.logIndex,
+					txHash: decryptedRow.txHash,
+				},
+				subject: `${decryptedRow.txHash}:${decryptedRow.logIndex}`,
+			});
+			decryptedRows.push(decryptedRow);
 		}
-
-		let privateKey = privateKeys.get(key.id);
-
-		if (!privateKey) {
-			privateKey = unsealString(config.appMasterKey, key.sealedKey);
-			privateKeys.set(key.id, privateKey);
-		}
-
-		const amount = decryptAuditorAmountPct(privateKey, row.amountPct);
-		const decryptedRow = serializeAuditorEvent(row, amount, key.id);
-
-		await db.insert(auditLog).values({
-			action: "auditor_decrypt",
-			actor,
-			meta: {
-				auditorKeyId: decryptedRow.auditorKeyId,
-				blockNumber: decryptedRow.blockNumber,
-				eventName: decryptedRow.eventName,
-				eventRowId: decryptedRow.id,
-				logIndex: decryptedRow.logIndex,
-				txHash: decryptedRow.txHash,
-			},
-			subject: `${decryptedRow.txHash}:${decryptedRow.logIndex}`,
-		});
-		decryptedRows.push(decryptedRow);
+	} finally {
+		await flushAuditRows();
 	}
 
 	return decryptedRows;
