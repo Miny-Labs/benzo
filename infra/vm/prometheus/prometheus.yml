@@ -8,6 +8,14 @@ global:
 rule_files:
   - /etc/prometheus/alerts.yml
 
+# Alerts are delivered via Alertmanager (monitoring profile). Configure a real
+# receiver (email/Slack/PagerDuty) in prometheus/alertmanager.yml — the default
+# there only logs, so alerts fire but you must wire a channel to be paged.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   # The dedicated RPC node (this compose stack).
   - job_name: rpc-node

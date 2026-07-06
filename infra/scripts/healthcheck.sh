@@ -16,7 +16,8 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 : "${RPC_DOMAIN:?set RPC_DOMAIN}"
 : "${BACKEND_RPC_TOKEN:?set BACKEND_RPC_TOKEN}"
-: "${BLOCKCHAIN_ID:?set BLOCKCHAIN_ID}"
+# BLOCKCHAIN_ID isn't needed here — Caddy rewrites the /backend token path to
+# /ext/bc/<id>/rpc, so this script never references the id directly.
 
 RPC="https://${RPC_DOMAIN}/backend/${BACKEND_RPC_TOKEN}"
 EXPECTED_CHAINID="0x10b04" # 68420
@@ -63,11 +64,13 @@ fi
 
 echo "5) P-Chain validator fee balance"
 if [[ -n "${VALIDATION_ID:-}" ]]; then
-  if "$HERE/pchain-balance-check.sh"; then
-    pass "balance above threshold"
-  else
-    fail "balance below threshold (top up)"
-  fi
+  # 0 = ok, 1 = below threshold, 2 = API error/no balance — report distinctly.
+  "$HERE/pchain-balance-check.sh"; rc=$?
+  case "$rc" in
+    0) pass "balance above threshold" ;;
+    1) fail "balance below threshold (top up)" ;;
+    *) fail "P-Chain balance check errored (rc=$rc) — could not read balance" ;;
+  esac
 else
   echo "  (skipped: set VALIDATION_ID)"
 fi

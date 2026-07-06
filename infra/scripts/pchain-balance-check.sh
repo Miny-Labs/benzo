@@ -22,10 +22,10 @@ PCHAIN_RPC="${PCHAIN_RPC:-https://api.avax-test.network/ext/bc/P}"
 TEXTFILE_DIR="${TEXTFILE_DIR:-$HERE/../vm/prometheus/textfile}"
 THRESHOLD_AVAX="${THRESHOLD_AVAX:-1}"
 
-resp="$(curl -s -X POST -H 'content-type: application/json' --data "$(cat <<JSON
+resp="$(curl -s --connect-timeout 5 --max-time 15 -X POST -H 'content-type: application/json' --data "$(cat <<JSON
 {"jsonrpc":"2.0","id":1,"method":"platform.getL1Validator","params":{"validationID":"$VALIDATION_ID"}}
 JSON
-)" "$PCHAIN_RPC")"
+)" "$PCHAIN_RPC")" || { echo "P-Chain request failed/timed out ($PCHAIN_RPC)" >&2; exit 2; }
 
 # balance is nAVAX (1e9 nAVAX = 1 AVAX). jq keeps integer precision.
 balance_navax="$(echo "$resp" | jq -r '.result.balance // empty')"
