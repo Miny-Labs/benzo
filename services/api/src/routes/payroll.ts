@@ -1,16 +1,28 @@
-import { eq, inArray } from "drizzle-orm";
-import type { FastifyPluginAsync } from "fastify";
+import { eq, inArray, sql } from "drizzle-orm";
+import type {
+	FastifyPluginAsync,
+	FastifyReply,
+	FastifyRequest,
+} from "fastify";
+import type { PgBoss } from "pg-boss";
 import { z } from "zod";
 import type { Database } from "../db/client.js";
 import {
 	handles,
+	orgTreasuries,
 	payrollItems,
 	payrollRuns,
 	users,
+	type OrgRole,
 } from "../db/schema.js";
-import { loadMembership, makeRequireOrgRole } from "../orgs/access.js";
+import { ROLE_RANK, loadMembership, makeRequireOrgRole } from "../orgs/access.js";
+import {
+	enqueuePayrollRun,
+	getPayrollProgressCounts,
+} from "../payroll/runner.js";
 
 type PayrollRoutesOptions = {
+	boss: PgBoss;
 	db: Database;
 };
 
@@ -224,6 +236,7 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 	);
 
 	// GET /payroll/:runId — run detail + items, for any member of the run's org.
+	// If requested as text/event-stream, it streams live progress counts.
 	fastify.get(
 		"/payroll/:runId",
 		{ preHandler: fastify.requireAuth },
@@ -233,30 +246,126 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 				return reply.code(400).send({ error: "invalid_run_id" });
 			}
 
-			const [run] = await db
-				.select()
-				.from(payrollRuns)
-				.where(eq(payrollRuns.id, runId))
+			const access = await loadRunForRole(db, runId, request.user!.id, "viewer");
+			if ("error" in access) {
+				return reply.code(access.code).send({ error: access.error });
+			}
+
+			if (request.headers.accept?.includes("text/event-stream")) {
+				return streamPayrollProgress(db, runId, request, reply);
+			}
+
+			return reply.send(await loadRunPayload(db, runId, access.run));
+		},
+	);
+
+	fastify.post(
+		"/payroll/:runId/start",
+		{ preHandler: fastify.requireAuth },
+		async (request, reply) => {
+			const runId = (request.params as { runId: string }).runId;
+			if (!z.uuid().safeParse(runId).success) {
+				return reply.code(400).send({ error: "invalid_run_id" });
+			}
+
+			const access = await loadRunForRole(db, runId, request.user!.id, "operator");
+			if ("error" in access) {
+				return reply.code(access.code).send({ error: access.error });
+			}
+			const { run } = access;
+			if (!["ready", "paused", "running"].includes(run.status)) {
+				return reply.code(409).send({ error: "run_not_startable" });
+			}
+
+			const [treasury] = await db
+				.select({
+					registered: sql<boolean>`${orgTreasuries.sealedEercKey} is not null`,
+				})
+				.from(orgTreasuries)
+				.where(eq(orgTreasuries.orgId, run.orgId))
 				.limit(1);
-			if (!run) {
-				return reply.code(404).send({ error: "run_not_found" });
+			if (!treasury?.registered) {
+				return reply.code(409).send({ error: "treasury_not_eerc_registered" });
 			}
 
-			// Any org member may view a run. 404 (not 403) to non-members so
-			// run/org existence isn't leaked. viewer is the lowest rank, so
-			// membership alone is sufficient.
-			const role = await loadMembership(db, run.orgId, request.user!.id);
-			if (role === null) {
-				return reply.code(404).send({ error: "run_not_found" });
+			await db
+				.update(payrollRuns)
+				.set({ error: null, status: "running", updatedAt: new Date() })
+				.where(eq(payrollRuns.id, runId));
+			const enqueued = await enqueuePayrollRun(db, options.boss, runId);
+
+			return reply.code(202).send({
+				enqueued: enqueued.enqueued,
+				progress: await getPayrollProgressCounts(db, runId),
+				runId,
+				status: "running",
+				totalPending: enqueued.totalPending,
+			});
+		},
+	);
+
+	fastify.post(
+		"/payroll/:runId/pause",
+		{ preHandler: fastify.requireAuth },
+		async (request, reply) => {
+			const runId = (request.params as { runId: string }).runId;
+			if (!z.uuid().safeParse(runId).success) {
+				return reply.code(400).send({ error: "invalid_run_id" });
 			}
 
-			const runItems = await db
-				.select()
-				.from(payrollItems)
-				.where(eq(payrollItems.runId, runId))
-				.orderBy(payrollItems.rowIndex);
+			const access = await loadRunForRole(db, runId, request.user!.id, "operator");
+			if ("error" in access) {
+				return reply.code(access.code).send({ error: access.error });
+			}
+			const { run } = access;
+			if (run.status === "complete" || run.status === "failed") {
+				return reply.code(409).send({ error: "run_terminal" });
+			}
 
-			return reply.send({ run, items: runItems });
+			await db
+				.update(payrollRuns)
+				.set({ status: "paused", updatedAt: new Date() })
+				.where(eq(payrollRuns.id, runId));
+
+			return reply.send({
+				progress: await getPayrollProgressCounts(db, runId),
+				runId,
+				status: "paused",
+			});
+		},
+	);
+
+	fastify.post(
+		"/payroll/:runId/resume",
+		{ preHandler: fastify.requireAuth },
+		async (request, reply) => {
+			const runId = (request.params as { runId: string }).runId;
+			if (!z.uuid().safeParse(runId).success) {
+				return reply.code(400).send({ error: "invalid_run_id" });
+			}
+
+			const access = await loadRunForRole(db, runId, request.user!.id, "operator");
+			if ("error" in access) {
+				return reply.code(access.code).send({ error: access.error });
+			}
+			const { run } = access;
+			if (run.status !== "paused") {
+				return reply.code(409).send({ error: "run_not_paused" });
+			}
+
+			await db
+				.update(payrollRuns)
+				.set({ error: null, status: "running", updatedAt: new Date() })
+				.where(eq(payrollRuns.id, runId));
+			const enqueued = await enqueuePayrollRun(db, options.boss, runId);
+
+			return reply.code(202).send({
+				enqueued: enqueued.enqueued,
+				progress: await getPayrollProgressCounts(db, runId),
+				runId,
+				status: "running",
+				totalPending: enqueued.totalPending,
+			});
 		},
 	);
 };
@@ -272,4 +381,135 @@ function sumAmounts(amounts: string[]): string {
 	const whole = scaled / 1_000_000n;
 	const frac = (scaled % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
 	return frac === "" ? whole.toString() : `${whole}.${frac}`;
+}
+
+async function loadRunForRole(
+	db: Database,
+	runId: string,
+	userId: string,
+	minRole: OrgRole,
+): Promise<
+	| { run: typeof payrollRuns.$inferSelect }
+	| { code: 403 | 404; error: "forbidden" | "run_not_found" }
+> {
+	const [run] = await db
+		.select()
+		.from(payrollRuns)
+		.where(eq(payrollRuns.id, runId))
+		.limit(1);
+	if (!run) {
+		return { code: 404, error: "run_not_found" };
+	}
+
+	const role = await loadMembership(db, run.orgId, userId);
+	if (role === null) {
+		return { code: 404, error: "run_not_found" };
+	}
+	if (ROLE_RANK[role] < ROLE_RANK[minRole]) {
+		return { code: 403, error: "forbidden" };
+	}
+
+	return { run };
+}
+
+async function loadRunPayload(
+	db: Database,
+	runId: string,
+	run: typeof payrollRuns.$inferSelect,
+) {
+	const runItems = await db
+		.select()
+		.from(payrollItems)
+		.where(eq(payrollItems.runId, runId))
+		.orderBy(payrollItems.rowIndex);
+
+	return {
+		items: runItems,
+		progress: await getPayrollProgressCounts(db, runId),
+		run,
+	};
+}
+
+async function streamPayrollProgress(
+	db: Database,
+	runId: string,
+	request: FastifyRequest,
+	reply: FastifyReply,
+) {
+	reply.hijack();
+	reply.raw.writeHead(200, {
+		"cache-control": "no-cache, no-transform",
+		connection: "keep-alive",
+		"content-type": "text/event-stream",
+		"x-accel-buffering": "no",
+	});
+
+	const sendProgress = async (): Promise<boolean> => {
+		const [run] = await db
+			.select()
+			.from(payrollRuns)
+			.where(eq(payrollRuns.id, runId))
+			.limit(1);
+		if (!run) {
+			reply.raw.write(
+				`event: terminal\ndata: ${JSON.stringify({ error: "run_not_found" })}\n\n`,
+			);
+			return true;
+		}
+
+		const progress = await getPayrollProgressCounts(db, runId);
+		reply.raw.write(
+			`event: progress\ndata: ${JSON.stringify({
+				progress,
+				runId,
+				status: run.status,
+			})}\n\n`,
+		);
+
+		return run.status === "complete" || run.status === "failed";
+	};
+
+	let closed = false;
+	let interval: ReturnType<typeof setInterval> | undefined;
+	const close = (): void => {
+		if (closed) {
+			return;
+		}
+		closed = true;
+		if (interval) {
+			clearInterval(interval);
+			interval = undefined;
+		}
+		reply.raw.end();
+	};
+
+	request.raw.on("close", () => {
+		closed = true;
+		if (interval) {
+			clearInterval(interval);
+			interval = undefined;
+		}
+	});
+
+	try {
+		if (await sendProgress()) {
+			close();
+			return;
+		}
+		interval = setInterval(() => {
+			void sendProgress()
+				.then((done) => {
+					if (done) {
+						close();
+					}
+				})
+				.catch((error: unknown) => {
+					request.log.error({ err: error }, "payroll sse failed");
+					close();
+				});
+		}, 2_000);
+	} catch (error) {
+		request.log.error({ err: error }, "payroll sse failed");
+		close();
+	}
 }

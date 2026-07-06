@@ -5,13 +5,18 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
 import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
-import { sealString } from "../crypto/seal.js";
+import { sealString, unsealString } from "../crypto/seal.js";
 import { orgMembers, orgTreasuries, orgs } from "../db/schema.js";
 import { ROLE_RANK, loadMembership, makeRequireOrgRole } from "../orgs/access.js";
+import type { OnboardingChainClient } from "../onboarding/chain.js";
+import { serializeManagedEercAccount } from "../payroll/eerc.js";
+import type { TreasuryRegistrar } from "../payroll/chain.js";
 
 type OrgsRoutesOptions = {
 	config: ApiConfig;
 	db: Database;
+	onboardingChain: OnboardingChainClient;
+	treasuryRegistrar: TreasuryRegistrar;
 };
 
 const createOrgSchema = z.object({
@@ -172,9 +177,8 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 	);
 
 	// POST /orgs/:id/treasury — provision the managed treasury (owner/admin).
-	// Generates an EOA, seals its key under APP_MASTER_KEY, and records custody
-	// consent. On-chain onboarding + server-side eERC registration are performed
-	// by the payroll runner tranche; the sealed eERC key is populated then.
+	// Generates an EOA, records custody consent, onboards the address, registers
+	// it with eERC, and seals both server-held keys under APP_MASTER_KEY.
 	fastify.post(
 		"/orgs/:id/treasury",
 		{ preHandler: requireOrgRole("admin") },
@@ -187,35 +191,78 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					.send({ error: "consent_required" });
 			}
 
-			const privateKey = generatePrivateKey();
-			const account = privateKeyToAccount(privateKey);
-			const sealedEoaKey = sealString(options.config.appMasterKey, privateKey);
+			let createdTreasury = false;
+			let treasury = await db.query.orgTreasuries.findFirst({
+				where: (table, { eq: eqOp }) => eqOp(table.orgId, orgId),
+			});
 
-			// Atomic: the unique index on org_id makes this race-safe. A second
-			// concurrent request conflicts and returns no row (409) instead of
-			// throwing on the constraint; the losing request's generated key was
-			// never persisted, so nothing leaks.
-			const inserted = await db
-				.insert(orgTreasuries)
-				.values({
-					orgId,
-					address: account.address.toLowerCase(),
-					sealedEoaKey,
-					consentedAt: new Date(),
-					consentedBy: request.user!.id,
-				})
-				.onConflictDoNothing({ target: orgTreasuries.orgId })
-				.returning({ id: orgTreasuries.id });
-
-			if (inserted.length === 0) {
+			if (treasury?.sealedEercKey) {
 				return reply.code(409).send({ error: "treasury_exists" });
 			}
 
-			return reply.code(201).send({
-				address: account.address,
+			if (!treasury) {
+				const privateKey = generatePrivateKey();
+				const account = privateKeyToAccount(privateKey);
+				const sealedEoaKey = sealString(options.config.appMasterKey, privateKey);
+
+				// Atomic: the unique index on org_id makes this race-safe. A second
+				// concurrent request conflicts and returns no row (409) instead of
+				// throwing on the constraint; the losing request's generated key was
+				// never persisted, so nothing leaks.
+				const [inserted] = await db
+					.insert(orgTreasuries)
+					.values({
+						address: account.address.toLowerCase(),
+						consentedAt: new Date(),
+						consentedBy: request.user!.id,
+						orgId,
+						sealedEoaKey,
+					})
+					.onConflictDoNothing({ target: orgTreasuries.orgId })
+					.returning();
+
+				if (!inserted) {
+					return reply.code(409).send({ error: "treasury_exists" });
+				}
+
+				createdTreasury = true;
+				treasury = inserted;
+			}
+
+			const eoaPrivateKey = unsealString(
+				options.config.appMasterKey,
+				treasury.sealedEoaKey,
+			) as `0x${string}`;
+
+			await options.onboardingChain.ensureAllowlisted(treasury.address);
+			const balance = await options.onboardingChain.getNativeBalance(treasury.address);
+			if (balance < options.config.dripBalanceThresholdWei) {
+				await options.onboardingChain.dripGas(
+					treasury.address,
+					options.config.dripWei,
+				);
+			}
+
+			const registration = await options.treasuryRegistrar.registerTreasury({
+				address: treasury.address,
+				eoaPrivateKey,
+			});
+			const sealedEercKey = sealString(
+				options.config.appMasterKey,
+				serializeManagedEercAccount(registration.eercAccount),
+			);
+
+			await db
+				.update(orgTreasuries)
+				.set({ sealedEercKey })
+				.where(eq(orgTreasuries.id, treasury.id));
+
+			return reply.code(createdTreasury ? 201 : 200).send({
+				address: getAddress(treasury.address),
 				custody: "managed",
 				consented: true,
-				registered: false,
+				registered: true,
+				registrationTxHash: registration.txHash,
 			});
 		},
 	);

@@ -126,9 +126,18 @@ importers:
       pino:
         specifier: ^10.3.1
         version: 10.3.1
+      poseidon-lite:
+        specifier: ^0.3.0
+        version: 0.3.0
+      snarkjs:
+        specifier: ^0.7.5
+        version: 0.7.5
       viem:
         specifier: ^2.54.4
         version: 2.54.4(typescript@5.9.3)(zod@4.4.3)
+      web-worker:
+        specifier: ^1.2.0
+        version: 1.2.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3

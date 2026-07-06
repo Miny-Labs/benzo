@@ -29,6 +29,7 @@ packages/config/public/circuits/
 apps/*/public/circuits/*.wasm
 apps/*/public/circuits/*.zkey
 apps/*/public/circuits/manifest.json
+services/api/zk-artifacts/
 
 # --- os / editor ---
 .DS_Store

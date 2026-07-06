@@ -16,6 +16,13 @@ import {
 	type OnboardingJobData,
 	type OnboardingWorkerOptions,
 } from "../onboarding/service.js";
+import {
+	enqueueOutstandingPayrollItems,
+	handlePayrollItemJob,
+	PAYROLL_ITEM_QUEUE,
+	type PayrollItemJobData,
+	type PayrollWorkerOptions,
+} from "../payroll/runner.js";
 
 export const JOB_QUEUES = {
 	demoAudit: "demo.audit",
@@ -23,6 +30,7 @@ export const JOB_QUEUES = {
 	invitesExpire: "invites.expire",
 	onboardingAdvance: ONBOARDING_ADVANCE_QUEUE,
 	onboardingFailed: ONBOARDING_FAILED_QUEUE,
+	payrollItem: PAYROLL_ITEM_QUEUE,
 } as const;
 
 export type DemoAuditJobData = {
@@ -89,6 +97,13 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
 		retryLimit: 2,
 		retentionSeconds: 604_800,
 	});
+	await boss.createQueue(JOB_QUEUES.payrollItem, {
+		deleteAfterSeconds: 2_592_000,
+		expireInSeconds: 3_600,
+		retentionSeconds: 2_592_000,
+		retryBackoff: true,
+		retryLimit: 5,
+	});
 }
 
 export async function registerJobs(
@@ -100,6 +115,7 @@ export async function registerJobs(
 		chain?: ChainLogSource;
 		config?: ApiConfig;
 	},
+	payroll?: PayrollWorkerOptions,
 ): Promise<void> {
 	await ensureQueues(boss);
 	await boss.work<DemoAuditJobData>(
@@ -176,49 +192,76 @@ export async function registerJobs(
 	}
 
 	if (!onboarding) {
+		if (!payroll) {
+			return;
+		}
+	} else {
+		await boss.work<OnboardingJobData>(
+			JOB_QUEUES.onboardingAdvance,
+			{ batchSize: 1, includeMetadata: true, localConcurrency: 4 },
+			async ([job]) => {
+				if (!job) {
+					return;
+				}
+
+				await handleOnboardingJob(
+					db,
+					boss,
+					onboarding,
+					job as JobWithMetadata<OnboardingJobData>,
+				);
+				logger.info(
+					{ jobId: job.id, queue: JOB_QUEUES.onboardingAdvance },
+					"onboarding job processed",
+				);
+			},
+		);
+		await boss.work<OnboardingJobData>(
+			JOB_QUEUES.onboardingFailed,
+			{ batchSize: 1 },
+			async ([job]) => {
+				if (!job) {
+					return;
+				}
+
+				await handleOnboardingFailedJob(db, job);
+				logger.error(
+					{ jobId: job.id, queue: JOB_QUEUES.onboardingFailed },
+					"onboarding job failed terminally",
+				);
+			},
+		);
+
+		const resumed = await enqueueOutstandingOnboardings(db, boss);
+
+		if (resumed > 0) {
+			logger.info({ count: resumed }, "resumed onboarding jobs");
+		}
+	}
+
+	if (!payroll) {
 		return;
 	}
 
-	await boss.work<OnboardingJobData>(
-		JOB_QUEUES.onboardingAdvance,
-		{ batchSize: 1, includeMetadata: true, localConcurrency: 4 },
+	await boss.work<PayrollItemJobData>(
+		JOB_QUEUES.payrollItem,
+		{ batchSize: 1, localConcurrency: 3 },
 		async ([job]) => {
 			if (!job) {
 				return;
 			}
 
-			await handleOnboardingJob(
-				db,
-				boss,
-				onboarding,
-				job as JobWithMetadata<OnboardingJobData>,
-			);
+			await handlePayrollItemJob(db, payroll, job);
 			logger.info(
-				{ jobId: job.id, queue: JOB_QUEUES.onboardingAdvance },
-				"onboarding job processed",
-			);
-		},
-	);
-	await boss.work<OnboardingJobData>(
-		JOB_QUEUES.onboardingFailed,
-		{ batchSize: 1 },
-		async ([job]) => {
-			if (!job) {
-				return;
-			}
-
-			await handleOnboardingFailedJob(db, job);
-			logger.error(
-				{ jobId: job.id, queue: JOB_QUEUES.onboardingFailed },
-				"onboarding job failed terminally",
+				{ jobId: job.id, queue: JOB_QUEUES.payrollItem },
+				"payroll item job processed",
 			);
 		},
 	);
 
-	const resumed = await enqueueOutstandingOnboardings(db, boss);
-
-	if (resumed > 0) {
-		logger.info({ count: resumed }, "resumed onboarding jobs");
+	const resumedPayrollItems = await enqueueOutstandingPayrollItems(db, boss);
+	if (resumedPayrollItems > 0) {
+		logger.info({ count: resumedPayrollItems }, "resumed payroll item jobs");
 	}
 }
 

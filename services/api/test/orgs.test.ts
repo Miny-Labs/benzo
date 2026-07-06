@@ -11,15 +11,33 @@ import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { ApiConfig } from "../src/config.js";
-import { unsealString } from "../src/crypto/seal.js";
+import { sealString, unsealString } from "../src/crypto/seal.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
 import {
+	eventLinks,
 	handles,
+	orgMembers,
+	orgs,
 	orgTreasuries,
 	payrollItems,
+	payrollRuns,
 	sessions,
 	users,
 } from "../src/db/schema.js";
+import { createBoss, ensureQueues } from "../src/jobs/index.js";
+import type { OnboardingChainClient } from "../src/onboarding/chain.js";
+import type { PayrollSubmitter, TreasuryRegistrar } from "../src/payroll/chain.js";
+import {
+	createManagedEercAccount,
+	deserializeManagedEercAccount,
+	serializeManagedEercAccount,
+	type TransferProofCalldata,
+} from "../src/payroll/eerc.js";
+import type { PayrollProver } from "../src/payroll/prover.js";
+import {
+	handlePayrollItemJob,
+	type PayrollItemJobData,
+} from "../src/payroll/runner.js";
 
 const testMasterKey =
 	"0000000000000000000000000000000000000000000000000000000000000000";
@@ -49,6 +67,9 @@ function baseConfig(databaseUrl: string): ApiConfig {
 		onboardingRegistrationPollSeconds: 1,
 		opsPrivateKey:
 			"0x0000000000000000000000000000000000000000000000000000000000000001",
+		payrollEercDecimals: 6,
+		payrollTokenId: 1n,
+		payrollZkArtifactDir: "/tmp/benzo-test-zk-artifacts",
 		port: 0,
 		sessionCookieName: "benzo_test_session",
 		sessionTtlDays: 7,
@@ -74,6 +95,65 @@ async function session(
 	});
 	return `${config.sessionCookieName}=${sessionId}`;
 }
+
+function createOnboardingChainStub(): OnboardingChainClient {
+	return {
+		chainEnv: "fuji",
+		chainId: 43_113,
+		async dripGas() {
+			return {
+				mode: "fuji_plain_transfer",
+				result: "sent",
+				txHash: `0x${"01".repeat(32)}` as `0x${string}`,
+			};
+		},
+		async ensureAllowlisted() {
+			return {
+				result: "noop_fuji_no_tx_allowlist",
+				txHash: null,
+			};
+		},
+		async getNativeBalance() {
+			return 0n;
+		},
+		async isUserRegistered() {
+			return true;
+		},
+	};
+}
+
+function createTreasuryRegistrarStub(
+	eercAccount = createManagedEercAccount(123_456n),
+): TreasuryRegistrar {
+	return {
+		async registerTreasury() {
+			return {
+				alreadyRegistered: false,
+				eercAccount,
+				txHash: `0x${"02".repeat(32)}` as `0x${string}`,
+			};
+		},
+	};
+}
+
+function dummyTransferProof(): TransferProofCalldata {
+	return {
+		proofPoints: {
+			a: [1n, 2n],
+			b: [
+				[3n, 4n],
+				[5n, 6n],
+			],
+			c: [7n, 8n],
+		},
+		publicSignals: Array.from({ length: 32 }, (_, i) =>
+			BigInt(i + 1),
+		) as bigint[] & { length: 32 },
+	};
+}
+
+const wait = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 describe("@benzo/api orgs", () => {
 	let postgres: StartedPostgreSqlContainer;
@@ -235,7 +315,14 @@ describe("@benzo/api orgs", () => {
 	it("provisions a treasury only with consent and seals the key at rest", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
-		const app = await buildApp({ config, logger: false, startBoss: false });
+		const eercAccount = createManagedEercAccount(777_777n);
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(eercAccount),
+		});
 		const owner = `0x${"f6".repeat(20)}`;
 
 		try {
@@ -258,7 +345,7 @@ describe("@benzo/api orgs", () => {
 			expect(noConsent.statusCode).toBe(400);
 			expect(noConsent.json().error).toBe("consent_required");
 
-			// With consent → 201, returns address, custody managed, not yet registered.
+			// With consent → 201, returns address, custody managed, registered.
 			const provisioned = await app.inject({
 				headers: { cookie: ownerCookie },
 				method: "POST",
@@ -271,13 +358,17 @@ describe("@benzo/api orgs", () => {
 			expect(provisioned.json()).toMatchObject({
 				custody: "managed",
 				consented: true,
-				registered: false,
+				registered: true,
+				registrationTxHash: `0x${"02".repeat(32)}`,
 			});
 
-			// The sealed EOA key must not be plaintext, and must unseal (only with
-			// the master key) back to the private key that derives the treasury.
+			// The sealed EOA/eERC keys must not be plaintext, and must unseal
+			// (only with the master key) back to their managed key material.
 			const [row] = await db
-				.select({ sealedEoaKey: orgTreasuries.sealedEoaKey })
+				.select({
+					sealedEercKey: orgTreasuries.sealedEercKey,
+					sealedEoaKey: orgTreasuries.sealedEoaKey,
+				})
 				.from(orgTreasuries)
 				.where(eq(orgTreasuries.orgId, orgId))
 				.limit(1);
@@ -290,6 +381,14 @@ describe("@benzo/api orgs", () => {
 			expect(privateKeyToAccount(recoveredKey as `0x${string}`).address).toBe(
 				address,
 			);
+			expect(row!.sealedEercKey).toBeTruthy();
+			expect(row!.sealedEercKey!.toString("utf8")).not.toContain(
+				eercAccount.privateKey.toString(),
+			);
+			const recoveredEercKey = deserializeManagedEercAccount(
+				unsealString(config.appMasterKey, row!.sealedEercKey!),
+			);
+			expect(recoveredEercKey.privateKey).toBe(eercAccount.privateKey);
 
 			// A second provisioning is a conflict.
 			const second = await app.inject({
@@ -310,7 +409,7 @@ describe("@benzo/api orgs", () => {
 				address,
 				custody: "managed",
 				consented: true,
-				registered: false,
+				registered: true,
 			});
 			expect(JSON.stringify(status.json())).not.toContain(recoveredKey);
 		} finally {
@@ -459,6 +558,246 @@ describe("@benzo/api orgs", () => {
 			expect(persisted).toHaveLength(6_000);
 		} finally {
 			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("starts a payroll run with singleton item jobs idempotently", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const boss = createBoss(config);
+		const app = await buildApp({
+			boss,
+			config,
+			db,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			pool,
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"44".repeat(20)}`;
+
+		try {
+			await boss.start();
+			await ensureQueues(boss);
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Runner Co", slug: "runner-co" },
+			});
+			const orgId = created.json().org.id as string;
+			const treasury = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+			expect(treasury.statusCode).toBe(201);
+			expect(treasury.json().registered).toBe(true);
+
+			const csv = [
+				`0x${"55".repeat(20)},1`,
+				`0x${"66".repeat(20)},2`,
+			].join("\n");
+			const preview = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/payroll`,
+				payload: { csv },
+			});
+			expect(preview.statusCode).toBe(201);
+			const runId = preview.json().runId as string;
+
+			const started = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/payroll/${runId}/start`,
+			});
+			expect(started.statusCode).toBe(202);
+			expect(started.json()).toMatchObject({
+				enqueued: 2,
+				status: "running",
+				totalPending: 2,
+			});
+
+			const duplicate = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/payroll/${runId}/start`,
+			});
+			expect(duplicate.statusCode).toBe(202);
+			expect(duplicate.json()).toMatchObject({
+				enqueued: 0,
+				status: "running",
+				totalPending: 2,
+			});
+		} finally {
+			await app.close();
+			await boss.stop().catch(() => undefined);
+			await pool.end();
+		}
+	});
+
+	it("processes same-org payroll items sequentially and links receipts", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const eoaPrivateKey =
+			"0x0000000000000000000000000000000000000000000000000000000000000045";
+		const treasuryAccount = privateKeyToAccount(eoaPrivateKey);
+		const eercAccount = createManagedEercAccount(987_654n);
+		const receiver = createManagedEercAccount(111_111n);
+		const auditor = createManagedEercAccount(222_222n);
+		let activeProofs = 0;
+		let maxActiveProofs = 0;
+		let submitCount = 0;
+		const submittedRows: number[] = [];
+		const prover: PayrollProver = {
+			async proveRegistration() {
+				throw new Error("registration_not_expected");
+			},
+			async proveTransfer() {
+				activeProofs += 1;
+				maxActiveProofs = Math.max(maxActiveProofs, activeProofs);
+				await wait(25);
+				activeProofs -= 1;
+				return dummyTransferProof();
+			},
+		};
+		const submitter: PayrollSubmitter = {
+			async loadTransferContext() {
+				return {
+					auditorPublicKey: auditor.publicKey,
+					receiverPublicKey: receiver.publicKey,
+					senderBalance: 10_000_000n,
+					senderEncryptedBalance: [0n, 0n, 0n, 0n],
+				};
+			},
+			async submitTransfer(input) {
+				submitCount += 1;
+				submittedRows.push(Number(input.proof.publicSignals[0]));
+				return {
+					txHash: `0x${submitCount.toString(16).padStart(64, "0")}`,
+				};
+			},
+			async waitForConfirmations() {
+				await wait(5);
+			},
+		};
+
+		try {
+			const [owner] = await db
+				.insert(users)
+				.values({ address: `0x${"77".repeat(20)}`, roles: [] })
+				.returning({ id: users.id });
+			const [org] = await db
+				.insert(orgs)
+				.values({ name: "Sequential Co", slug: `seq-${randomUUID()}` })
+				.returning({ id: orgs.id });
+			await db.insert(orgMembers).values({
+				orgId: org!.id,
+				role: "owner",
+				userId: owner!.id,
+			});
+			await db.insert(orgTreasuries).values({
+				address: treasuryAccount.address.toLowerCase(),
+				consentedAt: new Date(),
+				consentedBy: owner!.id,
+				orgId: org!.id,
+				sealedEercKey: sealString(
+					config.appMasterKey,
+					serializeManagedEercAccount(eercAccount),
+				),
+				sealedEoaKey: sealString(config.appMasterKey, eoaPrivateKey),
+			});
+			const [run] = await db
+				.insert(payrollRuns)
+				.values({
+					createdBy: owner!.id,
+					itemCount: 3,
+					orgId: org!.id,
+					status: "running",
+					totalAmount: "6",
+				})
+				.returning({ id: payrollRuns.id });
+			const insertedItems = await db
+				.insert(payrollItems)
+				.values(
+					[1, 2, 3].map((i) => ({
+						amount: String(i),
+						recipientInput: `0x${String(i).repeat(40).slice(0, 40)}`,
+						resolvedAddress: `0x${(80 + i).toString(16).repeat(20)}`,
+						rowIndex: i - 1,
+						runId: run!.id,
+						status: "pending" as const,
+					})),
+				)
+				.returning({
+					id: payrollItems.id,
+					rowIndex: payrollItems.rowIndex,
+				});
+
+			const jobFor = (item: { id: string; rowIndex: number }) =>
+				({
+					data: {
+						itemId: item.id,
+						orgId: org!.id,
+						rowIndex: item.rowIndex,
+						runId: run!.id,
+						singletonKey: `${run!.id}:${item.rowIndex}`,
+					} satisfies PayrollItemJobData,
+				}) as Parameters<typeof handlePayrollItemJob>[2];
+
+			await Promise.all(
+				insertedItems.map((item) =>
+					handlePayrollItemJob(
+						db,
+						{ config, pool, prover, submitter },
+						jobFor(item),
+					),
+				),
+			);
+
+			expect(maxActiveProofs).toBe(1);
+			expect(submitCount).toBe(3);
+			expect(submittedRows).toEqual([1, 1, 1]);
+
+			const rows = await db
+				.select()
+				.from(payrollItems)
+				.where(eq(payrollItems.runId, run!.id))
+				.orderBy(payrollItems.rowIndex);
+			expect(rows.map((row) => row.status)).toEqual([
+				"confirmed",
+				"confirmed",
+				"confirmed",
+			]);
+			expect(rows.every((row) => row.txHash)).toBe(true);
+			const [settledRun] = await db
+				.select({ status: payrollRuns.status })
+				.from(payrollRuns)
+				.where(eq(payrollRuns.id, run!.id))
+				.limit(1);
+			expect(settledRun?.status).toBe("complete");
+
+			const links = await db
+				.select()
+				.from(eventLinks)
+				.where(eq(eventLinks.objectId, run!.id));
+			expect(links).toHaveLength(3);
+			expect(new Set(links.map((link) => link.objectType))).toEqual(
+				new Set(["payroll_items"]),
+			);
+
+			await handlePayrollItemJob(
+				db,
+				{ config, pool, prover, submitter },
+				jobFor(insertedItems[0]!),
+			);
+			expect(submitCount).toBe(3);
+		} finally {
 			await pool.end();
 		}
 	});
