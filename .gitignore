@@ -3,28 +3,26 @@
 .env.*
 !.env.example
 
-# --- rust / soroban ---
-target/
-**/*.rs.bk
-*.wasm
-
 # --- node / ts ---
 node_modules/
 dist/
 build/
 *.tsbuildinfo
 
-# --- zk artifacts (large / generated; regenerate or download) ---
+# --- hardhat / solidity ---
+artifacts/
+cache/
+typechain-types/
+coverage/
+coverage.json
+
+# --- zk artifacts (large / generated; rebuild with hardhat zkit) ---
+zkit/
+generated-types/
 *.zkey
 *.ptau
 *.wtns
 *.r1cs
-circuits/**/build/
-proofs/
-
-# --- stellar / local state ---
-.stellar/
-.soroban/
 
 # --- os / editor ---
 .DS_Store
@@ -32,27 +30,13 @@ proofs/
 .idea/
 .vscode/
 
-# vendored reference material (skills + starter code; present locally, not committed)
+# vendored reference material (present locally, not committed)
 reference/
-test_snapshots/
 
-# test runner output (regenerated)
-test-results/
-playwright-report/
-deployments/*.bak
-audits/
+# retired Stellar-era local material (untracked leftovers; tracked code lives at fbb4d4e)
 ceremony/
-
-# local facade wallets (contain secrets)
-tests/wallets/
-apps/web/dist/
-
-# staged prover-enclave artifacts (re-stage from circuits/build)
-services/prover-enclave/artifacts/
-services/prover-enclave/node_modules/
-
-# --- the build manifest IS needed (fetch-artifacts.sh verifies against it) ---
-!circuits/build/artifacts-manifest.json
+test-results/
+target/
 
 # --- agent / tooling internal (kept locally, not part of the codebase) ---
 .claude/
@@ -63,11 +47,9 @@ AGENTS.md
 .neon
 
 # --- internal planning / marketing / demo docs (kept locally for context) ---
-# README.md is the public source of truth. Local docs, generated decks, screenshots,
-# mockups, and design-sweep notes stay off GitHub unless intentionally unignored.
 docs/
 
-# --- heavy binary doc artifacts (regenerable, not needed to run/review) ---
+# --- heavy binary doc artifacts (regenerable) ---
 *.pptx
 *.pdf
 .vercel
