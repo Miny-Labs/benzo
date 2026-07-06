@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" role="img" aria-labelledby="title desc">
+  <title id="title">Shielded stablecoin transfer flow</title>
+  <desc id="desc">A user deposits a public token, sends an encrypted balance, and the receiver can withdraw later.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M2,2 L10,6 L2,10 Z" fill="#8fd8ff" /></marker>
+    <style>
+      .bg { fill: #10151d; }
+      .box { fill: #17212d; stroke: #38536b; stroke-width: 2; }
+      .white { fill: #ffffff; font: 700 34px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .sub { fill: #b7c6d3; font: 400 20px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .h { fill: #ffffff; font: 700 25px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .p { fill: #c5d2dc; font: 400 18px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .tag { fill: #10151d; font: 700 14px Inter, ui-sans-serif, system-ui, sans-serif; }
+    </style>
+  </defs>
+  <rect width="1100" height="620" rx="28" class="bg" />
+  <text x="60" y="78" class="white">Shielded stablecoin transfers</text>
+  <text x="60" y="112" class="sub">Public token in, encrypted transfer on-chain, public token out when needed.</text>
+
+  <rect x="80" y="195" width="260" height="220" rx="22" class="box" />
+  <rect x="112" y="225" width="88" height="28" rx="14" fill="#ffd38a" />
+  <text x="131" y="245" class="tag">STEP 1</text>
+  <text x="112" y="295" class="h">Deposit</text>
+  <text x="112" y="332" class="p">Approve ERC-20</text>
+  <text x="112" y="362" class="p">Shield into eERC</text>
+
+  <rect x="420" y="195" width="260" height="220" rx="22" class="box" />
+  <rect x="452" y="225" width="88" height="28" rx="14" fill="#8fd8ff" />
+  <text x="471" y="245" class="tag">STEP 2</text>
+  <text x="452" y="295" class="h">Send privately</text>
+  <text x="452" y="332" class="p">Groth16 proof</text>
+  <text x="452" y="362" class="p">Encrypted amount</text>
+
+  <rect x="760" y="195" width="260" height="220" rx="22" class="box" />
+  <rect x="792" y="225" width="88" height="28" rx="14" fill="#9ee6c7" />
+  <text x="811" y="245" class="tag">STEP 3</text>
+  <text x="792" y="295" class="h">Withdraw</text>
+  <text x="792" y="332" class="p">Decrypt locally</text>
+  <text x="792" y="362" class="p">Exit to ERC-20</text>
+
+  <path d="M340 305 L420 305" stroke="#8fd8ff" stroke-width="5" marker-end="url(#arrow)" />
+  <path d="M680 305 L760 305" stroke="#8fd8ff" stroke-width="5" marker-end="url(#arrow)" />
+  <rect x="420" y="470" width="260" height="36" rx="18" fill="#263545" />
+  <text x="465" y="494" class="p">balances and amounts encrypted</text>
+</svg>

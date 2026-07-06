@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" role="img" aria-labelledby="title desc">
+  <title id="title">Confidential B2B settlement flow</title>
+  <desc id="desc">An invoice commitment is created, a private eERC transfer settles value, and the payee attests payment.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M2,2 L10,6 L2,10 Z" fill="#8fd8ff" /></marker>
+    <style>
+      .bg { fill: #10151d; }
+      .box { fill: #17212d; stroke: #38536b; stroke-width: 2; }
+      .white { fill: #ffffff; font: 700 34px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .sub { fill: #b7c6d3; font: 400 20px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .h { fill: #ffffff; font: 700 25px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .p { fill: #c5d2dc; font: 400 18px Inter, ui-sans-serif, system-ui, sans-serif; }
+      .code { fill: #9ee6c7; font: 700 18px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+  </defs>
+  <rect width="1100" height="620" rx="28" class="bg" />
+  <text x="60" y="78" class="white">Confidential B2B settlement</text>
+  <text x="60" y="112" class="sub">Commitments keep invoice details out of the registry; eERC keeps payment amount encrypted.</text>
+
+  <rect x="75" y="185" width="285" height="245" rx="22" class="box" />
+  <text x="112" y="245" class="h">InvoiceRegistry</text>
+  <text x="112" y="288" class="p">Opaque commitment</text>
+  <text x="112" y="322" class="code">0x8d...4a</text>
+  <text x="112" y="372" class="p">No amount stored</text>
+
+  <rect x="410" y="185" width="285" height="245" rx="22" class="box" />
+  <text x="447" y="245" class="h">Private payment</text>
+  <text x="447" y="288" class="p">eERC transfer proof</text>
+  <text x="447" y="322" class="p">Encrypted balance delta</text>
+  <text x="447" y="372" class="p">Auditor PCT emitted</text>
+
+  <rect x="745" y="185" width="285" height="245" rx="22" class="box" />
+  <text x="782" y="245" class="h">Payee attests</text>
+  <text x="782" y="288" class="p">Mark paid</text>
+  <text x="782" y="322" class="p">Store paymentRef</text>
+  <text x="782" y="372" class="p">Bookkeeping only</text>
+
+  <path d="M360 307 L410 307" stroke="#8fd8ff" stroke-width="5" marker-end="url(#arrow)" />
+  <path d="M695 307 L745 307" stroke="#8fd8ff" stroke-width="5" marker-end="url(#arrow)" />
+</svg>
