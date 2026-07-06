@@ -15,6 +15,7 @@ export type ChainLog = {
 	logIndex: number;
 	topics: [Hex, ...Hex[]] | [];
 	transactionHash: Hex;
+	transactionIndex: number | null;
 };
 
 export type GetLogsInput = {
@@ -75,6 +76,7 @@ export function createViemChainLogSource(
 					logIndex: log.logIndex,
 					topics: log.topics,
 					transactionHash: log.transactionHash,
+					transactionIndex: log.transactionIndex,
 				};
 			});
 		},

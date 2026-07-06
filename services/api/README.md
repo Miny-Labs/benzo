@@ -22,7 +22,7 @@ number from `BENZONET_RPC_URL`.
 |---|---:|---|
 | `DATABASE_URL` | Yes | Postgres connection string used by Drizzle and pg-boss. |
 | `BENZONET_RPC_URL` | No | Avalanche Fuji, local anvil, or BenzoNet JSON-RPC URL used for health, SIWE signature verification fallbacks, and the eERC indexer. Defaults to the live Fuji RPC. |
-| `OPS_PRIVATE_KEY` | Yes | `0x`-prefixed operator key reserved for later workflow jobs. It is validated at boot but not logged. |
+| `OPS_PRIVATE_KEY` | Yes | `0x`-prefixed operator key used for network-admin writes: auditor rotation, BenzoNet allowlist updates, and admin gas drips. It is validated at boot but never logged. |
 | `APP_MASTER_KEY` | Yes | 32-byte hex key reserved for libsodium secretbox encrypted-at-rest fields. It may include `0x`; the service normalizes it internally. |
 | `BENZONET_CHAIN_ID` | No | SIWE chain id. Defaults to Fuji `43113`; set to BenzoNet `68420` when `CHAIN_ENV=benzonet`. |
 | `CHAIN_ENV` | No | `fuji` or `benzonet`. Defaults to `fuji` when `BENZONET_CHAIN_ID=43113`, otherwise `benzonet`. Config load rejects mismatched chain ids. Fuji records tx allowlist as a no-op and drips gas with a plain AVAX transfer. |
@@ -60,12 +60,13 @@ number from `BENZONET_RPC_URL`.
 | Contacts | Plaintext user workflow data | Stored in `contacts` per owner wallet. Contact addresses and aliases are not payment privacy data. |
 | Invite tokens | Hashed secret | Only `sha256(raw_token)` is stored in `invites.token_hash`; raw claim URLs are returned once on creation and cannot be reconstructed from the DB. |
 | Gift metadata | Workflow metadata | Stored in `invites.kind`, `gift_amount`, and `note`; the API does not custody funds, keys, ciphertexts, or proofs. |
-| eERC decryption keys | Never server-side (consumer) | Consumer keys stay wallet-derived/client-side and never leave the device; the API neither accepts nor persists them. The only planned exceptions are future org-treasury activity where an org opts into a managed key, and future auditor compliance views — separate authorization boundaries that must never be used for consumer activity. |
+| eERC decryption keys | Never server-side (consumer) | Consumer keys stay wallet-derived/client-side and never leave the device; the API neither accepts nor persists them. The exceptions are org-treasury activity where an org opts into a managed key, and auditor compliance views — separate authorization boundaries that must never be used for consumer activity. |
 | eERC event routing metadata | Plaintext | Stored in `events.tx_hash`, `events.log_index`, `events.block_number`, `events.block_hash`, `events.block_time`, `events.contract`, `events.event_name`, `events.from_addr`, and `events.to_addr` so participants can fetch activity without browser chain rescans. |
 | eERC raw log bytes | Opaque chain bytes | Stored in `events.raw_log` as `address`, `topics`, and ABI `data` hex for replay/debugging. The API does not materialize decoded consumer amount fields from these bytes into columns or response fields. |
 | eERC ciphertext/PCT blobs | Opaque bytes | Stored in `events.ciphertext` and `events.amount_pct`; returned as hex strings. The API does not decrypt, interpret, or convert these blobs to amounts. |
 | Proving artifacts or secrets | Never server-side | Generated proving artifacts and secrets must not be committed or stored by the API. |
 | Org treasury keys | Sealed at rest (opt-in, org-scoped) | The managed treasury EOA key (and, once registered, its eERC key) are stored **only** as `org_treasuries.sealed_eoa_key` / `sealed_eerc_key`, sealed under `APP_MASTER_KEY` with AES-256-GCM. They are never returned in a response, never logged, and unsealed only in the payroll worker. Custody requires explicit recorded consent. These sealed keys are spendable funds — see the disaster-recovery issue. |
+| Auditor BabyJubJub keys | Sealed at rest (auditor-scoped) | Auditor private keys are stored **only** as `auditor_keys.sealed_key`, sealed under `APP_MASTER_KEY` with AES-256-GCM. The API unseals the active historical key in memory only for `/auditor/*` requests, returns plaintext amounts only in that response, and writes one `audit_log` row for each decrypted event. |
 
 ## Organizations & Managed Treasury
 
@@ -113,6 +114,64 @@ Routes:
 - `GET /activity/stream` is a participant-scoped SSE stream for live activity.
 - `GET /admin/indexer` returns lag, cursors, and event counts for
   `network_admin` users.
+
+## Auditor Compliance
+
+The compliance API is server-side and authoritative: `/auditor/events` and
+`/auditor/report/:address` select indexed eERC events, choose the auditor key
+that was active at each event block, decrypt the event PCT in memory, and return
+plaintext amounts only in the HTTP response. Plaintext amounts are never written
+back to Postgres.
+
+Routes:
+
+- `GET /auditor/events?address=&from=&to=&limit=&offset=` requires `auditor`.
+  `address` filters to events where the address is sender or recipient.
+- `GET /auditor/report/:address?from=&to=` requires `auditor` and returns
+  aggregate inflow/outflow totals for the address.
+- `POST /admin/auditor/rotate` requires `network_admin`, generates or accepts a
+  handoff auditor BabyJubJub private key, calls the chain rotation boundary,
+  waits for the confirmed receipt, retires the old DB row, and inserts the
+  sealed new row in one transaction. For the current vendored EncryptedERC
+  contract, pass the registered `auditorAddress` from the M2 handoff with the
+  matching BabyJubJub `privateKey`.
+- `POST /admin/roles` grants or revokes `auditor` and `network_admin` roles.
+  Role changes are audit-logged.
+- `GET /admin/audit-log` returns recent audit entries for review.
+
+Rotation runbook:
+
+1. Rotate when auditor personnel or custody policy changes, after suspected key
+   exposure, or during scheduled compliance drills.
+2. Confirm `OPS_PRIVATE_KEY` is the EncryptedERC owner/operator for the target
+   network and has native gas. The key must be supplied through the deployment
+   secret manager, not committed.
+3. Call `POST /admin/auditor/rotate`. If importing the M2 Fuji auditor handoff,
+   pass the registered auditor EVM address and BabyJubJub private key in the
+   request body once; the response never returns that private key, and the DB
+   stores only the sealed blob.
+4. Wait for the indexer to ingest the matching `AuditorChanged` event. The DB
+   row stores the rotation tx hash and activation block so old events continue
+   to decrypt under the retired key and new events decrypt under the active key.
+
+Old keys are retained by design. A pre-rotation event's PCT can only decrypt
+with the key active when the event was emitted; deleting retired rows makes that
+history permanently opaque. Disaster case: if an `auditor_keys.sealed_key` blob
+or `APP_MASTER_KEY` is lost, affected historical events cannot be recovered.
+That is the intended privacy failure mode, not a data-repair task.
+
+## Network Admin
+
+Network-admin routes require `network_admin`:
+
+- `POST /admin/allowlist` with `{ "address": "0x...", "action": "enable" |
+  "revoke" }` pre-checks the BenzoNet allowlist precompile and then calls
+  `setEnabled` or `setNone`.
+- `GET /admin/allowlist/:address` reads current allowlist status.
+- `POST /admin/drip` sends or mints native gas without the onboarding 24-hour
+  limit and records both `drips` and `audit_log` rows.
+- `GET /admin/chain` returns latest block, wall-clock block lag, operator and
+  treasury balances, and indexer lag.
 
 `event_links` correlates tx hashes to product objects such as onboardings,
 invites, and later payroll items so receipts can show labels like
