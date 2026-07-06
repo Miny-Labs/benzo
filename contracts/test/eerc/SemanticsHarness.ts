@@ -38,7 +38,10 @@ import { User } from "./user";
 const EERC_DECIMALS = 2;
 const TUSDC_DECIMALS = 6;
 const TUSDC_TO_EERC_SCALE = 10n ** BigInt(TUSDC_DECIMALS - EERC_DECIMALS);
-const SHA_256_MAX_DIGEST =
+// Domain size of SHA-256: 2^256 (the number of possible output values).
+// Intentionally one more than the maximum output (2^256 - 1) — this is the
+// correct modular base for the bias-rejection ("grind") sampling below.
+const SHA_256_DOMAIN_SIZE =
 	115792089237316195423570985008687907853269984665640564039457584007913129639936n;
 const REGISTER_MESSAGE = (user: string) =>
 	`eERC\nRegistering user with\n Address:${user.toLowerCase()}`;
@@ -100,7 +103,7 @@ const hashKeyWithIndex = (seed: string, index: number) => {
 const grindKey = (seed: string) => {
 	const iterationLimit = 1_000;
 	const maxAllowedValue =
-		SHA_256_MAX_DIGEST - (SHA_256_MAX_DIGEST % BASE_POINT_ORDER);
+		SHA_256_DOMAIN_SIZE - (SHA_256_DOMAIN_SIZE % BASE_POINT_ORDER);
 
 	let i = 0;
 	let key = hashKeyWithIndex(seed, i);
@@ -125,6 +128,13 @@ const getPrivateKeyFromSignature = (signature: string) => {
 };
 
 const formatKeyForCurve = (key: string) => {
+	// `key` is `grindKey`'s unpadded `.toString(16)`, so an odd number of hex
+	// chars is expected and `Buffer.from(key, "hex")` drops the trailing nibble.
+	// This is deliberate: the production @avalabs/eerc-sdk decodes the grind-key
+	// hex the same unpadded way, so reproducing that exact (lossy) step is what
+	// makes the restored key BYTE-IDENTICAL to a wallet's on-chain key. Do NOT
+	// `padStart(64, "0")` here — padding would diverge from the SDK and silently
+	// break the fidelity that the "restore keys" test exists to prove.
 	let hash = createBlakeHash("blake512")
 		.update(Buffer.from(key, "hex"))
 		.digest()
@@ -518,10 +528,14 @@ describe("eERC v0.0.4 semantics harness", () => {
 		expect(postRotationEvent.args.auditorAddress).to.equal(
 			auditorB.signer.address,
 		);
+		// The correct auditor recovers the exact amount; the wrong auditor's
+		// decryption genuinely fails (returns null) — asserting null (rather than
+		// merely "not equal to the amount") proves the isolation property instead
+		// of passing trivially on any non-matching/garbage value.
 		expect(BigInt(preRotationADecrypt)).to.equal(preRotationTransferAmount);
-		expect(preRotationBDecrypt === preRotationTransferAmount).to.equal(false);
+		expect(preRotationBDecrypt).to.be.null;
 		expect(BigInt(postRotationBDecrypt)).to.equal(postRotationTransferAmount);
-		expect(postRotationADecrypt === postRotationTransferAmount).to.equal(false);
+		expect(postRotationADecrypt).to.be.null;
 	});
 
 	it("empirically pins 6-decimal tUSDC deposits into 2-decimal private units", async () => {
