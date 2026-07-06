@@ -1,35 +1,17 @@
-import { and, eq, sql } from "drizzle-orm";
-import type { FastifyPluginAsync, preHandlerAsyncHookHandler } from "fastify";
+import { eq, sql } from "drizzle-orm";
+import type { FastifyPluginAsync } from "fastify";
 import { getAddress } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
 import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
 import { sealString } from "../crypto/seal.js";
-import {
-	orgMembers,
-	orgTreasuries,
-	orgs,
-	type OrgRole,
-} from "../db/schema.js";
-
-declare module "fastify" {
-	interface FastifyRequest {
-		orgRole?: OrgRole;
-	}
-}
+import { orgMembers, orgTreasuries, orgs } from "../db/schema.js";
+import { ROLE_RANK, loadMembership, makeRequireOrgRole } from "../orgs/access.js";
 
 type OrgsRoutesOptions = {
 	config: ApiConfig;
 	db: Database;
-};
-
-// Role hierarchy: a higher rank implies every capability of the ranks below it.
-const ROLE_RANK: Record<OrgRole, number> = {
-	viewer: 0,
-	operator: 1,
-	admin: 2,
-	owner: 3,
 };
 
 const createOrgSchema = z.object({
@@ -60,49 +42,7 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 	options,
 ) => {
 	const { db } = options;
-
-	// Resolve the caller's membership role for the :id org, or null if not a
-	// member. request.user is guaranteed by requireAuth running first.
-	const loadMembership = async (
-		orgId: string,
-		userId: string,
-	): Promise<OrgRole | null> => {
-		const [member] = await db
-			.select({ role: orgMembers.role })
-			.from(orgMembers)
-			.where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
-			.limit(1);
-		return member?.role ?? null;
-	};
-
-	// Gate an org-scoped route on a minimum role. 404 (not 403) when the caller
-	// isn't a member so org existence isn't leaked to non-members.
-	const requireOrgRole =
-		(minRole: OrgRole): preHandlerAsyncHookHandler =>
-		async (request, reply) => {
-			await fastify.requireAuth.call(fastify, request, reply);
-			if (reply.sent) {
-				return;
-			}
-
-			const orgId = (request.params as { id: string }).id;
-			if (!z.uuid().safeParse(orgId).success) {
-				await reply.code(400).send({ error: "invalid_org_id" });
-				return;
-			}
-
-			const role = await loadMembership(orgId, request.user!.id);
-			if (role === null) {
-				await reply.code(404).send({ error: "org_not_found" });
-				return;
-			}
-			if (ROLE_RANK[role] < ROLE_RANK[minRole]) {
-				await reply.code(403).send({ error: "forbidden" });
-				return;
-			}
-
-			request.orgRole = role;
-		};
+	const requireOrgRole = makeRequireOrgRole(fastify, db);
 
 	// POST /orgs — create an org; the creator becomes its owner.
 	fastify.post("/orgs", { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -210,7 +150,7 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 			// equals their own — otherwise an admin could demote the owner (whom
 			// they can never restore, since "owner" isn't a settable role). This
 			// also blocks demoting/self-editing at the same rank.
-			const existingRole = await loadMembership(orgId, user.id);
+			const existingRole = await loadMembership(db, orgId, user.id);
 			const callerRole = request.orgRole!;
 			if (
 				existingRole !== null &&
