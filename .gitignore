@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+# Caddy basic_auth hash file (its own env_file; .example is committed).
+infra/vm/caddy/grafana-auth.env
+# node-exporter textfile metrics written at runtime.
+infra/vm/prometheus/textfile/*.prom
 
 # --- BenzoNet VM binaries (operator-installed subnet-evm plugin) ---
 infra/vm/plugins/*

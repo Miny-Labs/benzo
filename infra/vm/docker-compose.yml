@@ -60,6 +60,10 @@ services:
       - "443:443"
     env_file:
       - .env
+      # Grafana basic_auth hash — its own file so compose can't mangle the '$'
+      # in the bcrypt hash. Optional: only needed for the monitoring profile.
+      - path: caddy/grafana-auth.env
+        required: false
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -70,16 +74,32 @@ services:
     networks:
       - benzonet
 
-  # --- monitoring: stubbed here, configured in #28 (docker compose --profile monitoring) ---
+  # --- monitoring (docker compose --profile monitoring up -d) ---
   prometheus:
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
     profiles: ["monitoring"]
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     expose:
       - "9090"
+    networks:
+      - benzonet
+
+  # Host metrics (disk) + the P-Chain balance textfile metric written by
+  # infra/scripts/pchain-balance-check.sh (via cron) into ./prometheus/textfile.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - --collector.textfile.directory=/textfile
+    volumes:
+      - ./prometheus/textfile:/textfile:ro
+    expose:
+      - "9100"
     networks:
       - benzonet
 

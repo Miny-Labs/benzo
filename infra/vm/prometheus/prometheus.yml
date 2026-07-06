@@ -1,0 +1,29 @@
+# Prometheus scrape config for the BenzoNet monitoring stack.
+# Runs in the compose 'monitoring' profile. avalanchego exposes metrics at
+# /ext/metrics on its HTTP port.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # The dedicated RPC node (this compose stack).
+  - job_name: rpc-node
+    metrics_path: /ext/metrics
+    static_configs:
+      - targets: ["rpc-node:9650"]
+
+  # The validator on its own host. Its HTTP API is private, so point this at the
+  # validator's metrics endpoint reachable over the private network (edit the
+  # target). Left here so the alert on `up{job="validator"}` has a series.
+  - job_name: validator
+    metrics_path: /ext/metrics
+    static_configs:
+      - targets: ["benzonet-validator:9650"]
+
+  # Host metrics (disk, cpu) + the P-Chain balance textfile metric.
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]

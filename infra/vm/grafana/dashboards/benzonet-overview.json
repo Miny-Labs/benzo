@@ -1,0 +1,79 @@
+{
+  "uid": "benzonet-overview",
+  "title": "BenzoNet Overview",
+  "tags": ["benzonet"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "RPC node up",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ]
+        }
+      },
+      "targets": [{ "refId": "A", "expr": "up{job=\"rpc-node\"}" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Validator up",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ]
+        }
+      },
+      "targets": [{ "refId": "A", "expr": "up{job=\"validator\"}" }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "P-Chain validator balance (AVAX)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "green", "value": 3 }
+          ] }
+        }
+      },
+      "targets": [{ "refId": "A", "expr": "benzonet_pchain_validator_balance_avax" }]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Blocks accepted (rate/5m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "targets": [{ "refId": "A", "expr": "increase(avalanche_snowman_accepted_count{job=\"rpc-node\"}[5m])" }]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Disk used (%)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 } },
+      "targets": [{ "refId": "A", "expr": "1 - node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes" }]
+    }
+  ]
+}

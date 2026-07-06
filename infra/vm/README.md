@@ -80,7 +80,34 @@ Start a scratch avalanchego node that tracks the subnet but is **not** in
 - Start with **≥ 100 GB SSD** on the RPC node (`pruning-enabled: false` keeps
   full state for the explorer in #29); the validator can prune
   (`pruning-enabled: true`) and run smaller.
-- Monitor disk in #28 (alert at 80%).
+- Monitor disk in the monitoring stack (alert at 80%).
+
+## Monitoring
+
+Opt-in profile (Prometheus + node-exporter + Grafana):
+
+```sh
+cd infra/vm && docker compose --profile monitoring up -d
+```
+
+- **Prometheus** (`prometheus/prometheus.yml`) scrapes the rpc-node and
+  validator `/ext/metrics` and node-exporter every 15s; alert rules live in
+  `prometheus/alerts.yml`.
+- **Grafana** is provisioned with the Prometheus datasource and the *BenzoNet
+  Overview* dashboard (`grafana/dashboards/`); import the richer ava-labs
+  [avalanche-monitoring](https://github.com/ava-labs/avalanche-monitoring)
+  dashboards for full node internals. Grafana is served through Caddy at
+  `{$GRAFANA_DOMAIN}` behind `basic_auth` — generate the hash with
+  `caddy hash-password` and set `GRAFANA_*` in `.env` (+ a DNS A-record).
+- **Alerts**: rpc-node/validator down (>2m), chain height stalled (>5m), disk
+  >80%, and the P-Chain fee balance <1 AVAX. Verify the chain-height metric
+  name in `alerts.yml` against the live `/ext/metrics` — avalanchego metric
+  names are version-specific.
+- **P-Chain balance**: cron `infra/scripts/pchain-balance-check.sh` (needs
+  `VALIDATION_ID`) writes a node-exporter textfile metric and alerts below
+  threshold → `infra/runbooks/p-chain-topup.md`.
+- **Go/no-go**: `infra/scripts/healthcheck.sh` checks TLS, chainId, advancing
+  blocks, validator health, and P-Chain balance in one shot before a demo.
 
 ## Validator
 
