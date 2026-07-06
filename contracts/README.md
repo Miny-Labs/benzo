@@ -63,6 +63,35 @@ The deploy script updates `deployments/fuji.json` with the deployed
 `handleRegistry` address. `deployments/benzonet.json` is intentionally left for
 the later BenzoNet deploy step.
 
+## InvoiceRegistry
+
+`contracts/benzo/InvoiceRegistry.sol` stores commitment-only B2B payment
+requests. The invoice preimage is built by the M3 BFF/apps and shared with the
+payer off-chain:
+
+```solidity
+keccak256(abi.encode(amount, token, payee, invoiceSalt))
+```
+
+Only the resulting `bytes32 commitment` is stored on-chain. `payer ==
+address(0)` marks an open invoice; a non-zero payer records a restricted payer
+for workflow coordination. The registry has no payment function, so payer
+restriction is metadata for the off-chain flow, not a transfer authorization
+check.
+
+| Registry can verify | Registry cannot verify |
+| --- | --- |
+| `msg.sender` is the payee for `cancelInvoice` and `markPaid` | Any eERC transfer occurred |
+| State-machine transitions: `Created -> Paid` or `Created -> Cancelled` | The amount or token represented by a commitment |
+| Invoice timestamps and lazy expiry via `isExpired(id)` | That `paymentRef` belongs to the invoice |
+| Commitment immutability after creation | That an encrypted transfer amount matches the invoice |
+
+`markPaid(id, paymentRef)` is strictly a payee attestation. `paymentRef` is
+unverified bookkeeping, expected to be the eERC transfer transaction hash the
+payee observed off-chain after decrypting their own balance change. Late
+acknowledgement after expiry is allowed; cancelled invoices can never be marked
+paid.
+
 ## Commands
 
 ```bash
@@ -70,7 +99,8 @@ pnpm compile        # hardhat compile
 pnpm test           # hardhat test
 pnpm zkit:make      # hardhat zkit make
 pnpm zkit:verifiers # hardhat zkit verifiers
-pnpm deploy:fuji    # hardhat run scripts/deploy/06-handle-registry.ts --network fuji
+pnpm deploy:handle-registry   # hardhat run scripts/deploy/06-handle-registry.ts --network fuji
+pnpm deploy:invoice-registry  # hardhat run scripts/deploy/07-invoice-registry.ts --network fuji
 ```
 
 Verification on testnet.snowtrace.io works via Routescan with the
