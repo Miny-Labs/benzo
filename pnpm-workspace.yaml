@@ -1,5 +1,6 @@
 packages:
   - contracts
+  - infra
   - apps/*
 
 onlyBuiltDependencies:

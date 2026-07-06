@@ -1,0 +1,82 @@
+{
+  "name": "BenzoNet",
+  "chainId": 68420,
+  "nativeCurrency": {
+    "name": "Benzo Gas",
+    "symbol": "BGAS",
+    "decimals": 18
+  },
+  "avalancheCli": {
+    "version": "1.9.6",
+    "installCommand": "curl -sSfL https://raw.githubusercontent.com/ava-labs/avalanche-cli/main/scripts/install.sh | sh -s -- -b \"$HOME/bin\" v1.9.6"
+  },
+  "genesis": {
+    "path": "infra/genesis/benzonet.genesis.json",
+    "timestamp": 1783296000,
+    "timestampIso": "2026-07-06T00:00:00Z"
+  },
+  "chainListCheck": {
+    "source": "https://chainid.network/chains.json",
+    "checkedAt": "2026-07-06",
+    "chainId": 68420,
+    "matches": 0
+  },
+  "roles": [
+    {
+      "name": "benzo-admin-cold",
+      "address": "0x0e68879016b83F76D279aFAeFB1B64C066823AdC",
+      "purpose": "Cold admin in every precompile admin array and PoA validator-manager owner",
+      "genesisBalanceBGAS": "1000000"
+    },
+    {
+      "name": "benzo-deployer",
+      "address": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+      "purpose": "Allowed sender and contract deployer for Benzo contracts",
+      "genesisBalanceBGAS": "100000"
+    },
+    {
+      "name": "benzo-ops",
+      "address": "0x13b8d12414dd468a9eCbA24d0a162C17affd6D32",
+      "purpose": "TxAllowList manager for operational allowlist changes",
+      "genesisBalanceBGAS": "100000"
+    },
+    {
+      "name": "benzo-dripper",
+      "address": "0xf1ED91B084e0F9EeE5798E9FA8BC40295479836c",
+      "purpose": "Allowed sender and NativeMinter dripper",
+      "genesisBalanceBGAS": "100000"
+    },
+    {
+      "name": "benzo-backend",
+      "address": "0xa0C5455eF9A7D71e9B5b3ce8Cf3C7E06D856bEDB",
+      "purpose": "Allowed backend sender without deployer, native-minter, or fee-manager privileges",
+      "genesisBalanceBGAS": "100000"
+    }
+  ],
+  "precompiles": {
+    "contractDeployerAllowList": {
+      "address": "0x0200000000000000000000000000000000000000",
+      "admin": ["benzo-admin-cold"],
+      "manager": [],
+      "enabled": ["benzo-deployer"]
+    },
+    "contractNativeMinter": {
+      "address": "0x0200000000000000000000000000000000000001",
+      "admin": ["benzo-admin-cold"],
+      "manager": [],
+      "enabled": ["benzo-dripper"]
+    },
+    "txAllowList": {
+      "address": "0x0200000000000000000000000000000000000002",
+      "admin": ["benzo-admin-cold"],
+      "manager": ["benzo-ops"],
+      "enabled": ["benzo-deployer", "benzo-dripper", "benzo-backend"]
+    },
+    "feeManager": {
+      "address": "0x0200000000000000000000000000000000000003",
+      "admin": ["benzo-admin-cold"],
+      "manager": [],
+      "enabled": []
+    }
+  }
+}
