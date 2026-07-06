@@ -20,5 +20,7 @@ gas-report.txt
 # Local bearer secrets
 .gift-link.local.txt
 .auditor-key.local.json
+.seed-fixtures.local.json
+.seed-payroll.local.csv
 /deployments/hardhat.json
 /deployments/localhost.json
