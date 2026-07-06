@@ -173,5 +173,15 @@ describe("HandleRegistry", () => {
 				.revertedWithCustomError(registry, "InvalidRecipient")
 				.withArgs(ethers.ZeroAddress);
 		});
+
+		it("rejects transfer to the caller", async () => {
+			const { alice, registry } = await deployFixture();
+
+			await registry.connect(alice).claim("alice");
+
+			await expect(registry.connect(alice).transferHandle(alice.address)).to.be
+				.revertedWithCustomError(registry, "InvalidRecipient")
+				.withArgs(alice.address);
+		});
 	});
 });

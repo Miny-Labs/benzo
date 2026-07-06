@@ -65,7 +65,7 @@ contract HandleRegistry {
     /// @notice Move the caller's handle to a new address for wallet rotation.
     /// @param to Address that will own the caller's handle.
     function transferHandle(address to) external {
-        if (to == address(0)) {
+        if (to == address(0) || to == msg.sender) {
             revert InvalidRecipient(to);
         }
 
