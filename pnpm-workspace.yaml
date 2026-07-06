@@ -1,8 +1,6 @@
 packages:
-  - packages/*
+  - contracts
   - apps/*
-  - tests
 
 onlyBuiltDependencies:
-  - blake-hash
   - esbuild
