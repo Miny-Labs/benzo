@@ -7,7 +7,8 @@
  * benzonet-confidential-demo.ts, where an Admin enables a wallet and it can then
  * move encrypted eERC value.
  *
- * Run: BENZONET_RPC_URL=https://rpc.benzo.space \
+ * Run: PRIVATE_KEY=<allow-listed funder, e.g. benzo-deployer> \
+ *      BENZONET_RPC_URL=https://rpc.benzo.space \
  *      npx hardhat run scripts/deploy/benzonet-gated-access-demo.ts --network benzonet
  */
 import { ethers } from "hardhat";
@@ -50,7 +51,9 @@ async function main() {
 		console.log(`   a non-allow-listed wallet is rejected at the precompile:`);
 		console.log(`   "${message}"`);
 	} else if (rejected) {
-		console.log(`rejected, but not by the allowlist: ${message}`);
+		// Rejected, but for the wrong reason (e.g. gas/nonce) — do NOT let the
+		// demo pass; the point is specifically the allowlist gate.
+		throw new Error(`outsider tx was rejected, but NOT by the allowlist: ${message}`);
 	} else {
 		throw new Error("outsider tx was accepted — allowlist NOT enforcing!");
 	}

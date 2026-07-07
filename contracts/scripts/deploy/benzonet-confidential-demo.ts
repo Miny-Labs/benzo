@@ -11,7 +11,8 @@
  * private key. Prints explorer links to the on-chain deposit + transfer txs —
  * the demonstrable "encrypted amounts on a gated L1" (the Speedrun bonus combo).
  *
- * Run: PRIVATE_KEY=<deployer> BENZONET_RPC_URL=https://rpc.benzo.space \
+ * Run: PRIVATE_KEY=<deployer> PRIVATE_KEY_2=<tx-allowlist Admin, e.g. benzo-ops> \
+ *      BENZONET_RPC_URL=https://rpc.benzo.space \
  *      npx hardhat run scripts/deploy/benzonet-confidential-demo.ts --network benzonet
  */
 import { ethers } from "hardhat";
