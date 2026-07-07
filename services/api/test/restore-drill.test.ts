@@ -14,7 +14,7 @@ import {
 	encryptAuditorAmountPct,
 } from "../src/auditor/crypto.js";
 import { listAuditorEvents } from "../src/auditor/service.js";
-import type { ApiConfig } from "../src/config.js";
+import { DEFAULT_CORS_ORIGINS, type ApiConfig } from "../src/config.js";
 import { sealString, unsealString } from "../src/crypto/seal.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
 import {
@@ -168,6 +168,7 @@ function baseConfig(
 		benzonetChainId: 43_113,
 		benzonetRpcUrl: "http://127.0.0.1:1",
 		chainEnv: "fuji",
+		corsOrigins: [...DEFAULT_CORS_ORIGINS],
 		databaseUrl,
 		dripBalanceThresholdWei: 500_000_000_000_000_000n,
 		dripWei: 500_000_000_000_000_000n,

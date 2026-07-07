@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import cookie from "@fastify/cookie";
+import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, {
 	type FastifyBaseLogger,
@@ -88,6 +89,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	const pool = options.pool ?? createPool(config, fastify.log);
 	const db = options.db ?? createDb(pool);
 	const boss = options.boss ?? createBoss(config);
+	const corsOrigins = new Set(config.corsOrigins);
 	const onboarding =
 		options.onboarding ?? createNoopOnboardingOrchestrator();
 	const ownsBoss = !options.boss;
@@ -132,6 +134,17 @@ export async function buildApp(options: BuildAppOptions = {}) {
 			await reply.code(500).send({ error: "internal_server_error" });
 		});
 
+		await fastify.register(cors, {
+			credentials: true,
+			origin: (origin, callback) => {
+				if (!origin || !corsOrigins.has(origin)) {
+					callback(null, false);
+					return;
+				}
+
+				callback(null, origin);
+			},
+		});
 		await fastify.register(cookie);
 		await fastify.register(rateLimit, { global: false });
 		await fastify.register(authPlugin, { config, db });
