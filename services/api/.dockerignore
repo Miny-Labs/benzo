@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+.env.*
+*.log
+zk-artifacts
+drizzle/meta/_journal.json.bak
+_check.mjs
+.DS_Store
