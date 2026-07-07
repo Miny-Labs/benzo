@@ -50,12 +50,16 @@ if [[ "${BACKUP_SKIP_UPLOAD:-}" == "1" && -n "${BACKUP_UPLOAD_CMD:-}" ]]; then
 fi
 
 # Keep the DB password out of pg_dump's argv (visible in ps / /proc/pid/cmdline):
-# lift it into PGPASSWORD and pass a password-stripped URI. Passwords with '@'
-# must be percent-encoded (%40) in the URI, which this preserves.
+# strip it from the URI and pass it via PGPASSWORD instead. The password is
+# percent-ENCODED in the URI (e.g. '@' -> %40) but libpq reads PGPASSWORD
+# LITERALLY, so decode it — otherwise a password with reserved chars fails auth.
 pg_conn_uri="$BACKUP_DATABASE_URL"
 if [[ "$BACKUP_DATABASE_URL" =~ ^[a-zA-Z][a-zA-Z0-9+.-]*://[^:/@]+:([^@]+)@ ]]; then
-  export PGPASSWORD="${BASH_REMATCH[1]}"
-  pg_conn_uri="${BACKUP_DATABASE_URL/:${BASH_REMATCH[1]}@/@}"
+  encoded_pw="${BASH_REMATCH[1]}"
+  pg_conn_uri="${BACKUP_DATABASE_URL/:${encoded_pw}@/@}"
+  # percent-decode %XX -> byte for the literal PGPASSWORD value
+  printf -v PGPASSWORD '%b' "${encoded_pw//%/\\x}"
+  export PGPASSWORD
 fi
 
 mkdir -p "$BACKUP_DIR"
