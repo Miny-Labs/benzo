@@ -55,8 +55,9 @@ const config: HardhatUserConfig = {
     },
   },
   etherscan: {
-    // Routescan verifies Fuji contracts without a real API key.
-    apiKey: { fuji: "verifyContract" },
+    // Routescan verifies Fuji contracts without a real API key; our self-hosted
+    // BenzoNet Blockscout accepts any key string on its Etherscan-compatible API.
+    apiKey: { fuji: "verifyContract", benzonet: "verifyContract" },
     customChains: [
       {
         network: "fuji",
@@ -65,6 +66,29 @@ const config: HardhatUserConfig = {
           apiURL:
             "https://api.routescan.io/v2/network/testnet/evm/43113/etherscan",
           browserURL: "https://testnet.snowtrace.io",
+        },
+      },
+      {
+        network: "benzonet",
+        chainId: 68420,
+        urls: {
+          apiURL: "https://explorer.benzo.space/api",
+          browserURL: "https://explorer.benzo.space",
+        },
+      },
+    ],
+  },
+  // BenzoNet runs a self-hosted Blockscout; hardhat-verify's native Blockscout
+  // provider speaks its API directly (the Etherscan-compat path mis-detects it).
+  blockscout: {
+    enabled: true,
+    customChains: [
+      {
+        network: "benzonet",
+        chainId: 68420,
+        urls: {
+          apiURL: "https://explorer.benzo.space/api",
+          browserURL: "https://explorer.benzo.space",
         },
       },
     ],

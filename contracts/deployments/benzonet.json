@@ -9,7 +9,7 @@
           "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
           "transactionHash": "0xbceccf9fa04e67267883a2cea7578b403666cc888582ea0bc85acd777a940ff1",
           "blockNumber": 6,
-          "verified": false,
+          "verified": true,
           "constructorArguments": []
         },
         "mint": {
@@ -17,7 +17,7 @@
           "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
           "transactionHash": "0xb941620b7e1f158982db0354d5de2b0614dc4ea1aa08aed478508331640c23f4",
           "blockNumber": 7,
-          "verified": false,
+          "verified": true,
           "constructorArguments": []
         },
         "transfer": {
@@ -25,7 +25,7 @@
           "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
           "transactionHash": "0xbe4be218a2ba86d289d7ad08e2c1c1a4cbf964fb03e83a29feb46aaa8330599f",
           "blockNumber": 8,
-          "verified": false,
+          "verified": true,
           "constructorArguments": []
         },
         "withdraw": {
@@ -33,7 +33,7 @@
           "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
           "transactionHash": "0x381d38cad9954ebd6bd49ee00d77d65d4eb041c00f1a3b0412d7eabdcfe82ba2",
           "blockNumber": 9,
-          "verified": false,
+          "verified": true,
           "constructorArguments": []
         },
         "burn": {
@@ -41,7 +41,7 @@
           "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
           "transactionHash": "0x9bd1f40f6e6481df7699572d353ee1157637a7778d0d5e7687c325edf77f83f9",
           "blockNumber": 10,
-          "verified": false,
+          "verified": true,
           "constructorArguments": []
         }
       },
@@ -50,7 +50,7 @@
         "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
         "transactionHash": "0xdde88065fd46d7e7d514bac933659eb590f69f75f9be17c43555f16812c44dc4",
         "blockNumber": 11,
-        "verified": false,
+        "verified": true,
         "constructorArguments": [
           "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0"
         ]
@@ -60,7 +60,7 @@
         "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
         "transactionHash": "0x26f400cb74d47fe3cc582dab6d74a0f88cdc5cd5bf6f8a2f89e4b72fc2217571",
         "blockNumber": 12,
-        "verified": false,
+        "verified": true,
         "constructorArguments": [
           "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb"
         ]
@@ -71,7 +71,7 @@
           "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
           "transactionHash": "0x6816ab5dad2e06a665a24a827f19ad5260296db6a436fc3b11fd5da571af3938",
           "blockNumber": 13,
-          "verified": false,
+          "verified": true,
           "constructorArguments": []
         }
       },
@@ -80,7 +80,7 @@
         "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
         "transactionHash": "0x3696f9b63053e88931de18e3ec9312788f501fdae0723cfe65c4d7bb13a74627",
         "blockNumber": 14,
-        "verified": false,
+        "verified": true,
         "constructorArguments": [
           {
             "registrar": "0xdfB9b7d958539FC4A1e31C9b813833Fb972B30Ff",
