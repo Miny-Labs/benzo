@@ -4,7 +4,6 @@
 	"files": {
 		"includes": [
 			"packages/**/src/**/*.ts",
-			"apps/cli/src/**/*.ts",
 			"infra/scripts/**/*.ts",
 			"services/**/src/**/*.ts",
 			"services/**/test/**/*.ts",

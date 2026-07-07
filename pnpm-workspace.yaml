@@ -2,7 +2,6 @@ packages:
   - contracts
   - infra
   - packages/*
-  - apps/*
   - services/*
 
 onlyBuiltDependencies:

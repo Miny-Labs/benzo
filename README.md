@@ -123,8 +123,8 @@ flowchart LR
 ### 5. Confidential B2B Settlement
 
 Invoices can be represented by opaque commitments while the settlement itself
-uses eERC private transfer. The commitment registry is bookkeeping: it does not
-prove that a specific transfer paid a specific invoice.
+uses an eERC private transfer. The commitment registry is bookkeeping: it does
+not prove that a specific transfer paid a specific invoice.
 
 ```mermaid
 flowchart LR
