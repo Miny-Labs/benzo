@@ -22,6 +22,7 @@ plugin); see [Validator](#validator).
 | `docker-compose.yml` | `rpc-node`, `caddy`; `prometheus`/`grafana` gated behind the `monitoring` profile (configured in #28) |
 | `caddy/Dockerfile` | Custom Caddy (xcaddy + `caddy-ratelimit`) |
 | `caddy/Caddyfile` | TLS, per-app path tokens, CORS allowlist, per-token rate limits |
+| `caddy/sites-available/circuit-artifacts.caddy` | Optional static host for generated eERC `.wasm`/`.zkey` files |
 | `configs/subnets/SUBNET_ID.json` | `validatorOnly` + `allowedNodes` — **rename to `<subnetID>.json`** |
 | `configs/chains/<blockchainID>/config.json` | RPC-node chain config (eth query APIs on) |
 | `configs/validator-chain-config.json` | Validator variant (no eth/admin APIs) — deploy on the validator |
@@ -123,6 +124,14 @@ unset auth hash can never break the RPC edge.
   threshold → `infra/runbooks/p-chain-topup.md`.
 - **Go/no-go**: `infra/scripts/healthcheck.sh` checks TLS, chainId, advancing
   blocks, validator health, and P-Chain balance in one shot before a demo.
+
+## Circuit Artifacts
+
+The wallet and console do in-browser eERC proving and need public static
+`.wasm` and `.zkey` URLs. Generate and verify them from `contracts/`, publish
+the staged `packages/config/public/circuits/` tree to the edge host, then enable
+`caddy/sites-available/circuit-artifacts.caddy` under `sites-enabled/`. The
+operator runbook is [`../runbooks/circuit-artifacts.md`](../runbooks/circuit-artifacts.md).
 
 ## Validator
 

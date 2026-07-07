@@ -8,6 +8,7 @@ import {
 	CIRCUIT_EXTENSIONS,
 	type CircuitArtifactManifestEntry,
 	CIRCUIT_OPERATIONS,
+	circuitArtifactFile,
 } from "./circuits.js";
 import {
 	DEPLOYMENT_NETWORKS,
@@ -181,12 +182,27 @@ function verifyCircuitManifestIfPresent(): void {
 		return;
 	}
 
+	const seenFiles = new Set<string>();
+
 	for (const [index, entry] of parsed.entries()) {
-		verifyCircuitManifestEntry(index, entry);
+		verifyCircuitManifestEntry(index, entry, seenFiles);
+	}
+
+	for (const circuit of CIRCUIT_OPERATIONS) {
+		for (const extension of CIRCUIT_EXTENSIONS) {
+			const expectedFile = circuitArtifactFile(circuit, extension);
+			if (!seenFiles.has(expectedFile)) {
+				failures.push(`manifest must include ${expectedFile}`);
+			}
+		}
 	}
 }
 
-function verifyCircuitManifestEntry(index: number, value: unknown): void {
+function verifyCircuitManifestEntry(
+	index: number,
+	value: unknown,
+	seenFiles: Set<string>,
+): void {
 	if (!isJsonObject(value)) {
 		failures.push(`manifest[${index}] must be an object`);
 		return;
@@ -196,10 +212,11 @@ function verifyCircuitManifestEntry(index: number, value: unknown): void {
 	const file = entry.file;
 	const sha256 = entry.sha256;
 	const bytes = entry.bytes;
+	const circuit = entry.circuit;
 
 	if (
-		typeof entry.circuit !== "string" ||
-		!CIRCUIT_OPERATIONS.includes(entry.circuit as never)
+		typeof circuit !== "string" ||
+		!CIRCUIT_OPERATIONS.includes(circuit as never)
 	) {
 		failures.push(`manifest[${index}].circuit must be a known circuit`);
 	}
@@ -212,15 +229,20 @@ function verifyCircuitManifestEntry(index: number, value: unknown): void {
 		return;
 	}
 
-	// The artifact filename must reference its own circuit, so a manifest can't
-	// pair (circuit: "transfer") with a "registration.zkey" and pass unnoticed.
-	if (
-		typeof entry.circuit === "string" &&
-		!file.toLowerCase().includes(entry.circuit.toLowerCase())
-	) {
-		failures.push(
-			`manifest[${index}].file "${file}" must reference the "${entry.circuit}" circuit`,
+	if (CIRCUIT_OPERATIONS.includes(circuit as never)) {
+		const expectedFiles = CIRCUIT_EXTENSIONS.map((extension) =>
+			circuitArtifactFile(circuit as CircuitArtifactManifestEntry["circuit"], extension),
 		);
+
+		if (!expectedFiles.includes(file as never)) {
+			failures.push(
+				`manifest[${index}].file must be one of: ${expectedFiles.join(", ")}`,
+			);
+		} else if (seenFiles.has(file)) {
+			failures.push(`manifest contains duplicate artifact ${file}`);
+		} else {
+			seenFiles.add(file);
+		}
 	}
 
 	if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) {
