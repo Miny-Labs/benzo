@@ -1,0 +1,33 @@
+# Benzo Key Custody Inventory
+
+This inventory covers the keys and sealed records that can permanently block
+funds movement, auditor decryptability, or BenzoNet administration if lost. It
+documents where the secret is expected to live; it does not contain secret
+material.
+
+| Secret | Purpose | Storage location | Holder | Blast radius if lost | Rotation or restore |
+| --- | --- | --- | --- | --- | --- |
+| `APP_MASTER_KEY` | 32-byte hex master key used by `services/api/src/crypto/seal.ts` to seal org treasury EOAs, org treasury eERC keys, and auditor BabyJubJub keys at rest. | Runtime secret manager/VM environment for the API process; escrowed offline per [key-escrow.md](runbooks/key-escrow.md). Never store in repo, `.env`, a second server, or app-reachable cloud storage. | Production operator custodian; escrow media held in at least two physical locations. | Loss bricks every sealed org treasury key and auditor key. Managed org treasuries are **spendable funds**, not just compliance history; losing this key can strand every managed treasury. | Restore by retrieving escrow and setting `APP_MASTER_KEY` before starting API workers. Rotate only with a planned reseal migration that unseals every affected row under the old key and seals it under the new key. |
+| `OPS_PRIVATE_KEY` / `benzo-backend` | API network-admin signer for auditor rotation, BenzoNet allowlist updates, and admin gas drips. Public address: `0xa0C5455eF9A7D71e9B5b3ce8Cf3C7E06D856bEDB`. | Deployment secret manager as `OPS_PRIVATE_KEY`; operator key roster in `~/.benzo-keys/benzonet-roles.json` on the operator workstation only. Never commit or place in server `.env` files beyond the deployment secret mechanism. | Operations holder. | API cannot perform operational chain writes; exposure lets an attacker perform the backend's enabled BenzoNet role actions. | Generate a new backend key, fund it, enable it in `txAllowList`, update the deployment secret, restart the API, then revoke the old address. |
+| `benzo-admin-cold` | Cold root admin for every BenzoNet precompile admin array and the validator-manager owner. Public address: `0x0e68879016b83F76D279aFAeFB1B64C066823AdC`. | Offline cold wallet only. Address is committed in `infra/benzonet.json` and `infra/genesis/benzonet.genesis.json`; private key is never on the VM, never in `.env`, and never in `~/.benzo-keys` on the VM. | Cold-key custodian. | If lost, precompile admin recovery and validator-manager ownership are unrecoverable after deployment. If exposed, attacker can rewrite chain control roles. | Move admin roles to a new cold address with the current cold key, update genesis only for future networks, and validate with `pnpm --filter @benzo/infra test`. |
+| `benzo-ops` | `txAllowList` manager for routine allowlist changes. Public address: `0x13b8d12414dd468a9eCbA24d0a162C17affd6D32`. | Operator workstation `~/.benzo-keys/benzonet-roles.json`; never committed. | Operations holder. | Routine allowlist changes stop. Exposure lets attacker grant/revoke transaction allowlist entries within manager authority. | Cold admin grants manager to a replacement address, then revokes the old address. |
+| `benzo-dripper` | Enabled sender and native-minter role for gas drips. Public address: `0xf1ED91B084e0F9EeE5798E9FA8BC40295479836c`. | Operator workstation `~/.benzo-keys/benzonet-roles.json`; never committed. | Operations holder. | Gas-drip automation stops. Exposure can mint/drip native gas within NativeMinter permissions. | Cold admin or authorized manager enables replacement dripper, updates automation, then revokes old address. |
+| `benzo-deployer` | Allowed sender and contract deployer for Benzo contracts; also the Fuji P-Chain funding key used by the current top-up runbook. Public address: `0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb`. | Operator workstation `~/.benzo-keys/benzonet-roles.json` and Avalanche CLI key store for P-Chain operations; never committed. | Deployment holder. | Contract deploys and P-Chain validator balance top-ups stop. Exposure can deploy contracts and spend the P-Chain funding balance. | For deployer role, cold admin enables a replacement deployer and revokes the old one. For P-Chain funding, move remaining funds and follow [p-chain-topup.md](runbooks/p-chain-topup.md) with the replacement key. |
+| P-Chain funding key | Funds BenzoNet validator continuous-fee balance on the P-Chain. Current operator key is `benzo-deployer`. | Avalanche CLI/operator wallet, not the VM and not the repo. | Deployment holder. | Validator balance cannot be topped up; if the P-Chain balance reaches zero, the L1 can stop producing blocks. | Replace by funding a new P-Chain key and using [p-chain-topup.md](runbooks/p-chain-topup.md). |
+| `auditor_keys.sealed_key` rows | Historical BabyJubJub auditor private keys used to decrypt event-time auditor PCTs. | Postgres `auditor_keys`, sealed under `APP_MASTER_KEY`. Included in nightly encrypted DB backups. | API runtime can unseal in memory for authorized auditor requests; plaintext key is not returned. | If a row or `APP_MASTER_KEY` is lost, matching historical transfers are permanently opaque to the auditor surface. | Use the auditor rotation runbook in [services/api/README.md](../services/api/README.md#auditor-compliance). Do not delete retired rows. |
+| `org_treasuries.sealed_eoa_key` and `sealed_eerc_key` rows | Managed org treasury EOA and eERC keys for payroll. These are **spendable funds**. | Postgres `org_treasuries`, sealed under `APP_MASTER_KEY`. Included in nightly encrypted DB backups. | API payroll worker unseals in memory only after explicit org custody consent. | Losing these rows or `APP_MASTER_KEY` can strand managed treasury funds and stop payroll. Exposure can spend managed treasury funds. | No routine rotation exists yet. Recovery is DB restore plus `APP_MASTER_KEY` escrow restore; future rotation must migrate funds to a new treasury and reseal new key material. |
+
+## Backup and Restore Coverage
+
+Nightly API database backups are produced by
+[`infra/scripts/db-backup.sh`](scripts/db-backup.sh). The dump is encrypted with
+`age` to `BACKUP_AGE_RECIPIENT` before upload. The dump covers the full API
+database, including `auditor_keys`, `org_treasuries`, onboarding state, invoice
+metadata when present, gift/invite link token hashes, event metadata, and audit
+logs.
+
+Restore is documented in [db-restore.md](runbooks/db-restore.md). The acceptance
+drill is automated in `services/api/test/restore-drill.test.ts`: it restores
+logical backup rows into a fresh Postgres database, then proves an org treasury
+EOA unseals and a pre-backup auditor transfer decrypts using only the restored
+database plus the escrowed `APP_MASTER_KEY`.
