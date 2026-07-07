@@ -12,6 +12,11 @@ const OPS = "0x13b8d12414dd468a9eCbA24d0a162C17affd6D32";
 const DRIPPER = "0xf1ED91B084e0F9EeE5798E9FA8BC40295479836c";
 const BACKEND = "0xa0C5455eF9A7D71e9B5b3ce8Cf3C7E06D856bEDB";
 const GENESIS_TIMESTAMP = 1_783_296_000;
+const VALIDATOR_MANAGER_PROXY_PREFIX = "0feedc0de";
+const EIP1967_PROXY_ADMIN_SLOT =
+  "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
+const OWNABLE_OWNER_SLOT =
+  "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 const expectedFeeConfig = {
   gasLimit: 20_000_000,
@@ -51,8 +56,18 @@ function stringArrayAt(source: JsonObject, key: string): string[] {
   return value;
 }
 
+function stringAt(source: JsonObject, key: string): string {
+  const value = source[key];
+  assert(typeof value === "string", `${key} must be a string`);
+  return value;
+}
+
+function normalizeAddress(address: string): string {
+  return getAddress(address.startsWith("0x") ? address : `0x${address}`);
+}
+
 function sameAddress(actual: string, expected: string): boolean {
-  return getAddress(actual) === getAddress(expected);
+  return normalizeAddress(actual) === normalizeAddress(expected);
 }
 
 function expectAddressList(actual: string[], expected: string[], label: string) {
@@ -60,6 +75,13 @@ function expectAddressList(actual: string[], expected: string[], label: string) 
   for (const [index, address] of actual.entries()) {
     assert(sameAddress(address, expected[index] ?? ""), `${label}[${index}] mismatch`);
   }
+}
+
+function expectAddressListContains(actual: string[], expected: string, label: string) {
+  assert(
+    actual.some((address) => sameAddress(address, expected)),
+    `${label} must include ${normalizeAddress(expected)}`,
+  );
 }
 
 function expectNoOverlap(config: JsonObject, label: string) {
@@ -79,6 +101,41 @@ function expectAlloc(alloc: JsonObject, address: string, amount: bigint) {
   const balance = entry.balance;
   assert(typeof balance === "string", `alloc ${address} balance must be a string`);
   assert(BigInt(balance) === amount, `alloc ${address} balance mismatch`);
+}
+
+function expectColdAdminInEveryPrecompileAdminArray(config: JsonObject) {
+  const checked: string[] = [];
+
+  for (const [key, value] of Object.entries(config)) {
+    if (
+      key.endsWith("Config") &&
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "adminAddresses" in value
+    ) {
+      const precompileConfig = value as JsonObject;
+      expectAddressListContains(
+        stringArrayAt(precompileConfig, "adminAddresses"),
+        ADMIN,
+        `${key}.adminAddresses`,
+      );
+      checked.push(key);
+    }
+  }
+
+  assert(checked.length > 0, "no precompile admin arrays found in genesis config");
+}
+
+function addressFromStorageWord(word: string, label: string): string {
+  assert(/^0x[0-9a-fA-F]{64}$/.test(word), `${label} must be a 32-byte storage word`);
+  return getAddress(`0x${word.slice(-40)}`);
+}
+
+function objectAtAddress(source: JsonObject, address: string, label: string): JsonObject {
+  const key = Object.keys(source).find((entry) => sameAddress(entry, address));
+  assert(key !== undefined, `${label} ${normalizeAddress(address)} missing from alloc`);
+  return objectAt(source, key);
 }
 
 const genesis = readJson(join(infraDir, "genesis", "benzonet.genesis.json"));
@@ -125,6 +182,7 @@ const feeManager = objectAt(config, "feeManagerConfig");
 expectAddressList(stringArrayAt(feeManager, "adminAddresses"), [ADMIN], "feeManager.adminAddresses");
 assert(feeManager.blockTimestamp === GENESIS_TIMESTAMP, "feeManager blockTimestamp mismatch");
 expectNoOverlap(feeManager, "feeManager");
+expectColdAdminInEveryPrecompileAdminArray(config);
 
 expectAlloc(alloc, ADMIN, parseEther("1000000"));
 expectAlloc(alloc, DEPLOYER, parseEther("100000"));
@@ -138,7 +196,7 @@ expectAlloc(alloc, BACKEND, parseEther("100000"));
 // it reads the P-Chain conversion via a WARP message — so warpConfig must be
 // present and cannot activate before Durango (blockTimestamp >= durangoTimestamp).
 const managerProxyKey = Object.keys(alloc).find((key) =>
-  key.toLowerCase().replace(/^0x/, "").startsWith("0feedc0de"),
+  key.toLowerCase().replace(/^0x/, "").startsWith(VALIDATOR_MANAGER_PROXY_PREFIX),
 );
 assert(
   managerProxyKey !== undefined,
@@ -148,6 +206,21 @@ const managerProxy = objectAt(alloc, managerProxyKey);
 assert(
   typeof managerProxy.code === "string" && managerProxy.code.length > 2,
   "validator manager proxy must carry predeployed bytecode",
+);
+const managerProxyStorage = objectAt(managerProxy, "storage");
+const proxyAdminAddress = addressFromStorageWord(
+  stringAt(managerProxyStorage, EIP1967_PROXY_ADMIN_SLOT),
+  "validator manager proxy admin slot",
+);
+const proxyAdmin = objectAtAddress(alloc, proxyAdminAddress, "validator manager proxy admin");
+const proxyAdminStorage = objectAt(proxyAdmin, "storage");
+const validatorManagerOwner = addressFromStorageWord(
+  stringAt(proxyAdminStorage, OWNABLE_OWNER_SLOT),
+  "validator manager owner slot",
+);
+assert(
+  sameAddress(validatorManagerOwner, ADMIN),
+  `validator manager owner must be ${normalizeAddress(ADMIN)}; got ${validatorManagerOwner}`,
 );
 
 const warp = objectAt(config, "warpConfig");
