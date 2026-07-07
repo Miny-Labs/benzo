@@ -1,0 +1,16 @@
+{
+  "network": "fuji",
+  "chainId": 43113,
+  "contracts": {
+    "verifiers": {
+      "registration": "0x4250bD1eb89Ef78469f94da2fE7738DCdcb09Ef7",
+      "transfer": "0x4bF3DBD3fF57943dC402ec1F280589E1032A32A5",
+      "mint": "0x0fE395F5E97Ee02c961DE3d035E5De2D9019D15E",
+      "withdraw": "0x7E194cb8A575d23f74EEDbEf1b519B281B29c30e",
+      "burn": "0x1BDfD6cB772D5F882622BaFD7B19898Da9F61d34"
+    },
+    "Registrar": "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0",
+    "EncryptedERC": "0x46688f1704a69a6c276cCCB823E36C80787B0FA2",
+    "tUSDC": "0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f"
+  }
+}

@@ -16,7 +16,10 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.json --noEmit"
+    "test": "tsc -p tsconfig.json && node dist/check-config.js"
+  },
+  "dependencies": {
+    "viem": "^2.54.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
