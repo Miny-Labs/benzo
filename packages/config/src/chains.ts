@@ -7,6 +7,19 @@ export const BENZONET_BLOCKCHAIN_ID =
 export const BENZONET_RPC_PATH = `/ext/bc/${BENZONET_BLOCKCHAIN_ID}/rpc`;
 export const BENZONET_LOCAL_RPC_URL = `http://127.0.0.1:9650${BENZONET_RPC_PATH}`;
 
+// BenzoNet has NO single public RPC — it's reached only through Caddy with a
+// per-app path token (rpc.benzonet.<domain>/<app>/<token>), so the URL is both
+// deployment- and app-specific. Browser apps MUST supply their own tokened URL
+// via wagmi's `transports` rather than relying on this chain's default. The
+// default below is the local-node/dev convention; override on the server with
+// BENZONET_RPC_URL. (Guarded so it's browser-safe when `process` is absent.)
+const benzonetRpcOverride =
+	typeof process !== "undefined" ? process.env?.BENZONET_RPC_URL : undefined;
+export const BENZONET_DEFAULT_RPC_URL =
+	benzonetRpcOverride && benzonetRpcOverride.length > 0
+		? benzonetRpcOverride
+		: BENZONET_LOCAL_RPC_URL;
+
 export const fuji = defineChain({
 	id: FUJI_CHAIN_ID,
 	name: "Avalanche Fuji",
@@ -39,7 +52,7 @@ export const benzonet = defineChain({
 	},
 	rpcUrls: {
 		default: {
-			http: [BENZONET_LOCAL_RPC_URL],
+			http: [BENZONET_DEFAULT_RPC_URL],
 		},
 	},
 	testnet: true,

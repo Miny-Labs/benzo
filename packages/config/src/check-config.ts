@@ -106,8 +106,12 @@ function compactDeployment(
 
 	copyOptionalAddress(compactContracts, "Registrar", eerc, ["registrar"]);
 	copyOptionalAddress(compactContracts, "EncryptedERC", eerc, ["encryptedERC"]);
+	// Prefer the testUSDC deploy record; only fall back to wrappedToken if
+	// testUSDC is absent, so we never silently overwrite one with the other.
 	copyOptionalAddress(compactContracts, "tUSDC", eerc, ["testUSDC"]);
-	copyOptionalAddress(compactContracts, "tUSDC", eerc, ["wrappedToken"]);
+	if (compactContracts.tUSDC === undefined) {
+		copyOptionalAddress(compactContracts, "tUSDC", eerc, ["wrappedToken"]);
+	}
 	copyOptionalAddress(compactContracts, "HandleRegistry", contracts, [
 		"handleRegistry",
 	]);
@@ -150,12 +154,30 @@ function deploymentAddressEntries(
 
 function verifyCircuitManifestIfPresent(): void {
 	if (!existsSync(circuitManifestPath)) {
+		const rel = relative(repoRoot, circuitManifestPath);
+		// The manifest is a generated (gitignored) artifact, so it's absent in a
+		// plain CI checkout — warn loudly instead of silently passing. The job
+		// that generates circuit artifacts sets STRICT_CIRCUIT_MANIFEST=1 to make
+		// a missing/empty manifest a hard failure.
+		if (process.env.STRICT_CIRCUIT_MANIFEST === "1") {
+			failures.push(
+				`${rel} is missing but STRICT_CIRCUIT_MANIFEST=1 — generate circuit artifacts before checking`,
+			);
+		} else {
+			console.warn(
+				`⚠ ${rel} not present — skipping circuit hash check (set STRICT_CIRCUIT_MANIFEST=1 to require it).`,
+			);
+		}
 		return;
 	}
 
 	const parsed = JSON.parse(readFileSync(circuitManifestPath, "utf8")) as unknown;
 	if (!Array.isArray(parsed)) {
 		failures.push(`${relative(repoRoot, circuitManifestPath)} must be a JSON array`);
+		return;
+	}
+	if (parsed.length === 0) {
+		failures.push(`${relative(repoRoot, circuitManifestPath)} must not be empty`);
 		return;
 	}
 
@@ -188,6 +210,17 @@ function verifyCircuitManifestEntry(index: number, value: unknown): void {
 	) {
 		failures.push(`manifest[${index}].file must be a circuit artifact filename`);
 		return;
+	}
+
+	// The artifact filename must reference its own circuit, so a manifest can't
+	// pair (circuit: "transfer") with a "registration.zkey" and pass unnoticed.
+	if (
+		typeof entry.circuit === "string" &&
+		!file.toLowerCase().includes(entry.circuit.toLowerCase())
+	) {
+		failures.push(
+			`manifest[${index}].file "${file}" must reference the "${entry.circuit}" circuit`,
+		);
 	}
 
 	if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) {
