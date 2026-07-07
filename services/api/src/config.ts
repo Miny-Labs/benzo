@@ -42,14 +42,27 @@ const envSchema = z
 					return [...DEFAULT_CORS_ORIGINS];
 				}
 
-				return Array.from(
+				const parsed = Array.from(
 					new Set(
 						value
 							.split(",")
 							.map((origin) => origin.trim())
-							.filter((origin) => origin.length > 0),
+							.filter((origin) => origin.length > 0)
+							// Normalize to a bare origin so copy-pasted URLs with a
+							// trailing slash or path still match the request Origin header.
+							.map((origin) => {
+								try {
+									return new URL(origin).origin;
+								} catch {
+									return origin;
+								}
+							}),
 					),
 				);
+
+				// An explicitly empty/whitespace CORS_ORIGINS falls back to the
+				// defaults rather than silently disabling all cross-origin access.
+				return parsed.length > 0 ? parsed : [...DEFAULT_CORS_ORIGINS];
 			}),
 		DATABASE_URL: z.url(),
 		DRIP_BALANCE_THRESHOLD_WEI: z
