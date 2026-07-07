@@ -35,10 +35,27 @@ BACKUP_PREFIX="${BACKUP_PREFIX:-benzo-api}"
 require_nonempty BACKUP_DATABASE_URL
 require_nonempty BACKUP_AGE_RECIPIENT
 require_uint BACKUP_KEEP
+if ((BACKUP_KEEP < 1)); then
+  echo "BACKUP_KEEP must be >= 1 (0 would delete the backup just created)" >&2
+  exit 2
+fi
 
 if [[ -z "${BACKUP_UPLOAD_CMD:-}" && "${BACKUP_SKIP_UPLOAD:-}" != "1" ]]; then
   echo "missing BACKUP_UPLOAD_CMD; set BACKUP_SKIP_UPLOAD=1 only for local dry-runs" >&2
   exit 2
+fi
+if [[ "${BACKUP_SKIP_UPLOAD:-}" == "1" && -n "${BACKUP_UPLOAD_CMD:-}" ]]; then
+  echo "BACKUP_SKIP_UPLOAD=1 with BACKUP_UPLOAD_CMD set is contradictory; refusing to silently skip a configured off-VM upload" >&2
+  exit 2
+fi
+
+# Keep the DB password out of pg_dump's argv (visible in ps / /proc/pid/cmdline):
+# lift it into PGPASSWORD and pass a password-stripped URI. Passwords with '@'
+# must be percent-encoded (%40) in the URI, which this preserves.
+pg_conn_uri="$BACKUP_DATABASE_URL"
+if [[ "$BACKUP_DATABASE_URL" =~ ^[a-zA-Z][a-zA-Z0-9+.-]*://[^:/@]+:([^@]+)@ ]]; then
+  export PGPASSWORD="${BASH_REMATCH[1]}"
+  pg_conn_uri="${BACKUP_DATABASE_URL/:${BASH_REMATCH[1]}@/@}"
 fi
 
 mkdir -p "$BACKUP_DIR"
@@ -53,7 +70,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-pg_dump --format=custom --no-owner --no-acl --dbname="$BACKUP_DATABASE_URL" \
+pg_dump --format=custom --no-owner --no-acl --dbname="$pg_conn_uri" \
   | age -r "$BACKUP_AGE_RECIPIENT" -o "$backup_tmp"
 
 mv "$backup_tmp" "$backup_file"

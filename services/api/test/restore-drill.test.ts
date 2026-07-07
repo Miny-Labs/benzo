@@ -18,7 +18,6 @@ import type { ApiConfig } from "../src/config.js";
 import { sealString, unsealString } from "../src/crypto/seal.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
 import {
-	auditLog,
 	auditorKeys,
 	events,
 	orgMembers,
@@ -134,13 +133,21 @@ describe("@benzo/api restore drill", () => {
 					},
 				]);
 
-				const restoredAuditRows = await restoredDb
+				// Assert the actual backed-up rows survived the restore — not the
+				// audit_log row that the post-restore listAuditorEvents() call above
+				// just wrote as a side effect (that would prove nothing about the
+				// backup). The auditor key + the encrypted transfer are what a real
+				// recovery must bring back.
+				const [restoredEvent] = await restoredDb
 					.select()
-					.from(auditLog)
-					.where(eq(auditLog.action, "auditor_decrypt"));
+					.from(events)
+					.where(eq(events.txHash, seeded.txHash))
+					.limit(1);
+				expect(restoredEvent).toBeDefined();
+				expect(restoredEvent?.blockNumber).toBe(50n);
 
-				expect(restoredAuditRows).toHaveLength(1);
-				expect(restoredAuditRows[0]?.subject).toBe(`${seeded.txHash}:0`);
+				const restoredKeys = await restoredDb.select().from(auditorKeys);
+				expect(restoredKeys.length).toBeGreaterThan(0);
 			} finally {
 				await restoredPool?.end();
 				await sourcePool?.end();
