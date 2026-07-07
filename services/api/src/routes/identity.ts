@@ -162,6 +162,10 @@ export const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
 					return reply.code(409).send({ error: "address_already_has_handle" });
 				}
 
+				if (isHandleRegistryNotConfiguredError(error)) {
+					return reply.code(503).send({ error: "handles_unavailable" });
+				}
+
 				throw error;
 			}
 		},
@@ -581,6 +585,12 @@ function parseHandle(
 
 function normalizeAddress(address: string): string {
 	return getAddress(address).toLowerCase();
+}
+
+function isHandleRegistryNotConfiguredError(error: unknown): boolean {
+	return (
+		error instanceof Error && error.message === "handle registry not configured"
+	);
 }
 
 async function mirrorHandle(

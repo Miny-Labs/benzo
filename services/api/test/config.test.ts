@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { DEFAULT_CORS_ORIGINS, loadConfig } from "../src/config.js";
 
 const baseEnv = {
 	APP_MASTER_KEY:
@@ -12,6 +12,20 @@ const baseEnv = {
 } satisfies NodeJS.ProcessEnv;
 
 describe("loadConfig", () => {
+	it("uses the default CORS origins when CORS_ORIGINS is unset", () => {
+		expect(loadConfig(baseEnv).corsOrigins).toEqual(DEFAULT_CORS_ORIGINS);
+	});
+
+	it("parses comma-separated CORS origins", () => {
+		expect(
+			loadConfig({
+				...baseEnv,
+				CORS_ORIGINS:
+					" https://wallet.example ,http://localhost:5173, https://wallet.example ",
+			}).corsOrigins,
+		).toEqual(["https://wallet.example", "http://localhost:5173"]);
+	});
+
 	it("rejects CHAIN_ENV=fuji with the BenzoNet chain id", () => {
 		expect(() =>
 			loadConfig({

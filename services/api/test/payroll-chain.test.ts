@@ -1,6 +1,6 @@
 import type { PublicClient } from "viem";
 import { describe, expect, it } from "vitest";
-import type { ApiConfig } from "../src/config.js";
+import { DEFAULT_CORS_ORIGINS, type ApiConfig } from "../src/config.js";
 import { createViemPayrollSubmitter } from "../src/payroll/chain.js";
 
 const config: ApiConfig = {
@@ -10,6 +10,7 @@ const config: ApiConfig = {
 	benzonetChainId: 43_113,
 	benzonetRpcUrl: "http://127.0.0.1:1",
 	chainEnv: "fuji",
+	corsOrigins: [...DEFAULT_CORS_ORIGINS],
 	databaseUrl: "postgres://benzo:benzo@127.0.0.1:5432/benzo",
 	dripBalanceThresholdWei: 500_000_000_000_000_000n,
 	dripWei: 500_000_000_000_000_000n,

@@ -20,7 +20,7 @@ import {
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { createSiweMessage } from "viem/siwe";
 import { buildApp } from "../src/app.js";
-import type { ApiConfig } from "../src/config.js";
+import { DEFAULT_CORS_ORIGINS, type ApiConfig } from "../src/config.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
 import type { AdminChainClient } from "../src/admin/chain.js";
 import {
@@ -99,6 +99,7 @@ describe("@benzo/api", () => {
 			benzonetChainId: 43_113,
 			benzonetRpcUrl: rpc.url,
 			chainEnv: "fuji",
+			corsOrigins: [...DEFAULT_CORS_ORIGINS],
 			databaseUrl: postgres.getConnectionUri(),
 			dripBalanceThresholdWei: 500_000_000_000_000_000n,
 			dripWei: 500_000_000_000_000_000n,
@@ -152,6 +153,52 @@ describe("@benzo/api", () => {
 				rpc: { blockNumber: "42", ok: true },
 				status: "ok",
 			});
+		} finally {
+			await app.close();
+		}
+	});
+
+	it("reflects only allowlisted CORS origins with credentials", async () => {
+		const allowedOrigin = "https://wallet.benzo.space";
+		const app = await buildApp({
+			config: {
+				...config,
+				corsOrigins: [allowedOrigin],
+			},
+			logger: false,
+			startBoss: false,
+		});
+
+		try {
+			const allowedResponse = await app.inject({
+				headers: {
+					origin: allowedOrigin,
+				},
+				method: "GET",
+				url: "/healthz",
+			});
+			const deniedResponse = await app.inject({
+				headers: {
+					origin: "https://attacker.example",
+				},
+				method: "GET",
+				url: "/healthz",
+			});
+
+			expect(allowedResponse.statusCode).toBe(200);
+			expect(allowedResponse.headers["access-control-allow-origin"]).toBe(
+				allowedOrigin,
+			);
+			expect(allowedResponse.headers["access-control-allow-credentials"]).toBe(
+				"true",
+			);
+			expect(deniedResponse.statusCode).toBe(200);
+			expect(
+				deniedResponse.headers["access-control-allow-origin"],
+			).toBeUndefined();
+			expect(
+				deniedResponse.headers["access-control-allow-credentials"],
+			).toBeUndefined();
 		} finally {
 			await app.close();
 		}
@@ -957,6 +1004,31 @@ describe("@benzo/api", () => {
 		} finally {
 			await app.close();
 			await pool.end();
+		}
+	});
+
+	it("returns handles_unavailable when handle claiming is not configured", async () => {
+		const app = await buildApp({
+			config,
+			identityChain: new UnconfiguredClaimIdentityChainClient(),
+			logger: false,
+			startBoss: false,
+		});
+		const account = privateKeyToAccount(generatePrivateKey());
+
+		try {
+			const cookie = await signIn(app, account, config);
+			const response = await app.inject({
+				headers: { cookie },
+				method: "POST",
+				payload: { handle: uniqueHandle("unavailable") },
+				url: "/handles",
+			});
+
+			expect(response.statusCode).toBe(503);
+			expect(response.json()).toEqual({ error: "handles_unavailable" });
+		} finally {
+			await app.close();
 		}
 	});
 
@@ -2388,6 +2460,24 @@ class ThrowingResolutionIdentityChainClient implements IdentityChainClient {
 	async resolveHandle(): Promise<HandleResolution> {
 		this.resolveCalls += 1;
 		throw new Error("resolve unavailable");
+	}
+}
+
+class UnconfiguredClaimIdentityChainClient implements IdentityChainClient {
+	async claimHandle(): Promise<ClaimedHandle> {
+		throw new Error("handle registry not configured");
+	}
+
+	async getRegistrationStatuses(): Promise<Map<string, boolean>> {
+		return new Map();
+	}
+
+	async resolveHandle(): Promise<HandleResolution> {
+		return {
+			address: null,
+			registeredOnEerc: false,
+			source: "chain",
+		};
 	}
 }
 
