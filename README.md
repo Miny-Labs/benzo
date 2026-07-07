@@ -151,7 +151,7 @@ flowchart LR
 | Area | Real today | Boundary to keep honest |
 | --- | --- | --- |
 | Fuji eERC stack | `EncryptedERC`, `Registrar`, five verifiers, `BabyJubJub`, and `TestUSDC` are deployed on Fuji and source-verified. | Fuji testnet only; this is not a mainnet deployment. |
-| BenzoNet L1 | The same eERC stack is deployed and source-verified on the BenzoNet L1, with a branded block explorer at [explorer.benzo.space](https://explorer.benzo.space) and RPC at `rpc.benzo.space`. | Public RPC bring-up does not enable `validatorOnly` read privacy; the Evergreen pattern remains the stretch path. |
+| BenzoNet L1 (the bonus combo) | The same eERC stack is deployed and source-verified on the BenzoNet L1 (`68420`). A **real confidential eERC transfer runs on it** (deposit + private transfer, decrypt-verified) and the **tx-allowlist precompile gates every transaction** — a funded non-member is rejected on-chain. So encrypted amounts move *inside* a gated chain. Public RPC `rpc.benzo.space`, explorer [explorer.benzo.space](https://explorer.benzo.space). See [Live proof on BenzoNet](#deployed-on-benzonet-l1--the-bonus-combo-proven). | `validatorOnly` read-restriction is intentionally left OFF so the demo stays publicly verifiable; a production institutional deployment enables it. BenzoNet is a single-validator PoA chain. |
 | Stablecoin asset | The checked-in Fuji deployment wraps `TestUSDC` (`tUSDC`), a 6-decimal test token with a faucet. | It is not real USDC. Circle testnet USDC can be used when configured, but the committed deployment manifest points at `tUSDC`. |
 | Privacy | Groth16 verifiers and BabyJubJub encryption enforce encrypted balances and transfer amounts on-chain. | Addresses, timing, token approvals, gas funding, and workflow labels are still public or off-chain metadata. |
 | Proving setup | Circuits compile locally with `@solarity/hardhat-zkit`; generated `.wasm` and `.zkey` files are integrity-checked. | Generated proving artifacts are ignored and must not be committed. The local setup is acceptable for demos, not a production ceremony. |
@@ -186,6 +186,40 @@ and verified on [explorer.benzo.space](https://explorer.benzo.space).
 The auditor account recorded in the deployment manifest is
 `0xa0C5455eF9A7D71e9B5b3ce8Cf3C7E06D856bEDB`. Its BabyJubJub private key is a
 local operator secret and must never be committed.
+
+## Deployed on BenzoNet L1 — the bonus combo, proven
+
+BenzoNet is Benzo's own permissioned Avalanche L1 (Subnet-EVM, chain id `68420`,
+gas token BGAS). The **same eERC converter stack** is deployed and source-verified
+on it, so encrypted eERC amounts move **inside** a gated chain — the Speedrun's
+explicit bonus (encrypted amounts *and* gated access at once). Public RPC:
+`https://rpc.benzo.space` · explorer: [explorer.benzo.space](https://explorer.benzo.space)
+· full manifest: [`contracts/deployments/benzonet.json`](contracts/deployments/benzonet.json).
+
+| Contract | Address (BenzoNet `68420`) |
+| --- | --- |
+| `EncryptedERC` converter | [`0x790Dd53099E5009a9Cf572769a5A663cCb7EfAcE`](https://explorer.benzo.space/address/0x790Dd53099E5009a9Cf572769a5A663cCb7EfAcE) |
+| `Registrar` | [`0xdfB9b7d958539FC4A1e31C9b813833Fb972B30Ff`](https://explorer.benzo.space/address/0xdfB9b7d958539FC4A1e31C9b813833Fb972B30Ff) |
+| `TestUSDC` (`tUSDC`) | [`0x85546bE3564d503F6ED77a4DA44BEF32EcAEd034`](https://explorer.benzo.space/address/0x85546bE3564d503F6ED77a4DA44BEF32EcAEd034) |
+| `BabyJubJub` library | [`0x542251F24101841485f7d3CD312955b254c7717D`](https://explorer.benzo.space/address/0x542251F24101841485f7d3CD312955b254c7717D) |
+| tx-allowlist precompile | `0x0200000000000000000000000000000000000002` |
+
+**Live proof (reproducible on the public RPC):**
+
+1. **Confidential transfer** — a private eERC transfer of 30 tUSDC with the amount
+   encrypted on-chain (Groth16), decrypt-verified sender `70` / receiver `30`:
+   - deposit → [`0xa38bf2889dd88d112a8bb851da37010ac463a070ba801bb01608b1a9b6f7775b`](https://explorer.benzo.space/tx/0xa38bf2889dd88d112a8bb851da37010ac463a070ba801bb01608b1a9b6f7775b)
+   - private transfer → [`0x5d480780e8ebd69d8ef80a5eb2d46a656efc19579bfd312c400056dfb929669c`](https://explorer.benzo.space/tx/0x5d480780e8ebd69d8ef80a5eb2d46a656efc19579bfd312c400056dfb929669c)
+   - Reproduce: `PRIVATE_KEY=<deployer> PRIVATE_KEY_2=<ops> BENZONET_RPC_URL=https://rpc.benzo.space npx hardhat run scripts/deploy/benzonet-confidential-demo.ts --network benzonet`
+2. **Gated access** — a funded but non-allow-listed wallet is rejected at the
+   tx-allowlist precompile before its tx reaches a block (*"cannot issue
+   transaction from non-allow listed address"*). Only an Admin/Manager
+   (`benzo-ops`) can Enable a wallet — the gated-onboarding step.
+   - Reproduce: `PRIVATE_KEY=<deployer> BENZONET_RPC_URL=https://rpc.benzo.space npx hardhat run scripts/deploy/benzonet-gated-access-demo.ts --network benzonet`
+
+Together these are the two privacy primitives stacked on one chain: eERC hides the
+*amounts*, the permissioned L1 walls off *who can transact* — encrypted value
+moving inside a gated, auditor-ready chain.
 
 ## Repository Layout
 
