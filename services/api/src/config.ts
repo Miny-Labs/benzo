@@ -45,6 +45,10 @@ const envSchema = z
 			.string()
 			.regex(evmAddressPattern, "EERC_REGISTRAR_ADDRESS must be an EVM address")
 			.default(fujiRegistrarAddress),
+		HANDLE_REGISTRY_ADDRESS: z
+			.string()
+			.regex(evmAddressPattern, "HANDLE_REGISTRY_ADDRESS must be an EVM address")
+			.optional(),
 		HOST: z.string().default("0.0.0.0"),
 		INDEXER_CONFIRMATIONS: z.coerce.number().int().nonnegative().default(6),
 		INDEXER_ENABLED: z
@@ -117,6 +121,7 @@ const envSchema = z
 		eercDeploymentManifest: env.EERC_DEPLOYMENT_MANIFEST,
 		eercEncryptedErcAddress: env.EERC_ENCRYPTED_ERC_ADDRESS.toLowerCase(),
 		eercRegistrarAddress: env.EERC_REGISTRAR_ADDRESS.toLowerCase(),
+		handleRegistryAddress: env.HANDLE_REGISTRY_ADDRESS?.toLowerCase(),
 		host: env.HOST,
 		indexerConfirmations: env.INDEXER_CONFIRMATIONS,
 		indexerEnabled: env.INDEXER_ENABLED,

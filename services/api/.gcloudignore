@@ -1,0 +1,10 @@
+# Keep the Cloud Run source upload small; the Docker build reinstalls deps.
+node_modules
+dist
+.env
+.env.*
+*.log
+zk-artifacts
+_check.mjs
+.git
+.DS_Store

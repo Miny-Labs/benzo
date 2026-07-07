@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { createOnChainIdentityChainClient } from "./identity/chain.js";
 
 const config = loadConfig();
 let app: FastifyInstance | undefined;
@@ -40,7 +41,10 @@ process.once("SIGINT", () => {
 });
 
 try {
-	app = await buildApp({ config });
+	app = await buildApp({
+		config,
+		identityChain: createOnChainIdentityChainClient(config),
+	});
 	await app.listen({
 		host: config.host,
 		port: config.port,
