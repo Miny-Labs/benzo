@@ -5,7 +5,6 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
-	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
@@ -48,13 +47,11 @@ function main() {
 		`Missing ${relative(repoRoot, artifactsRoot)}. Run "pnpm zkit:make" from contracts/ first.`,
 	);
 
-	// Only clear the per-circuit bundles we own — never the output root itself,
-	// which may be an operator-supplied publish/parent dir via
-	// BENZO_CIRCUIT_PUBLIC_DIR. A blanket rm of that root could wipe unrelated data.
+	// Write artifacts in place — never delete anything. The circuit set is fixed
+	// and copyFileSync overwrites each destination, so there are no stale files to
+	// clean, and a misconfigured BENZO_CIRCUIT_PUBLIC_DIR (e.g. a shared publish
+	// parent) can't wipe unrelated data.
 	mkdirSync(outputRoot, { recursive: true });
-	for (const circuit of CIRCUITS) {
-		rmSync(join(outputRoot, circuit.circuit), { recursive: true, force: true });
-	}
 
 	const manifest: ManifestEntry[] = [];
 
