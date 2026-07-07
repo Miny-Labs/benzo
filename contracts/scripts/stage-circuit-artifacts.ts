@@ -48,8 +48,13 @@ function main() {
 		`Missing ${relative(repoRoot, artifactsRoot)}. Run "pnpm zkit:make" from contracts/ first.`,
 	);
 
-	rmSync(outputRoot, { recursive: true, force: true });
+	// Only clear the per-circuit bundles we own — never the output root itself,
+	// which may be an operator-supplied publish/parent dir via
+	// BENZO_CIRCUIT_PUBLIC_DIR. A blanket rm of that root could wipe unrelated data.
 	mkdirSync(outputRoot, { recursive: true });
+	for (const circuit of CIRCUITS) {
+		rmSync(join(outputRoot, circuit.circuit), { recursive: true, force: true });
+	}
 
 	const manifest: ManifestEntry[] = [];
 
@@ -101,15 +106,26 @@ function findGeneratedArtifact(circuit: Circuit, extension: Extension): string {
 	}
 
 	if (matches.length > 1) {
+		// If the best candidates are indistinguishable by score, picking one by
+		// path order would silently stage a "best guess" .wasm/.zkey — fail hard
+		// instead, since the wrong proving artifact breaks the in-browser prover.
+		const topScore = scoreCandidate(matches[0], circuit, extension);
+		const tiedTop = matches.filter(
+			(match) => scoreCandidate(match, circuit, extension) === topScore,
+		);
+		if (tiedTop.length > 1) {
+			throw new Error(
+				[
+					`Ambiguous artifacts matched ${circuit.circuit}.${extension}:`,
+					...tiedTop.map((match) => `  - ${relative(repoRoot, match)}`),
+				].join("\n"),
+			);
+		}
 		console.warn(
-			[
-				`Multiple generated artifacts matched ${circuit.circuit}.${extension}; using ${relative(
-					repoRoot,
-					matches[0],
-				)}.`,
-				"Candidates:",
-				...matches.map((match) => `  - ${relative(repoRoot, match)}`),
-			].join("\n"),
+			`Multiple candidates matched ${circuit.circuit}.${extension}; using best-scored ${relative(
+				repoRoot,
+				matches[0],
+			)}.`,
 		);
 	}
 
