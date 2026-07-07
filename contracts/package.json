@@ -8,10 +8,12 @@
     "node": ">=22"
   },
   "scripts": {
+    "build": "hardhat compile",
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "artifacts:stage": "ts-node scripts/stage-circuit-artifacts.ts",
     "artifacts:export": "ts-node scripts/export-circuit-artifacts.ts",
-    "artifacts:verify": "ts-node scripts/verify-circuit-manifest.ts",
+    "artifacts:verify": "STRICT_CIRCUIT_MANIFEST=1 ts-node scripts/verify-circuit-manifest.ts",
     "zkit:make": "hardhat zkit make",
     "zkit:verifiers": "hardhat zkit verifiers",
     "deploy:eerc": "hardhat run scripts/deploy/00-eerc-converter-stack.ts --network fuji",

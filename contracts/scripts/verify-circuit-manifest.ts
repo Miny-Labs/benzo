@@ -2,126 +2,128 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
+// Focused, override-aware check of a staged circuit-artifact bundle: it validates
+// ONLY the manifest + hashes at the same directory `artifacts:stage` writes to
+// (BENZO_CIRCUIT_PUBLIC_DIR), so it neither ignores a staged override nor couples
+// artifact verification to unrelated @benzo/config deployment checks.
+
+const CIRCUITS = ["registration", "transfer", "mint", "withdraw", "burn"] as const;
+const EXTENSIONS = ["wasm", "zkey"] as const;
+
 const contractsRoot = resolve(__dirname, "..");
 const repoRoot = resolve(contractsRoot, "..");
-const manifestDirectory = join(repoRoot, "packages", "config", "public", "circuits");
-const manifestPath = join(manifestDirectory, "manifest.json");
+const outputRoot = resolve(
+	process.env.BENZO_CIRCUIT_PUBLIC_DIR ??
+		join(repoRoot, "packages", "config", "public", "circuits"),
+);
+const manifestPath = join(outputRoot, "manifest.json");
+const rel = relative(repoRoot, manifestPath);
 
-type ManifestEntry = {
-  circuit: unknown;
-  file: unknown;
-  sha256: unknown;
-  bytes: unknown;
-  zkitVersion: unknown;
-  circomVersion: unknown;
-  upstreamTag: unknown;
-  builtAt: unknown;
-};
+const failures: string[] = [];
 
-function main() {
-  if (!existsSync(manifestPath)) {
-    fail([`Missing ${relative(repoRoot, manifestPath)}. Run "pnpm artifacts:export" first.`]);
-  }
-
-  const manifest = readManifest();
-  const failures: string[] = [];
-
-  for (const [index, entry] of manifest.entries()) {
-    const entryFailures = validateEntry(index, entry);
-
-    if (entryFailures.length > 0) {
-      failures.push(...entryFailures);
-      continue;
-    }
-
-    const file = entry.file as string;
-    const expectedSha256 = entry.sha256 as string;
-    const expectedBytes = entry.bytes as number;
-    const artifactPath = join(manifestDirectory, file);
-
-    if (!existsSync(artifactPath)) {
-      failures.push(`${file}: missing file`);
-      continue;
-    }
-
-    const actualBytes = statSync(artifactPath).size;
-    const actualSha256 = sha256File(artifactPath);
-
-    if (actualBytes !== expectedBytes || actualSha256 !== expectedSha256) {
-      failures.push(
-        [
-          `${file}: integrity mismatch`,
-          `  expected bytes: ${expectedBytes}`,
-          `  actual bytes:   ${actualBytes}`,
-          `  expected sha256: ${expectedSha256}`,
-          `  actual sha256:   ${actualSha256}`,
-        ].join("\n"),
-      );
-    }
-  }
-
-  if (failures.length > 0) {
-    fail(failures);
-  }
-
-  console.log(
-    `Verified ${manifest.length} circuit artifacts from ${relative(repoRoot, manifestPath)}.`,
-  );
+if (!existsSync(manifestPath)) {
+	// The manifest is a generated (gitignored) artifact, absent in a plain
+	// checkout. The publish job sets STRICT_CIRCUIT_MANIFEST=1 to require it.
+	if (process.env.STRICT_CIRCUIT_MANIFEST === "1") {
+		console.error(
+			`${rel} is missing but STRICT_CIRCUIT_MANIFEST=1 — run "pnpm artifacts:stage" first.`,
+		);
+		process.exit(1);
+	}
+	console.warn(
+		`⚠ ${rel} not present — skipping circuit hash check (set STRICT_CIRCUIT_MANIFEST=1 to require it).`,
+	);
+	process.exit(0);
 }
 
-function readManifest(): ManifestEntry[] {
-  const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
-
-  if (!Array.isArray(parsed)) {
-    fail([`${relative(repoRoot, manifestPath)} must be a JSON array`]);
-  }
-
-  return parsed as ManifestEntry[];
+const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
+if (!Array.isArray(parsed)) {
+	failures.push(`${rel} must be a JSON array`);
+} else if (parsed.length === 0) {
+	failures.push(`${rel} must not be empty`);
+} else {
+	const seenFiles = new Set<string>();
+	for (const [index, entry] of parsed.entries()) {
+		verifyEntry(index, entry, seenFiles);
+	}
+	for (const circuit of CIRCUITS) {
+		for (const extension of EXTENSIONS) {
+			const expected = `${circuit}/${circuit}.${extension}`;
+			if (!seenFiles.has(expected)) {
+				failures.push(`manifest must include ${expected}`);
+			}
+		}
+	}
 }
 
-function validateEntry(index: number, entry: ManifestEntry): string[] {
-  const failures: string[] = [];
-  const prefix = `manifest[${index}]`;
-
-  if (typeof entry.circuit !== "string" || entry.circuit.length === 0) {
-    failures.push(`${prefix}.circuit must be a non-empty string`);
-  }
-
-  if (typeof entry.file !== "string" || !/^[a-z]+[.](wasm|zkey)$/.test(entry.file)) {
-    failures.push(`${prefix}.file must be a circuit artifact filename`);
-  }
-
-  if (typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
-    failures.push(`${prefix}.sha256 must be a lowercase sha256 hex digest`);
-  }
-
-  if (
-    typeof entry.bytes !== "number" ||
-    !Number.isSafeInteger(entry.bytes) ||
-    entry.bytes <= 0
-  ) {
-    failures.push(`${prefix}.bytes must be a positive safe integer`);
-  }
-
-  for (const key of ["zkitVersion", "circomVersion", "upstreamTag", "builtAt"] as const) {
-    if (typeof entry[key] !== "string" || entry[key].length === 0) {
-      failures.push(`${prefix}.${key} must be a non-empty string`);
-    }
-  }
-
-  return failures;
+if (failures.length > 0) {
+	console.error(`Circuit manifest check failed for ${rel}:`);
+	for (const failure of failures) {
+		console.error(`- ${failure}`);
+	}
+	process.exit(1);
 }
 
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
+console.log(`Verified circuit artifact hashes from ${rel}.`);
 
-function fail(failures: string[]): never {
-  console.error("Circuit manifest verification failed:");
-  for (const failure of failures) {
-    console.error(failure);
-  }
-  process.exit(1);
-}
+function verifyEntry(
+	index: number,
+	value: unknown,
+	seenFiles: Set<string>,
+): void {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		failures.push(`manifest[${index}] must be an object`);
+		return;
+	}
 
-main();
+	const entry = value as {
+		circuit?: unknown;
+		file?: unknown;
+		sha256?: unknown;
+		bytes?: unknown;
+	};
+	const { circuit, file, sha256, bytes } = entry;
+
+	if (typeof circuit !== "string" || !CIRCUITS.includes(circuit as never)) {
+		failures.push(`manifest[${index}].circuit must be a known circuit`);
+	}
+
+	const expectedFiles =
+		typeof circuit === "string" && CIRCUITS.includes(circuit as never)
+			? EXTENSIONS.map((extension) => `${circuit}/${circuit}.${extension}`)
+			: [];
+
+	if (typeof file !== "string" || !expectedFiles.includes(file)) {
+		failures.push(
+			`manifest[${index}].file must be one of: ${expectedFiles.join(", ") || "<known circuit artifact>"}`,
+		);
+		return;
+	}
+	if (seenFiles.has(file)) {
+		failures.push(`manifest contains duplicate artifact ${file}`);
+		return;
+	}
+	seenFiles.add(file);
+
+	if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) {
+		failures.push(`manifest[${index}].sha256 must be a lowercase sha256 digest`);
+		return;
+	}
+	if (typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes <= 0) {
+		failures.push(`manifest[${index}].bytes must be a positive safe integer`);
+		return;
+	}
+
+	const artifactPath = join(outputRoot, file);
+	if (!existsSync(artifactPath)) {
+		failures.push(`${file}: missing circuit artifact`);
+		return;
+	}
+	const actualBytes = statSync(artifactPath).size;
+	const actualSha256 = createHash("sha256")
+		.update(readFileSync(artifactPath))
+		.digest("hex");
+	if (actualBytes !== bytes || actualSha256 !== sha256) {
+		failures.push(`${file}: circuit artifact hash or byte length mismatch`);
+	}
+}

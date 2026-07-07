@@ -36,9 +36,7 @@ generated-types/
 *.wtns
 *.r1cs
 packages/config/public/circuits/
-apps/*/public/circuits/*.wasm
-apps/*/public/circuits/*.zkey
-apps/*/public/circuits/manifest.json
+apps/*/public/circuits/
 services/api/zk-artifacts/
 
 # --- os / editor ---

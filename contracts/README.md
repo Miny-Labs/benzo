@@ -15,7 +15,7 @@ under `contracts/eerc/`; the exact upstream tag and commit are recorded in
   transfers; standalone mode mints a native private token.
 - Deploy order: verifiers → `Registrar` → `EncryptedERC` →
   `setAuditorPublicKey`. Private ops revert until the auditor key is set.
-- After `hardhat zkit make`, run `pnpm artifacts:export` to publish each
+- After `hardhat zkit make`, run `pnpm artifacts:stage` to publish each
   circuit's `.wasm` + `.zkey` and manifest into `@benzo/config` for all
   provers.
 - License: EncryptedERC is under the Ava Labs Ecosystem License v1.1
@@ -219,25 +219,25 @@ The eERC SDK generates Groth16 proofs from circuit artifacts served to the
 prover. Benzo keeps those artifacts generated, ignored, and integrity-checked:
 
 ```bash
-pnpm hardhat zkit make && pnpm artifacts:export
+pnpm zkit:make && pnpm artifacts:stage
 pnpm artifacts:verify
 ```
 
-Run those commands from `contracts/`. `artifacts:export` reads
+Run those commands from `contracts/`. `artifacts:stage` reads
 `contracts/zkit/artifacts/` and writes the shared proving bundle to:
 
 ```text
 packages/config/public/circuits/
-  registration.wasm
-  registration.zkey
-  transfer.wasm
-  transfer.zkey
-  mint.wasm
-  mint.zkey
-  withdraw.wasm
-  withdraw.zkey
-  burn.wasm
-  burn.zkey
+  registration/registration.wasm
+  registration/registration.zkey
+  transfer/transfer.wasm
+  transfer/transfer.zkey
+  mint/mint.wasm
+  mint/mint.zkey
+  withdraw/withdraw.wasm
+  withdraw/withdraw.zkey
+  burn/burn.wasm
+  burn/burn.zkey
   manifest.json
 ```
 
@@ -246,42 +246,31 @@ packages/config/public/circuits/
 ```ts
 {
   circuit: "registration" | "transfer" | "mint" | "withdraw" | "burn";
-  file: "registration.wasm" | "registration.zkey" | "...";
+  file: "registration/registration.wasm" | "registration/registration.zkey" | "...";
   sha256: string;
   bytes: number;
-  zkitVersion: string;
-  circomVersion: "2.1.9";
-  upstreamTag: "v0.0.4";
-  builtAt: string;
 }
 ```
 
 Git strategy: neither `contracts/zkit/` nor
 `packages/config/public/circuits/` is committed. CI and local dev regenerate
-with `pnpm hardhat zkit make && pnpm artifacts:export`, then run
-`pnpm artifacts:verify`. Any missing file, byte-size drift, or SHA-256 drift is
-a hard failure.
-
-The manifest records exact byte counts for the current build. Current generated
-sizes with `@solarity/hardhat-zkit` 0.5.18, circom 2.1.9, and upstream v0.0.4:
-
-| Circuit | `.wasm` bytes | `.zkey` bytes |
-| --- | ---: | ---: |
-| registration | 1,882,087 | 1,072,784 |
-| transfer | 2,049,197 | 15,132,544 |
-| mint | 2,734,086 | 10,567,988 |
-| withdraw | 1,985,692 | 7,131,820 |
-| burn | 2,002,607 | 10,138,808 |
+with `pnpm zkit:make && pnpm artifacts:stage`, then run
+`pnpm artifacts:verify`. That command runs the standalone
+`scripts/verify-circuit-manifest.ts` with `STRICT_CIRCUIT_MANIFEST=1` (honoring
+`BENZO_CIRCUIT_PUBLIC_DIR`), so any missing file, missing circuit, duplicate
+entry, byte-size drift, or SHA-256 drift is a hard failure.
 
 Expect the first proof for an operation to pay a network download plus browser
 parse/compile cost for that operation's `.wasm` and `.zkey`. Wallet and console
 flows should lazy-load the operation being performed instead of preloading every
 circuit.
 
-All provers consume this through `@benzo/config`, not hand-written paths. Browser
-apps must expose `packages/config/public/circuits/` at `/circuits`; the
-server-side payroll runner can read the same manifest from the package
-workspace during its build/deploy step.
+All provers consume this through `@benzo/config`, not hand-written paths. The
+operator publishes `packages/config/public/circuits/` at a static edge such as
+`https://artifacts.benzo.space/circuits`; the server-side payroll runner can
+read the same manifest from the package workspace during its build/deploy step.
+The VM/Caddy runbook lives at
+[`../infra/runbooks/circuit-artifacts.md`](../infra/runbooks/circuit-artifacts.md).
 
 The SDK `circuitURLs` object is per operation, with `wasm` and `zkey` URLs:
 
@@ -291,19 +280,19 @@ import { buildCircuitURLs } from "@benzo/config";
 const circuitURLs = buildCircuitURLs("/circuits");
 // {
 //   registration: {
-//     wasm: "/circuits/registration.wasm",
-//     zkey: "/circuits/registration.zkey",
+//     wasm: "/circuits/registration/registration.wasm",
+//     zkey: "/circuits/registration/registration.zkey",
 //   },
 //   transfer: {
-//     wasm: "/circuits/transfer.wasm",
-//     zkey: "/circuits/transfer.zkey",
+//     wasm: "/circuits/transfer/transfer.wasm",
+//     zkey: "/circuits/transfer/transfer.zkey",
 //   },
-//   mint: { wasm: "/circuits/mint.wasm", zkey: "/circuits/mint.zkey" },
+//   mint: { wasm: "/circuits/mint/mint.wasm", zkey: "/circuits/mint/mint.zkey" },
 //   withdraw: {
-//     wasm: "/circuits/withdraw.wasm",
-//     zkey: "/circuits/withdraw.zkey",
+//     wasm: "/circuits/withdraw/withdraw.wasm",
+//     zkey: "/circuits/withdraw/withdraw.zkey",
 //   },
-//   burn: { wasm: "/circuits/burn.wasm", zkey: "/circuits/burn.zkey" },
+//   burn: { wasm: "/circuits/burn/burn.wasm", zkey: "/circuits/burn/burn.zkey" },
 // }
 ```
 
@@ -441,7 +430,8 @@ proof-verification costs increase.
 ```bash
 pnpm compile        # hardhat compile
 pnpm test           # hardhat test
-pnpm artifacts:export # export zkit .wasm/.zkey into @benzo/config
+pnpm artifacts:stage # stage zkit .wasm/.zkey into @benzo/config
+pnpm artifacts:export # backward-compatible alias for artifacts:stage
 pnpm artifacts:verify # verify exported bytes against manifest.json
 pnpm zkit:make      # hardhat zkit make
 pnpm zkit:verifiers # hardhat zkit verifiers

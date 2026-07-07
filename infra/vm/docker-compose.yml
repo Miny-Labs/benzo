@@ -67,6 +67,12 @@ services:
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/sites-enabled:/etc/caddy/sites-enabled:ro
+      # Static root for the optional circuit-artifacts site
+      # (sites-available/circuit-artifacts.caddy). Publish the verified bundle to
+      # this host path (see runbooks/circuit-artifacts.md); a harmless empty
+      # read-only dir when the site is disabled. Without this mount the site's
+      # container-internal root is empty and every artifact URL 404s.
+      - /srv/benzo/public:/srv/benzo/public:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

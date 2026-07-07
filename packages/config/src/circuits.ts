@@ -17,13 +17,9 @@ export type CircuitExtension = (typeof CIRCUIT_EXTENSIONS)[number];
 
 export type CircuitArtifactManifestEntry = {
   circuit: CircuitOperation;
-  file: `${CircuitOperation}.${CircuitExtension}`;
+  file: `${CircuitOperation}/${CircuitOperation}.${CircuitExtension}`;
   sha256: string;
   bytes: number;
-  zkitVersion: string;
-  circomVersion: "2.1.9";
-  upstreamTag: "v0.0.4";
-  builtAt: string;
 };
 
 export type CircuitArtifactManifest = CircuitArtifactManifestEntry[];
@@ -38,8 +34,8 @@ export type CircuitURLs = Record<CircuitOperation, CircuitArtifactURLs>;
 export function circuitArtifactFile(
   circuit: CircuitOperation,
   extension: CircuitExtension,
-): `${CircuitOperation}.${CircuitExtension}` {
-  return `${circuit}.${extension}`;
+): CircuitArtifactManifestEntry["file"] {
+  return `${circuit}/${circuit}.${extension}`;
 }
 
 export function buildCircuitURLs(
