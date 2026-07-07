@@ -16,6 +16,12 @@ const benzonetChainId = 68_420;
 const fujiEncryptedErcAddress = "0x46688f1704a69a6c276cCCB823E36C80787B0FA2";
 const fujiRegistrarAddress = "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0";
 const fujiRpcUrl = "https://api.avax-test.network/ext/bc/C/rpc";
+export const DEFAULT_CORS_ORIGINS = [
+	"https://wallet.benzo.space",
+	"https://console.benzo.space",
+	"http://localhost:5173",
+	"http://localhost:5175",
+];
 
 const envSchema = z
 	.object({
@@ -27,6 +33,37 @@ const envSchema = z
 		BENZONET_CHAIN_ID: z.coerce.number().int().positive().default(43_113),
 		BENZONET_RPC_URL: z.url().default(fujiRpcUrl),
 		CHAIN_ENV: z.enum(["fuji", "benzonet"]).optional(),
+		CORS_ORIGINS: z
+			.string()
+			.trim()
+			.optional()
+			.transform((value) => {
+				if (value === undefined) {
+					return [...DEFAULT_CORS_ORIGINS];
+				}
+
+				const parsed = Array.from(
+					new Set(
+						value
+							.split(",")
+							.map((origin) => origin.trim())
+							.filter((origin) => origin.length > 0)
+							// Normalize to a bare origin so copy-pasted URLs with a
+							// trailing slash or path still match the request Origin header.
+							.map((origin) => {
+								try {
+									return new URL(origin).origin;
+								} catch {
+									return origin;
+								}
+							}),
+					),
+				);
+
+				// An explicitly empty/whitespace CORS_ORIGINS falls back to the
+				// defaults rather than silently disabling all cross-origin access.
+				return parsed.length > 0 ? parsed : [...DEFAULT_CORS_ORIGINS];
+			}),
 		DATABASE_URL: z.url(),
 		DRIP_BALANCE_THRESHOLD_WEI: z
 			.string()
@@ -45,6 +82,10 @@ const envSchema = z
 			.string()
 			.regex(evmAddressPattern, "EERC_REGISTRAR_ADDRESS must be an EVM address")
 			.default(fujiRegistrarAddress),
+		HANDLE_REGISTRY_ADDRESS: z
+			.string()
+			.regex(evmAddressPattern, "HANDLE_REGISTRY_ADDRESS must be an EVM address")
+			.optional(),
 		HOST: z.string().default("0.0.0.0"),
 		INDEXER_CONFIRMATIONS: z.coerce.number().int().nonnegative().default(6),
 		INDEXER_ENABLED: z
@@ -111,12 +152,14 @@ const envSchema = z
 		benzonetRpcUrl: env.BENZONET_RPC_URL,
 		chainEnv:
 			env.CHAIN_ENV ?? (env.BENZONET_CHAIN_ID === fujiChainId ? "fuji" : "benzonet"),
+		corsOrigins: env.CORS_ORIGINS,
 		databaseUrl: env.DATABASE_URL,
 		dripBalanceThresholdWei: BigInt(env.DRIP_BALANCE_THRESHOLD_WEI),
 		dripWei: BigInt(env.DRIP_WEI),
 		eercDeploymentManifest: env.EERC_DEPLOYMENT_MANIFEST,
 		eercEncryptedErcAddress: env.EERC_ENCRYPTED_ERC_ADDRESS.toLowerCase(),
 		eercRegistrarAddress: env.EERC_REGISTRAR_ADDRESS.toLowerCase(),
+		handleRegistryAddress: env.HANDLE_REGISTRY_ADDRESS?.toLowerCase(),
 		host: env.HOST,
 		indexerConfirmations: env.INDEXER_CONFIRMATIONS,
 		indexerEnabled: env.INDEXER_ENABLED,
