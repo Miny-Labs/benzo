@@ -49,8 +49,21 @@ the manifest verification command passes.
 
 ## Caddy Static Site
 
-Enable the optional Caddy site from `infra/vm/caddy/sites-available/` and mount
-the publish directory into the Caddy container at `/srv/benzo/public`.
+Enable the optional Caddy site from `infra/vm/caddy/sites-available/`. The site's
+`root` is a path **inside** the Caddy container, so the host publish directory
+must be bind-mounted into the container at the same path (`/srv/benzo/public`) —
+without the mount the container serves an empty root and every artifact URL 404s.
+Add the volume to the `benzo-caddy` container (alongside its existing
+`Caddyfile`/`/data` mounts):
+
+```bash
+sudo mkdir -p /srv/benzo/public/circuits            # host publish root (rsync target above)
+# add this volume when (re)starting benzo-caddy:
+#   -v /srv/benzo/public:/srv/benzo/public:ro
+# or, in docker compose:
+#   volumes:
+#     - /srv/benzo/public:/srv/benzo/public:ro
+```
 
 ```caddy
 artifacts.benzo.space {
