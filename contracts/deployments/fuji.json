@@ -1,7 +1,7 @@
 {
   "chainId": 43113,
   "contracts": {
-    "handleRegistry": null,
+    "handleRegistry": "0xC74EcCDE4D9A1F48D560de9A96521D28D58B474b",
     "eercConverter": {
       "verifiers": {
         "registration": {

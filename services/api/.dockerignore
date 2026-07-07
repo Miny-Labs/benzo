@@ -3,6 +3,10 @@ dist
 .env
 .env.*
 *.log
+# zk-artifacts are large, generated, and gitignored — excluded on purpose. The
+# runtime image does not ship them; server-side payroll proving (which reads
+# PAYROLL_ZK_ARTIFACT_DIR, default ../zk-artifacts) is documented follow-up work
+# and, when enabled for prod, supplies the artifacts via a mounted volume + env.
 zk-artifacts
 drizzle/meta/_journal.json.bak
 _check.mjs
