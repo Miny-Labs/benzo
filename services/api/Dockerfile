@@ -27,5 +27,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./package.json
 
+# Drop root: the node:22-slim image ships an unprivileged `node` user (uid 1000).
+USER node
+
 EXPOSE 8080
 CMD ["node", "dist/index.js"]
