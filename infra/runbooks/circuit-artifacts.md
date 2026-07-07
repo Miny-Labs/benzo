@@ -30,9 +30,10 @@ The staging script writes the ignored tree at
 ]
 ```
 
-`artifacts:verify` delegates to `@benzo/config` with
-`STRICT_CIRCUIT_MANIFEST=1`, so it checks all ten expected files and their
-hashes before publishing.
+`artifacts:verify` runs the standalone `scripts/verify-circuit-manifest.ts` with
+`STRICT_CIRCUIT_MANIFEST=1` (honoring `BENZO_CIRCUIT_PUBLIC_DIR`), so it checks
+all ten expected files and their hashes before publishing — independently of
+`@benzo/config` (whose `check-config.ts` has a separate look-alike check).
 
 ## Publish
 
@@ -50,11 +51,12 @@ the manifest verification command passes.
 ## Caddy Static Site
 
 Enable the optional Caddy site from `infra/vm/caddy/sites-available/`. The site's
-`root` is a path **inside** the Caddy container, so the host publish directory
-must be bind-mounted into the container at the same path (`/srv/benzo/public`) —
-without the mount the container serves an empty root and every artifact URL 404s.
-Add the volume to the `benzo-caddy` container (alongside its existing
-`Caddyfile`/`/data` mounts):
+`root` is a path **inside** the Caddy container. The compose `caddy` service
+(`infra/vm/docker-compose.yml`) already bind-mounts the host publish root at that
+same path (`/srv/benzo/public:ro`), so with the compose stack you only publish the
+bundle (rsync above) and enable the site. If you instead run Caddy via a bespoke
+`docker run`, add the mount yourself — without it the container serves an empty
+root and every artifact URL 404s:
 
 ```bash
 sudo mkdir -p /srv/benzo/public/circuits            # host publish root (rsync target above)

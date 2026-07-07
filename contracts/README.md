@@ -255,8 +255,9 @@ packages/config/public/circuits/
 Git strategy: neither `contracts/zkit/` nor
 `packages/config/public/circuits/` is committed. CI and local dev regenerate
 with `pnpm zkit:make && pnpm artifacts:stage`, then run
-`pnpm artifacts:verify`. That command reuses the `@benzo/config` validator with
-`STRICT_CIRCUIT_MANIFEST=1`, so any missing file, missing circuit, duplicate
+`pnpm artifacts:verify`. That command runs the standalone
+`scripts/verify-circuit-manifest.ts` with `STRICT_CIRCUIT_MANIFEST=1` (honoring
+`BENZO_CIRCUIT_PUBLIC_DIR`), so any missing file, missing circuit, duplicate
 entry, byte-size drift, or SHA-256 drift is a hard failure.
 
 Expect the first proof for an operation to pay a network download plus browser
