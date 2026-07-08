@@ -63,6 +63,9 @@ export type TreasuryDepositSubmissionInput = {
 	amountPCT: PoseidonPCT;
 	confirmations?: number;
 	eoaPrivateKey: Hex;
+	// Invoked with the deposit tx hash the moment it is broadcast, before the
+	// confirmation wait, so the ledger can track a broadcast-but-unconfirmed tx.
+	onBroadcast?: (txHash: Hex) => void | Promise<void>;
 	tokenAddress: string;
 };
 
@@ -480,6 +483,10 @@ export function createViemPayrollSubmitter(
 				chain: null,
 				functionName: "deposit",
 			});
+			// Surface the deposit hash before the confirmation wait: if that wait
+			// fails, the tx may still land, so the ledger must persist the hash now
+			// rather than only after `confirmed`.
+			await input.onBroadcast?.(txHash);
 			await waitForReceipt(
 				txHash,
 				confirmations,

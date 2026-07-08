@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
-import { getAddress } from "viem";
+import { getAddress, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
 import type { ApiConfig, TreasuryFundingToken } from "../config.js";
@@ -394,6 +394,10 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				})
 				.returning({ id: treasuryDeposits.id });
 
+			// Captured the moment the deposit tx is broadcast (before the
+			// confirmation wait). Once set, the tx may have landed on-chain, so a
+			// later failure must never mark the row `failed`.
+			let broadcastTxHash: Hex | null = null;
 			let result: TreasuryDepositSubmissionResult;
 			try {
 				result = await options.payrollSubmitter.submitTreasuryDeposit({
@@ -401,9 +405,35 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					amountPCT: encryptAmountPct(amount, eercAccount.publicKey),
 					confirmations: options.config.indexerConfirmations,
 					eoaPrivateKey,
+					onBroadcast: async (h) => {
+						broadcastTxHash = h;
+						await db
+							.update(treasuryDeposits)
+							.set({ txHash: h.toLowerCase(), updatedAt: new Date() })
+							.where(eq(treasuryDeposits.id, pending!.id));
+					},
 					tokenAddress: token.address,
 				});
 			} catch (error) {
+				if (broadcastTxHash) {
+					// The deposit tx was broadcast but its confirmation wait failed
+					// (RPC timeout / transient error); it may still settle on-chain.
+					// Leave the row `submitted` with the persisted hash — never
+					// `failed` — so a follow-up reconciler/poller (out of scope) can
+					// settle it and no moved money is lost.
+					request.log.warn(
+						{ err: error, orgId, txHash: broadcastTxHash },
+						"treasury_deposit_broadcast_unconfirmed",
+					);
+					return reply.code(202).send({
+						amount: amount.toString(),
+						source: "direct",
+						status: "submitted",
+						token: token.token,
+						tokenId: token.tokenId.toString(),
+						txHash: broadcastTxHash,
+					});
+				}
 				await db
 					.update(treasuryDeposits)
 					.set({ status: "failed", updatedAt: new Date() })

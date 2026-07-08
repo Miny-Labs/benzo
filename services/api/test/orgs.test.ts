@@ -942,6 +942,84 @@ describe("@benzo/api orgs", () => {
 		}
 	});
 
+	it("keeps the deposit submitted with its hash and returns 202 when only the confirmation wait fails", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const txHash = `0x${"0a".repeat(32)}` as Hex;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit(input) {
+					// The tx was broadcast (hash surfaced via onBroadcast) but the
+					// confirmation wait fails — the tx may still land on-chain.
+					await input.onBroadcast?.(txHash);
+					throw new Error("treasury_deposit_confirmation_timeout");
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d4".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: {
+					name: "Unconfirmed Co",
+					slug: `unconfirmed-${randomUUID()}`,
+				},
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const deposited = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: {
+					amount: "1000000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
+			});
+			// Broadcast-but-unconfirmed: 202, not 502, and the hash is returned.
+			expect(deposited.statusCode).toBe(202);
+			expect(deposited.json()).toMatchObject({
+				amount: "1000000",
+				source: "direct",
+				status: "submitted",
+				token: "usdc",
+				tokenId: "1",
+				txHash,
+			});
+
+			// The row is left `submitted` with the persisted hash for later
+			// reconciliation — never `failed`, so no moved money is lost.
+			const [row] = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId))
+				.limit(1);
+			expect(row).toMatchObject({
+				status: "submitted",
+				txHash: txHash.toLowerCase(),
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 	it("deduplicates a repeated idempotencyKey without a second submission", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
