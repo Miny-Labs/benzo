@@ -63,7 +63,7 @@ describe("BenzoOnrampHelper", () => {
 
 		await expect(
 			helper
-				.connect(relayer)
+				.connect(owner)
 				.onrampWithPermit(
 					owner.address,
 					await token.getAddress(),
@@ -129,7 +129,7 @@ describe("BenzoOnrampHelper", () => {
 
 		await expect(
 			helper
-				.connect(relayer)
+				.connect(owner)
 				.onrampWithPermit(
 					owner.address,
 					await token.getAddress(),
@@ -228,6 +228,21 @@ describe("BenzoOnrampHelper", () => {
 			),
 		).to.be.revertedWithCustomError(helper, "InvalidAmount");
 		await expect(
+			helper
+				.connect(relayer)
+				.onrampWithPermit(
+					owner.address,
+					await token.getAddress(),
+					1n,
+					0n,
+					DEFAULT_CCTP_FAST_FINALITY_THRESHOLD,
+					"0x",
+					permit,
+				),
+		)
+			.to.be.revertedWithCustomError(helper, "OnlyOwnerMayOnramp")
+			.withArgs(owner.address, relayer.address);
+		await expect(
 			helper.onrampWithPermit(
 				owner.address,
 				await token.getAddress(),
@@ -252,7 +267,10 @@ async function signPermit({
 	spender: string;
 	value: bigint;
 }) {
-	const deadline = BigInt(Math.floor(Date.now() / 1000) + 3_600);
+	// Derive the deadline from chain time (not wall-clock): prior tests can advance
+	// the hardhat block timestamp past Date.now(), which would make the permit expire.
+	const latestBlock = await ethers.provider.getBlock("latest");
+	const deadline = BigInt((latestBlock?.timestamp ?? 0) + 3_600);
 	const nonce = await token.nonces(owner.address);
 	const network = await ethers.provider.getNetwork();
 	const signature = await owner.signTypedData(

@@ -40,6 +40,7 @@ contract BenzoOnrampHelper {
     error InvalidTokenMessenger(address tokenMessenger);
     error InvalidDestinationRouter(address destinationRouter);
     error InvalidOwner(address owner);
+    error OnlyOwnerMayOnramp(address owner, address caller);
     error InvalidBurnToken(address burnToken);
     error InvalidAmount();
     error InvalidHookData();
@@ -73,6 +74,14 @@ contract BenzoOnrampHelper {
     ) external returns (uint64 nonce) {
         if (owner == address(0)) {
             revert InvalidOwner(owner);
+        }
+        // The onramp is the owner's own source-chain action (they hold the funds
+        // and pay gas). Requiring the caller to be the owner binds pkX/pkY, maxFee,
+        // and minFinalityThreshold to the owner's own transaction, so a mempool
+        // front-runner holding the permit signature can't re-submit with different
+        // hook/fee params. This stays one-tap: the permit + burn happen in one call.
+        if (msg.sender != owner) {
+            revert OnlyOwnerMayOnramp(owner, msg.sender);
         }
         if (burnToken == address(0)) {
             revert InvalidBurnToken(burnToken);
