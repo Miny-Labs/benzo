@@ -170,19 +170,18 @@ const envSchema = z
 			});
 		}
 
-		// A deployed API (NODE_ENV=production) must use a real database on ANY tier.
-		// NODE_ENV=production is legitimate on a staging-tier network — the live
-		// staging API runs NODE_ENV=production (hardened) against Fuji — so the tier
-		// is NOT constrained here; the mainnet-only constraints live under the
-		// production-tier guard below.
+		// A deployed API must use a real database. This fires for NODE_ENV=production
+		// on ANY tier (hardened staging on Fuji is legitimate) AND for the production
+		// tier regardless of NODE_ENV — so a mainnet deploy that forgot to set
+		// NODE_ENV=production can't slip a localhost database through.
 		if (
-			env.NODE_ENV === "production" &&
+			(env.NODE_ENV === "production" || tier === "production") &&
 			isLocalDatabaseUrl(env.DATABASE_URL)
 		) {
 			ctx.addIssue({
 				code: "custom",
 				message:
-					"DATABASE_URL must not point at a local database when NODE_ENV=production",
+					"DATABASE_URL must not point at a local database in a deployed (production) environment",
 				path: ["DATABASE_URL"],
 			});
 		}

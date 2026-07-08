@@ -163,7 +163,7 @@ describe("loadConfig", () => {
 				// baseEnv DATABASE_URL points at 127.0.0.1 → rejected in production.
 				NODE_ENV: "production",
 			}),
-		).toThrow("must not point at a local database when NODE_ENV=production");
+		).toThrow("must not point at a local database");
 	});
 
 	it("rejects a testnet RPC host on a production-tier network", () => {

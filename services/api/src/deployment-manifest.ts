@@ -192,9 +192,15 @@ function assertManifestMatches(
 	chainId: number,
 	manifestPath: string,
 ): void {
+	// Require network + chainId — a manifest missing them must fail fast rather
+	// than silently pass (this drives on-chain address resolution for real txs,
+	// and there is intentionally no fallback).
 	const network = readStringPath(manifest, ["network"]);
 
-	if (network && network !== chainEnv) {
+	if (!network) {
+		throw new Error(`eerc_manifest_missing_network:${manifestPath}`);
+	}
+	if (network !== chainEnv) {
 		throw new Error(
 			`eerc_manifest_network_mismatch:${manifestPath}:${network}:${chainEnv}`,
 		);
@@ -202,7 +208,10 @@ function assertManifestMatches(
 
 	const manifestChainId = readNumberPath(manifest, ["chainId"]);
 
-	if (manifestChainId !== null && manifestChainId !== chainId) {
+	if (manifestChainId === null) {
+		throw new Error(`eerc_manifest_missing_chain_id:${manifestPath}`);
+	}
+	if (manifestChainId !== chainId) {
 		throw new Error(
 			`eerc_manifest_chain_id_mismatch:${manifestPath}:${manifestChainId}:${chainId}`,
 		);
