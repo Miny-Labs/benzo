@@ -63,9 +63,10 @@ const provisionTreasurySchema = z.object({
 
 const treasuryDepositSchema = z.object({
 	amount: z.string().trim().regex(/^[1-9][0-9]*$/),
-	// Optional dedupe token: a retry carrying a previously seen key returns the
-	// original deposit instead of broadcasting a second approve/deposit.
-	idempotencyKey: z.string().trim().min(1).max(255).optional(),
+	// Required dedupe token: a money-movement deposit must be safe to retry, so
+	// callers always supply a key. A retry carrying a previously seen key returns
+	// the original deposit instead of broadcasting a second approve/deposit.
+	idempotencyKey: z.string().trim().min(1).max(255),
 	token: z.enum(["usdc", "eurc"]),
 });
 
@@ -347,28 +348,26 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 			}
 
 			const amount = BigInt(body.data.amount);
-			const idempotencyKey = body.data.idempotencyKey ?? null;
+			const idempotencyKey = body.data.idempotencyKey;
 
 			// Idempotency: a retry reusing a key we've already recorded for this org
 			// returns the original record instead of broadcasting a second deposit.
-			if (idempotencyKey) {
-				const existing = await db.query.treasuryDeposits.findFirst({
-					where: (table, { and: andOp, eq: eqOp }) =>
-						andOp(
-							eqOp(table.orgId, orgId),
-							eqOp(table.idempotencyKey, idempotencyKey),
-						),
+			const existing = await db.query.treasuryDeposits.findFirst({
+				where: (table, { and: andOp, eq: eqOp }) =>
+					andOp(
+						eqOp(table.orgId, orgId),
+						eqOp(table.idempotencyKey, idempotencyKey),
+					),
+			});
+			if (existing) {
+				return reply.code(200).send({
+					amount: existing.amount,
+					source: existing.source,
+					status: existing.status,
+					token: existing.token,
+					tokenId: existing.tokenId.toString(),
+					txHash: existing.txHash,
 				});
-				if (existing) {
-					return reply.code(200).send({
-						amount: existing.amount,
-						source: existing.source,
-						status: existing.status,
-						token: existing.token,
-						tokenId: existing.tokenId.toString(),
-						txHash: existing.txHash,
-					});
-				}
 			}
 
 			const eoaPrivateKey = unsealString(

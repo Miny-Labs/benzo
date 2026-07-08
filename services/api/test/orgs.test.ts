@@ -708,7 +708,11 @@ describe("@benzo/api orgs", () => {
 				headers: { cookie: operatorCookie },
 				method: "POST",
 				url: `/orgs/${orgId}/treasury/deposit`,
-				payload: { amount: "2500000", token: "usdc" },
+				payload: {
+					amount: "2500000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
 			});
 			expect(operatorDeposit.statusCode).toBe(403);
 
@@ -716,15 +720,29 @@ describe("@benzo/api orgs", () => {
 				headers: { cookie: ownerCookie },
 				method: "POST",
 				url: `/orgs/${orgId}/treasury/deposit`,
-				payload: { amount: "0", token: "usdc" },
+				payload: { amount: "0", idempotencyKey: randomUUID(), token: "usdc" },
 			});
 			expect(invalidDeposit.statusCode).toBe(400);
+
+			// A money-movement deposit must be safe to retry, so the idempotency key
+			// is mandatory: a request omitting it is rejected before any broadcast.
+			const missingKeyDeposit = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "2500000", token: "usdc" },
+			});
+			expect(missingKeyDeposit.statusCode).toBe(400);
 
 			const deposited = await app.inject({
 				headers: { cookie: ownerCookie },
 				method: "POST",
 				url: `/orgs/${orgId}/treasury/deposit`,
-				payload: { amount: "2500000", token: "usdc" },
+				payload: {
+					amount: "2500000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
 			});
 			expect(deposited.statusCode).toBe(201);
 			expect(deposited.json()).toMatchObject({
@@ -836,7 +854,11 @@ describe("@benzo/api orgs", () => {
 				headers: { cookie: ownerCookie },
 				method: "POST",
 				url: `/orgs/${orgId}/treasury/deposit`,
-				payload: { amount: "1000000", token: "usdc" },
+				payload: {
+					amount: "1000000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
 			});
 			expect(deposited.statusCode).toBe(201);
 			// The row existed as `submitted` while the tx was broadcasting...
@@ -895,7 +917,11 @@ describe("@benzo/api orgs", () => {
 				headers: { cookie: ownerCookie },
 				method: "POST",
 				url: `/orgs/${orgId}/treasury/deposit`,
-				payload: { amount: "1000000", token: "usdc" },
+				payload: {
+					amount: "1000000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
 			});
 			expect(deposited.statusCode).toBe(502);
 			expect(deposited.json()).toMatchObject({
