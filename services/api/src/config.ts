@@ -170,27 +170,34 @@ const envSchema = z
 			});
 		}
 
-		if (env.NODE_ENV === "production") {
-			if (tier !== "production") {
-				ctx.addIssue({
-					code: "custom",
-					message: `NODE_ENV=production requires a production-tier network (CHAIN_ENV=avalanche); got CHAIN_ENV=${chainEnv} (${tier} tier)`,
-					path: ["CHAIN_ENV"],
-				});
-			}
-
-			if (isLocalDatabaseUrl(env.DATABASE_URL)) {
-				ctx.addIssue({
-					code: "custom",
-					message:
-						"DATABASE_URL must not point at a local database in production",
-					path: ["DATABASE_URL"],
-				});
-			}
+		// A deployed API (NODE_ENV=production) must use a real database on ANY tier.
+		// NODE_ENV=production is legitimate on a staging-tier network — the live
+		// staging API runs NODE_ENV=production (hardened) against Fuji — so the tier
+		// is NOT constrained here; the mainnet-only constraints live under the
+		// production-tier guard below.
+		if (
+			env.NODE_ENV === "production" &&
+			isLocalDatabaseUrl(env.DATABASE_URL)
+		) {
+			ctx.addIssue({
+				code: "custom",
+				message:
+					"DATABASE_URL must not point at a local database when NODE_ENV=production",
+				path: ["DATABASE_URL"],
+			});
 		}
 
-		// A production-tier network must never talk to a testnet chain/RPC.
+		// A production-tier (mainnet) network must be hardened and must never talk
+		// to a testnet chain/RPC.
 		if (tier === "production") {
+			if (env.NODE_ENV !== "production") {
+				ctx.addIssue({
+					code: "custom",
+					message: `production tier (CHAIN_ENV=${chainEnv}) requires NODE_ENV=production; got NODE_ENV=${env.NODE_ENV}`,
+					path: ["NODE_ENV"],
+				});
+			}
+
 			if (isTestnetChainId(env.BENZONET_CHAIN_ID)) {
 				ctx.addIssue({
 					code: "custom",

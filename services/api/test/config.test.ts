@@ -125,16 +125,31 @@ describe("loadConfig", () => {
 		).toThrow("eerc_manifest_network_mismatch");
 	});
 
-	it("rejects NODE_ENV=production on a staging-tier network", () => {
+	it("allows NODE_ENV=production on a staging-tier network (hardened staging)", () => {
+		// The live staging API runs NODE_ENV=production against Fuji; that must boot.
+		const config = loadConfig({
+			...baseEnv,
+			API_DOMAIN: "api.benzo.space",
+			CHAIN_ENV: "fuji",
+			DATABASE_URL: "postgres://benzo:secret@db.prod.example:5432/benzo",
+			NODE_ENV: "production",
+		});
+		expect(config.tier).toBe("staging");
+		expect(config.nodeEnv).toBe("production");
+	});
+
+	it("requires NODE_ENV=production on a production-tier network", () => {
 		expect(() =>
 			loadConfig({
 				...baseEnv,
 				API_DOMAIN: "api.benzo.space",
-				CHAIN_ENV: "fuji",
+				BENZONET_CHAIN_ID: "43114",
+				BENZONET_RPC_URL: "https://api.avax.network/ext/bc/C/rpc",
+				CHAIN_ENV: "avalanche",
 				DATABASE_URL: "postgres://benzo:secret@db.prod.example:5432/benzo",
-				NODE_ENV: "production",
+				NODE_ENV: "test",
 			}),
-		).toThrow("requires a production-tier network");
+		).toThrow("requires NODE_ENV=production");
 	});
 
 	it("rejects a local DATABASE_URL in production", () => {
@@ -148,7 +163,7 @@ describe("loadConfig", () => {
 				// baseEnv DATABASE_URL points at 127.0.0.1 → rejected in production.
 				NODE_ENV: "production",
 			}),
-		).toThrow("must not point at a local database in production");
+		).toThrow("must not point at a local database when NODE_ENV=production");
 	});
 
 	it("rejects a testnet RPC host on a production-tier network", () => {
