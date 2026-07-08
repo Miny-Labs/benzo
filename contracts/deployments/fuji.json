@@ -17,7 +17,8 @@
           "blockNumber": 56818085,
           "verified": true,
           "snowtraceUrl": "https://testnet.snowtrace.io/address/0x4250bD1eb89Ef78469f94da2fE7738DCdcb09Ef7",
-          "verifiedAt": "2026-07-06T10:34:20.499Z"
+          "verifiedAt": "2026-07-06T10:34:20.499Z",
+          "constructorArguments": []
         },
         "mint": {
           "address": "0x0fE395F5E97Ee02c961DE3d035E5De2D9019D15E",
@@ -26,7 +27,8 @@
           "blockNumber": 56818198,
           "verified": true,
           "snowtraceUrl": "https://testnet.snowtrace.io/address/0x0fE395F5E97Ee02c961DE3d035E5De2D9019D15E",
-          "verifiedAt": "2026-07-06T10:34:20.499Z"
+          "verifiedAt": "2026-07-06T10:34:20.499Z",
+          "constructorArguments": []
         },
         "transfer": {
           "address": "0x4bF3DBD3fF57943dC402ec1F280589E1032A32A5",
@@ -35,7 +37,8 @@
           "blockNumber": 56818199,
           "verified": true,
           "snowtraceUrl": "https://testnet.snowtrace.io/address/0x4bF3DBD3fF57943dC402ec1F280589E1032A32A5",
-          "verifiedAt": "2026-07-06T10:34:20.499Z"
+          "verifiedAt": "2026-07-06T10:34:20.499Z",
+          "constructorArguments": []
         },
         "withdraw": {
           "address": "0x7E194cb8A575d23f74EEDbEf1b519B281B29c30e",
@@ -44,7 +47,8 @@
           "blockNumber": 56818201,
           "verified": true,
           "snowtraceUrl": "https://testnet.snowtrace.io/address/0x7E194cb8A575d23f74EEDbEf1b519B281B29c30e",
-          "verifiedAt": "2026-07-06T10:34:20.499Z"
+          "verifiedAt": "2026-07-06T10:34:20.499Z",
+          "constructorArguments": []
         },
         "burn": {
           "address": "0x1BDfD6cB772D5F882622BaFD7B19898Da9F61d34",
@@ -53,7 +57,8 @@
           "blockNumber": 56818202,
           "verified": true,
           "snowtraceUrl": "https://testnet.snowtrace.io/address/0x1BDfD6cB772D5F882622BaFD7B19898Da9F61d34",
-          "verifiedAt": "2026-07-06T10:34:20.499Z"
+          "verifiedAt": "2026-07-06T10:34:20.499Z",
+          "constructorArguments": []
         }
       },
       "registrar": {
@@ -63,53 +68,71 @@
         "blockNumber": 56818203,
         "verified": true,
         "snowtraceUrl": "https://testnet.snowtrace.io/address/0x9a63FEa9851097DBAf3757b636217fdde50ABaF0",
-        "verifiedAt": "2026-07-06T10:34:20.499Z"
-      },
-      "testUSDC": {
-        "address": "0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f",
-        "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
-        "transactionHash": "0x3070270334c7fcc338b817688fef474225314e096bf75f6e89be97fe81c0335d",
-        "blockNumber": 56818205,
-        "verified": true,
-        "snowtraceUrl": "https://testnet.snowtrace.io/address/0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f",
-        "verifiedAt": "2026-07-06T10:34:20.499Z"
+        "verifiedAt": "2026-07-06T10:34:20.499Z",
+        "constructorArguments": [
+          "0x4250bD1eb89Ef78469f94da2fE7738DCdcb09Ef7"
+        ]
       },
       "libraries": {
         "babyJubJub": {
-          "address": "0xa1d0f50D5f479a2aeC3C67A38a6fa5c735CcC313",
+          "address": "0x04513c37Fca1FBABA5Bb6Ff9547658b00B35697B",
           "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
-          "transactionHash": "0x877970e122ed5e9092e58466909ab1133d40fbfcec25d3515a0e517a2c6780c8",
-          "blockNumber": 56818206,
-          "verified": true,
-          "snowtraceUrl": "https://testnet.snowtrace.io/address/0xa1d0f50D5f479a2aeC3C67A38a6fa5c735CcC313",
-          "verifiedAt": "2026-07-06T10:34:20.499Z"
+          "transactionHash": "0x95e18246af6ae699e9d50b16677b6081829c6ee7046b4f129091ece112e32465",
+          "blockNumber": 56879299,
+          "verified": false,
+          "snowtraceUrl": "https://testnet.snowtrace.io/address/0x04513c37Fca1FBABA5Bb6Ff9547658b00B35697B",
+          "constructorArguments": []
         }
       },
       "encryptedERC": {
-        "address": "0x46688f1704a69a6c276cCCB823E36C80787B0FA2",
+        "address": "0x9E16eD3B799541B4929f7E2014904C65E81035b1",
         "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
-        "transactionHash": "0xdbaf5b9f561efecc832ca3fa5939db5ff41e4f5135b402304408f54ce968762b",
-        "blockNumber": 56818207,
-        "verified": true,
-        "snowtraceUrl": "https://testnet.snowtrace.io/address/0x46688f1704a69a6c276cCCB823E36C80787B0FA2",
-        "verifiedAt": "2026-07-06T10:34:20.499Z"
-      },
-      "wrappedToken": {
-        "address": "0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f",
-        "decimals": 6,
-        "symbol": "tUSDC"
+        "transactionHash": "0xe555de068647f46541cb8726cf7c83d6f79db25b2c07a3218d5868815b846bbf",
+        "blockNumber": 56879304,
+        "verified": false,
+        "snowtraceUrl": "https://testnet.snowtrace.io/address/0x9E16eD3B799541B4929f7E2014904C65E81035b1",
+        "constructorArguments": [
+          {
+            "registrar": "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0",
+            "isConverter": true,
+            "name": "Benzo Private USDC",
+            "symbol": "bUSDC",
+            "decimals": 6,
+            "mintVerifier": "0x0fE395F5E97Ee02c961DE3d035E5De2D9019D15E",
+            "withdrawVerifier": "0x7E194cb8A575d23f74EEDbEf1b519B281B29c30e",
+            "transferVerifier": "0x4bF3DBD3fF57943dC402ec1F280589E1032A32A5",
+            "burnVerifier": "0x1BDfD6cB772D5F882622BaFD7B19898Da9F61d34"
+          }
+        ],
+        "libraries": {
+          "contracts/eerc/libraries/BabyJubJub.sol:BabyJubJub": "0x04513c37Fca1FBABA5Bb6Ff9547658b00B35697B"
+        }
       },
       "auditor": {
-        "address": "0xa0C5455eF9A7D71e9B5b3ce8Cf3C7E06D856bEDB",
+        "address": "0x13b8d12414dd468a9eCbA24d0a162C17affd6D32",
         "publicKey": [
-          "14364545489025837921132814811087340315814711916725125522058321586402130033374",
-          "20925574508971738553590624529913342951840891855753600850246458133098606857912"
+          "810175672526294575885475549934594721208819041472620693405191486263892615602",
+          "1402565102251890881163208877444069126319030795019609887052654837399215250328"
         ],
-        "registrationTxHash": "0x8bf64f3bd460ebcf3c84cee4cf23c412c334fce563206c53cb0f1e7a15cae34e",
-        "setAuditorPublicKeyTxHash": "0x5716a12c99f9f2c44d5690b1c0d2c6b5922f2e412545b14e8bed3390a61fe0d6",
-        "setAuditorPublicKeyBlockNumber": 56818218,
+        "registrationTxHash": "0xb6ff75a2e55abeb3e22a65b1ee2dc64bddb670d17ed948366706f461c90b9bb2",
+        "setAuditorPublicKeyTxHash": "0x6f5d68c05082ce1f7bfb3cc57a1dd533d1ba83f11c3ab7cbd75dfe4b2ae05dfa",
+        "setAuditorPublicKeyBlockNumber": 56879309,
         "keyFile": ".auditor-key.local.json",
         "custodyNote": "Operator must custody the BabyJubJub privateKey in contracts/.auditor-key.local.json until M3 sealed storage imports it."
+      },
+      "tokens": {
+        "USDC": {
+          "address": "0x5425890298aed601595a70AB815c96711a31Bc65",
+          "decimals": 6,
+          "tokenId": 1,
+          "symbol": "USDC"
+        },
+        "EURC": {
+          "address": "0x5E44db7996c682E92a960b65AC713a54AD815c6B",
+          "decimals": 6,
+          "tokenId": 2,
+          "symbol": "EURC"
+        }
       }
     }
   },

@@ -6,6 +6,7 @@ import {
 	type EercAccount,
 	createEercAccount,
 	deserializeEercAccount,
+	encryptAmountPCT,
 	registerEercAccount,
 	serializeEercAccount,
 } from "./eerc-crypto";
@@ -19,6 +20,70 @@ const DEPLOYMENTS_DIR = path.join(CONTRACTS_WORKSPACE, "deployments");
 const AUDITOR_KEY_PATH = path.join(CONTRACTS_WORKSPACE, ".auditor-key.local.json");
 const VERIFY_TIMEOUT_MS = 90_000;
 const EERC_KEY = "eercConverter";
+
+// Converter mode assigns tokenIds by DEPOSIT ORDER (no constructor token, no admin
+// setter), so the wrapped token is not a constructor arg. Each network declares
+// which ERC20(s) its converter wraps and in what order; a deterministic bootstrap
+// (registerConverterTokens) deposits them in that order to pin USDC -> tokenId 1,
+// EURC -> tokenId 2, etc.
+type WrappedTokenMode = "existing" | "deploy-test";
+type WrappedTokenSpec = {
+	mode: WrappedTokenMode;
+	symbol: string;
+	decimals: number;
+	// Required when mode === "existing" (a real, already-deployed ERC20).
+	address?: string;
+};
+type NetworkDeployConfig = {
+	eercName: string;
+	eercSymbol: string;
+	eercDecimals: number;
+	wrappedTokens: WrappedTokenSpec[];
+};
+
+// Canonical Circle stablecoin addresses mirror packages/config/src/tokens.ts (one
+// logical registry, each verified on-chain). Defined here so the hardhat deploy
+// stays self-contained — the contracts workspace does not import the ESM
+// @benzo/config package. On fuji the converter wraps REAL Circle USDC + EURC; on
+// benzonet/local it mints a TestUSDC. USDC MUST be first so it becomes tokenId 1.
+const FUJI_USDC = "0x5425890298aed601595a70AB815c96711a31Bc65";
+const FUJI_EURC = "0x5E44db7996c682E92a960b65AC713a54AD815c6B";
+const TEST_NETWORK_CONFIG: NetworkDeployConfig = {
+	eercName: "Benzo Private tUSDC",
+	eercSymbol: "btUSDC",
+	eercDecimals: 6,
+	wrappedTokens: [{ mode: "deploy-test", symbol: "tUSDC", decimals: 6 }],
+};
+const NETWORK_DEPLOY_CONFIG: Record<string, NetworkDeployConfig> = {
+	fuji: {
+		eercName: "Benzo Private USDC",
+		eercSymbol: "bUSDC",
+		eercDecimals: 6,
+		wrappedTokens: [
+			{ mode: "existing", symbol: "USDC", decimals: 6, address: FUJI_USDC },
+			{ mode: "existing", symbol: "EURC", decimals: 6, address: FUJI_EURC },
+		],
+	},
+	benzonet: TEST_NETWORK_CONFIG,
+	hardhat: TEST_NETWORK_CONFIG,
+	localhost: TEST_NETWORK_CONFIG,
+};
+
+const resolveNetworkConfig = (name: string): NetworkDeployConfig => {
+	const config = NETWORK_DEPLOY_CONFIG[name];
+	if (config === undefined) {
+		throw new Error(`No NetworkDeployConfig for network "${name}"`);
+	}
+	return config;
+};
+
+// Fixed seed for the throwaway bootstrap eERC account, so re-running the deploy
+// re-derives the SAME key and registration/deposit are idempotent. This account
+// only exists to establish tokenId order; it is never a real user.
+const BOOTSTRAP_EERC_SEED =
+	0x62656e7a6f2d626f6f7473747261702d746f6b656e2d6f72646572n; // "benzo-bootstrap-token-order"
+// Dust deposited per token to assign its tokenId (0.001 of a 6-decimal token).
+const BOOTSTRAP_DEPOSIT_UNITS = 1_000n;
 
 type DeploymentJsonValue =
 	| null
@@ -452,13 +517,13 @@ export const deployTestUSDC = async (context: DeployContext) =>
 	});
 
 export const deployEncryptedERC = async (context: DeployContext) => {
+	const netConfig = resolveNetworkConfig(network.name);
 	const eercDeployment = getEercDeployment(context.deployments);
 	const registrar = getPath(eercDeployment, ["registrar"]);
 	const mintVerifier = getPath(eercDeployment, ["verifiers", "mint"]);
 	const transferVerifier = getPath(eercDeployment, ["verifiers", "transfer"]);
 	const withdrawVerifier = getPath(eercDeployment, ["verifiers", "withdraw"]);
 	const burnVerifier = getPath(eercDeployment, ["verifiers", "burn"]);
-	const testUSDC = getPath(eercDeployment, ["testUSDC"]);
 
 	for (const [name, record] of Object.entries({
 		registrar,
@@ -466,9 +531,21 @@ export const deployEncryptedERC = async (context: DeployContext) => {
 		transferVerifier,
 		withdrawVerifier,
 		burnVerifier,
-		testUSDC,
 	})) {
 		await requireDeployedRecord(record, `${name} (required by EncryptedERC)`);
+	}
+
+	// The wrapped token is not a constructor arg (converter mode registers tokens
+	// on first deposit), but an 'existing' token must actually have bytecode on
+	// this network — otherwise a deposit reverts deep inside with an opaque error.
+	for (const token of netConfig.wrappedTokens) {
+		if (token.mode !== "existing") {
+			continue;
+		}
+		if (token.address === undefined) {
+			throw new Error(`wrapped token ${token.symbol} is 'existing' but has no address`);
+		}
+		await requireDeployedRecord({ address: token.address }, `${token.symbol} wrapped token`);
 	}
 
 	const babyJubJub = await deployContract({
@@ -479,9 +556,9 @@ export const deployEncryptedERC = async (context: DeployContext) => {
 	const params = {
 		registrar: (registrar as DeploymentRecord).address,
 		isConverter: true,
-		name: "Benzo Private tUSDC",
-		symbol: "btUSDC",
-		decimals: 6,
+		name: netConfig.eercName,
+		symbol: netConfig.eercSymbol,
+		decimals: netConfig.eercDecimals,
 		mintVerifier: (mintVerifier as DeploymentRecord).address,
 		withdrawVerifier: (withdrawVerifier as DeploymentRecord).address,
 		transferVerifier: (transferVerifier as DeploymentRecord).address,
@@ -498,13 +575,9 @@ export const deployEncryptedERC = async (context: DeployContext) => {
 		pathSegments: ["encryptedERC"],
 	});
 
-	setPath(eercDeployment, ["wrappedToken"], {
-		address: (testUSDC as DeploymentRecord).address,
-		decimals: 6,
-		symbol: "tUSDC",
-	});
-	await writeDeployments(context);
-
+	// The wrapped-token registry (tokens + their deposit-order tokenIds) is written
+	// by registerConverterTokens() after the auditor is set and the deterministic
+	// bootstrap deposits run.
 	return encryptedERC;
 };
 
@@ -648,17 +721,192 @@ export const configureAuditor = async (context: DeployContext) => {
 	console.log(`Auditor key set: ${auditorSigner.address}`);
 };
 
+const ERC20_MIN_ABI = [
+	"function approve(address spender, uint256 value) returns (bool)",
+	"function balanceOf(address account) view returns (uint256)",
+];
+
+// Deterministic converter-token bootstrap: deposits each configured wrapped token
+// IN ORDER from a fixed-seed throwaway account so tokenIds bind predictably
+// (USDC -> 1, EURC -> 2). tokenIds are assigned by deposit order with no admin
+// setter, so this is the only lever. Idempotent: skips a token that already has a
+// tokenId, and refuses to append if the converter already carries out-of-order
+// tokens (protects against running against a stale converter).
+export const registerConverterTokens = async (context: DeployContext) => {
+	const netConfig = resolveNetworkConfig(network.name);
+	const eercDeployment = getEercDeployment(context.deployments);
+	const encRecord = await requireDeployedRecord(
+		getPath(eercDeployment, ["encryptedERC"]),
+		"EncryptedERC (required to register tokens)",
+	);
+	const registrarRecord = await requireDeployedRecord(
+		getPath(eercDeployment, ["registrar"]),
+		"Registrar (required to register tokens)",
+	);
+	const encryptedERC = await ethers.getContractAt("EncryptedERC", encRecord.address);
+	const registrar = await ethers.getContractAt("Registrar", registrarRecord.address);
+
+	if (!(await encryptedERC.isAuditorKeySet())) {
+		throw new Error("Auditor must be set before bootstrapping converter tokens");
+	}
+
+	const resolveTokenAddress = (token: WrappedTokenSpec): string => {
+		if (token.mode === "existing") {
+			if (token.address === undefined) {
+				throw new Error(`token ${token.symbol} is 'existing' but has no address`);
+			}
+			return token.address;
+		}
+		const testUSDC = getPath(eercDeployment, ["testUSDC"]);
+		if (!isDeploymentRecord(testUSDC)) {
+			throw new Error("deploy-test token requires a deployed testUSDC record");
+		}
+		return testUSDC.address;
+	};
+
+	const tokensInOrder = await encryptedERC.getTokens();
+	// Any token already registered must already be at its expected position — never
+	// append a configured token out of the intended order.
+	for (let index = 0; index < tokensInOrder.length; index += 1) {
+		const spec = netConfig.wrappedTokens[index];
+		const expected = spec === undefined ? undefined : resolveTokenAddress(spec);
+		if (
+			expected === undefined ||
+			tokensInOrder[index].toLowerCase() !== expected.toLowerCase()
+		) {
+			throw new Error(
+				`converter already has token ${tokensInOrder[index]} at tokenId ${index + 1}, which does not match the expected bootstrap order — refusing to seed tokens out of order`,
+			);
+		}
+	}
+
+	const bootstrapSigner = (await ethers.getSigners())[0];
+	const bootstrapAccount = createEercAccount(BOOTSTRAP_EERC_SEED);
+	// The bootstrap signer only needs to be a registered account so deposits credit
+	// a valid pubkey. If it is already registered (e.g. the deployer on a reused
+	// Registrar), keep its existing key; only register with the fixed seed when it is
+	// not registered yet.
+	if (!(await registrar.isUserRegistered(bootstrapSigner.address))) {
+		await registerEercAccount(registrar, bootstrapSigner, bootstrapAccount);
+	}
+
+	// Build amountPCT from the depositor's ON-CHAIN registered public key (not the
+	// fixed-seed account's key) so the deposit's history entry decrypts consistently
+	// with the balance _convertFrom credits — even when the deployer was already
+	// registered with a different key. Only the public key is needed for amountPCT.
+	const registeredPubKey = await registrar.getUserPublicKey(bootstrapSigner.address);
+	const depositorPublicKey: [bigint, bigint] = [
+		BigInt(registeredPubKey[0]),
+		BigInt(registeredPubKey[1]),
+	];
+
+	const tokenIdOf = async (address: string): Promise<number> => {
+		const tokens: string[] = await encryptedERC.getTokens();
+		const idx = tokens.findIndex(
+			(token) => token.toLowerCase() === address.toLowerCase(),
+		);
+		return idx === -1 ? 0 : idx + 1;
+	};
+
+	const tokensRecord: Record<
+		string,
+		{ address: string; decimals: number; tokenId: number; symbol: string }
+	> = {};
+
+	for (const token of netConfig.wrappedTokens) {
+		const tokenAddress = resolveTokenAddress(token);
+		let tokenId = await tokenIdOf(tokenAddress);
+
+		if (tokenId === 0) {
+			const erc20 = new ethers.Contract(
+				tokenAddress,
+				ERC20_MIN_ABI,
+				bootstrapSigner,
+			);
+			let balance: bigint = await erc20.balanceOf(bootstrapSigner.address);
+			// deploy-test tokens (benzonet/local) are self-funding via their public
+			// faucet; 'existing' Circle tokens must be pre-funded (prefund-bootstrap.ts).
+			if (token.mode === "deploy-test" && balance < BOOTSTRAP_DEPOSIT_UNITS) {
+				const faucet = new ethers.Contract(
+					tokenAddress,
+					["function faucet()"],
+					bootstrapSigner,
+				);
+				await (await faucet.faucet()).wait();
+				balance = await erc20.balanceOf(bootstrapSigner.address);
+			}
+			if (balance < BOOTSTRAP_DEPOSIT_UNITS) {
+				throw new Error(
+					`Bootstrap signer ${bootstrapSigner.address} needs >= ${BOOTSTRAP_DEPOSIT_UNITS} units of ${token.symbol} (${tokenAddress}) to seed tokenId order; has ${balance}. Pre-fund it first (scripts/deploy/prefund-bootstrap.ts).`,
+				);
+			}
+
+			await (await erc20.approve(encRecord.address, BOOTSTRAP_DEPOSIT_UNITS)).wait();
+
+			// creditedValue = deposited units scaled to eERC decimals (floored).
+			const scaleDown = token.decimals - netConfig.eercDecimals;
+			const creditedValue =
+				scaleDown > 0
+					? BOOTSTRAP_DEPOSIT_UNITS / 10n ** BigInt(scaleDown)
+					: BOOTSTRAP_DEPOSIT_UNITS * 10n ** BigInt(-scaleDown);
+			const amountPCT = encryptAmountPCT(creditedValue, depositorPublicKey);
+
+			const depositTx = await encryptedERC
+				.connect(bootstrapSigner)
+				["deposit(uint256,address,uint256[7])"](
+					BOOTSTRAP_DEPOSIT_UNITS,
+					tokenAddress,
+					amountPCT,
+				);
+			await depositTx.wait();
+			tokenId = await tokenIdOf(tokenAddress);
+			console.log(`Bootstrapped ${token.symbol} -> tokenId ${tokenId} (${tokenAddress})`);
+		} else {
+			console.log(
+				`${token.symbol} already registered as tokenId ${tokenId} (${tokenAddress})`,
+			);
+		}
+
+		if (tokenId === 0) {
+			throw new Error(`failed to assign a tokenId for ${token.symbol} (${tokenAddress})`);
+		}
+
+		tokensRecord[token.symbol] = {
+			address: tokenAddress,
+			decimals: token.decimals,
+			tokenId,
+			symbol: token.symbol,
+		};
+	}
+
+	setPath(eercDeployment, ["tokens"], tokensRecord);
+	await writeDeployments(context);
+	console.log("Converter token registry:", JSON.stringify(tokensRecord));
+	return tokensRecord;
+};
+
 export const deployEercConverterStack = async (
-	options: { configureAuditor?: boolean } = {},
+	options: { configureAuditor?: boolean; registerTokens?: boolean } = {},
 ) => {
 	const context = await getDeploymentContext();
+	const netConfig = resolveNetworkConfig(network.name);
 	await deployVerifiers(context);
 	await deployRegistrar(context);
-	await deployTestUSDC(context);
+
+	// Only mint a TestUSDC where the network wraps one (benzonet/local); fuji wraps
+	// real Circle tokens that already exist on-chain.
+	if (netConfig.wrappedTokens.some((token) => token.mode === "deploy-test")) {
+		await deployTestUSDC(context);
+	}
+
 	await deployEncryptedERC(context);
 
 	if (options.configureAuditor !== false) {
 		await configureAuditor(context);
+	}
+
+	if (options.registerTokens !== false) {
+		await registerConverterTokens(context);
 	}
 
 	return context;
