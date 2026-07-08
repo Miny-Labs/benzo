@@ -447,16 +447,15 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					confirmations: options.config.indexerConfirmations,
 					eoaPrivateKey,
 					onBroadcast: async (h) => {
-						// Persist the hash FIRST, then flip the in-memory flag. If this
-						// DB write fails, broadcastTxHash stays null so the catch marks
-						// the row `failed` (reconcilable against the on-chain tx) rather
-						// than returning 202 over a null-hash row that a later keyed
-						// retry would resume and re-broadcast — double-funding.
+						// Flag the broadcast immediately so the catch always knows the tx
+						// went out, THEN persist the hash. Even if this persist fails, the
+						// catch re-persists best-effort so the hash is never lost and the
+						// row stays terminal (a keyed retry never re-broadcasts).
+						broadcastTxHash = h;
 						await db
 							.update(treasuryDeposits)
 							.set({ txHash: h.toLowerCase(), updatedAt: new Date() })
 							.where(eq(treasuryDeposits.id, pendingId));
-						broadcastTxHash = h;
 					},
 					tokenAddress: token.address,
 				});
@@ -467,6 +466,25 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					// Leave the row `submitted` with the persisted hash — never
 					// `failed` — so a follow-up reconciler/poller (out of scope) can
 					// settle it and no moved money is lost.
+					try {
+						await db
+							.update(treasuryDeposits)
+							.set({
+								txHash: (broadcastTxHash as string).toLowerCase(),
+								updatedAt: new Date(),
+							})
+							.where(
+								and(
+									eq(treasuryDeposits.id, pendingId),
+									isNull(treasuryDeposits.txHash),
+								),
+							);
+					} catch (persistError) {
+						request.log.error(
+							{ err: persistError, orgId, txHash: broadcastTxHash },
+							"treasury_deposit_hash_persist_failed",
+						);
+					}
 					request.log.warn(
 						{ err: error, orgId, txHash: broadcastTxHash },
 						"treasury_deposit_broadcast_unconfirmed",
