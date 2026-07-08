@@ -1031,6 +1031,66 @@ describe("@benzo/api orgs", () => {
 		}
 	});
 
+	it("rejects an idempotency key reused with a different amount/token (409)", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					return {
+						approvalTxHash: `0x${"0c".repeat(32)}` as Hex,
+						txHash: `0x${"0d".repeat(32)}` as Hex,
+					};
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d5".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Conflict Co", slug: `conflict-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const key = randomUUID();
+			const first = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(first.statusCode).toBe(201);
+
+			// Same key, different amount -> conflict, not a silent resolve.
+			const conflict = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "2000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(conflict.statusCode).toBe(409);
+			expect(conflict.json()).toMatchObject({ error: "idempotency_key_conflict" });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 	it("marks the deposit failed and returns 502 when the deposit reverts on-chain", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);

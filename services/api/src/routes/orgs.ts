@@ -359,6 +359,16 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 						eqOp(table.idempotencyKey, idempotencyKey),
 					),
 			});
+			// An idempotency key is bound to its request: reusing it with a
+			// different amount or token is a distinct funding action, not a retry,
+			// and must be rejected rather than silently resolving to the original.
+			if (
+				existing &&
+				(existing.amount !== amount.toString() ||
+					existing.token !== token.token)
+			) {
+				return reply.code(409).send({ error: "idempotency_key_conflict" });
+			}
 			// A keyed retry is resumable (re-attempts the funding, re-claiming the
 			// existing row) when either: (a) the previous attempt `failed` — a
 			// reverted approve/deposit moved no funds, so retrying with the same key
