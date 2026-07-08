@@ -9,6 +9,7 @@ import {
 	contacts,
 	handles,
 	invites,
+	type InviteEscrowKind,
 	type InviteKind,
 	users,
 } from "../db/schema.js";
@@ -77,9 +78,17 @@ const contactPatchBodySchema = z
 	.refine((value) => value.alias !== undefined || value.favorite !== undefined);
 
 const decimalAmountSchema = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$/;
+const escrowGiftIdSchema = /^[1-9][0-9]*$/;
 
 const inviteBodySchema = z
 	.object({
+		escrowGiftId: z
+			.string()
+			.trim()
+			.regex(escrowGiftIdSchema)
+			.nullable()
+			.optional(),
+		escrowKind: z.enum(["public", "private"]).nullable().optional(),
 		expiresAt: z.string().trim().optional(),
 		giftAmount: z.string().trim().regex(decimalAmountSchema).nullable().optional(),
 		kind: z.enum(["invite", "gift"]).default("invite"),
@@ -88,7 +97,19 @@ const inviteBodySchema = z
 	.refine((value) => value.kind === "gift" || value.giftAmount == null, {
 		path: ["giftAmount"],
 	})
-	.refine((value) => value.kind !== "gift" || value.giftAmount != null, {
+	.refine((value) => value.kind === "gift" || value.escrowGiftId == null, {
+		path: ["escrowGiftId"],
+	})
+	.refine((value) => value.kind === "gift" || value.escrowKind == null, {
+		path: ["escrowKind"],
+	})
+	.refine((value) => value.escrowGiftId == null || value.escrowKind != null, {
+		path: ["escrowKind"],
+	})
+	.refine((value) => value.escrowKind == null || value.escrowGiftId != null, {
+		path: ["escrowGiftId"],
+	})
+	.refine((value) => value.kind !== "gift" || value.giftAmount != null || value.escrowGiftId != null, {
 		path: ["giftAmount"],
 	});
 
@@ -415,6 +436,8 @@ export const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
 				.insert(invites)
 				.values({
 					creatorUserId: user.id,
+					escrowGiftId: body.data.escrowGiftId ?? null,
+					escrowKind: body.data.escrowKind ?? null,
 					expiresAt,
 					giftAmount: body.data.giftAmount ?? null,
 					kind: body.data.kind,
@@ -422,6 +445,8 @@ export const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
 					tokenHash,
 				})
 				.returning({
+					escrowGiftId: invites.escrowGiftId,
+					escrowKind: invites.escrowKind,
 					expiresAt: invites.expiresAt,
 					id: invites.id,
 					kind: invites.kind,
@@ -431,6 +456,7 @@ export const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
 
 			return reply.code(201).send({
 				invite: {
+					...escrowFields(row),
 					expiresAt: row.expiresAt.toISOString(),
 					id: row.id,
 					kind: row.kind,
@@ -495,6 +521,8 @@ export const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
 					)
 					.returning({
 						creatorUserId: invites.creatorUserId,
+						escrowGiftId: invites.escrowGiftId,
+						escrowKind: invites.escrowKind,
 						expiresAt: invites.expiresAt,
 						id: invites.id,
 						kind: invites.kind,
@@ -541,6 +569,7 @@ export const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
 					registeredOnEerc,
 				},
 				invite: {
+					...escrowFields(claimed),
 					creatorHandle,
 					expiresAt: claimed.expiresAt.toISOString(),
 					kind: claimed.kind,
@@ -750,6 +779,8 @@ async function findInviteForToken(
 	token: string,
 ): Promise<{
 	creatorHandle: string | null;
+	escrowGiftId: string | null;
+	escrowKind: InviteEscrowKind | null;
 	expiresAt: Date;
 	id: string;
 	kind: InviteKind;
@@ -760,6 +791,8 @@ async function findInviteForToken(
 	const [row] = await db
 		.select({
 			creatorHandle: handles.handle,
+			escrowGiftId: invites.escrowGiftId,
+			escrowKind: invites.escrowKind,
 			expiresAt: invites.expiresAt,
 			id: invites.id,
 			kind: invites.kind,
@@ -806,17 +839,34 @@ async function ensureInviteAvailable(
 
 function publicInvite(invite: {
 	creatorHandle: string | null;
+	escrowGiftId: string | null;
+	escrowKind: InviteEscrowKind | null;
 	expiresAt: Date;
 	kind: InviteKind;
 	note: string | null;
 	status: string;
 }) {
 	return {
+		...escrowFields(invite),
 		creatorHandle: invite.creatorHandle,
 		expiresAt: invite.expiresAt.toISOString(),
 		kind: invite.kind,
 		note: invite.note,
 		status: invite.status,
+	};
+}
+
+function escrowFields(invite: {
+	escrowGiftId: string | null;
+	escrowKind: InviteEscrowKind | null;
+}) {
+	if (!invite.escrowGiftId || !invite.escrowKind) {
+		return {};
+	}
+
+	return {
+		escrowGiftId: invite.escrowGiftId,
+		escrowKind: invite.escrowKind,
 	};
 }
 
