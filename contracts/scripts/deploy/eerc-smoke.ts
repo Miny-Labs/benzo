@@ -114,6 +114,10 @@ const loadDeployment = async (deployIfMissing: boolean) => {
 
 	await deployEercConverterStack({
 		configureAuditor: true,
+		// The smoke sender (signers[0]) registers itself and deposits below, which
+		// establishes the tokenId — so skip the deterministic token bootstrap, which
+		// would otherwise register signers[0] first with a different key and collide.
+		registerTokens: false,
 	});
 	record = await getEercDeploymentRecord();
 	requireDeploymentRecord(record.eercDeployment, ["encryptedERC"]);
