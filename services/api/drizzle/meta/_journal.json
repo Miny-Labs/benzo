@@ -99,6 +99,13 @@
       "when": 1783539175771,
       "tag": "0013_kyc_allowlist",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1783540993229,
+      "tag": "0014_multitoken_payroll",
+      "breakpoints": true
     }
   ]
 }

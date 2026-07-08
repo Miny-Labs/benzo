@@ -6,6 +6,8 @@ import type {
 } from "fastify";
 import type { PgBoss } from "pg-boss";
 import { z } from "zod";
+import type { ApiConfig } from "../config.js";
+import { unsealString } from "../crypto/seal.js";
 import type { Database } from "../db/client.js";
 import {
 	handles,
@@ -19,18 +21,27 @@ import { ROLE_RANK, loadMembership, makeRequireOrgRole } from "../orgs/access.js
 import {
 	enqueuePayrollRun,
 	getPayrollProgressCounts,
+	parsePayrollAmount,
 } from "../payroll/runner.js";
+import type { PayrollSubmitter } from "../payroll/chain.js";
+import {
+	deserializeManagedEercAccount,
+	getDecryptedBalance,
+} from "../payroll/eerc.js";
 
 type PayrollRoutesOptions = {
 	boss: PgBoss;
+	config: ApiConfig;
 	db: Database;
+	payrollSubmitter: PayrollSubmitter;
 };
 
 const intakeSchema = z.object({
 	// Raw CSV text: rows of `recipient,amount`. Recipient is a `@handle`
 	// (resolved via the handles table) or a raw 0x address. Amount is a decimal
-	// string in token units (tUSDC, 6 decimals).
+	// string in the selected payroll token units (6 decimals).
 	csv: z.string().min(1).max(1_000_000),
+	token: z.enum(["usdc", "eurc"]).default("usdc"),
 });
 
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -114,6 +125,13 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 			const body = intakeSchema.safeParse(request.body);
 			if (!body.success) {
 				return reply.code(400).send({ error: "invalid_payroll" });
+			}
+			const payrollToken = resolvePayrollToken(
+				options.config,
+				body.data.token,
+			);
+			if (!payrollToken) {
+				return reply.code(503).send({ error: "payroll_token_not_configured" });
 			}
 
 			const parsed = parseCsv(body.data.csv);
@@ -199,6 +217,8 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 						status: validItems.length > 0 ? "ready" : "failed",
 						itemCount: validItems.length,
 						totalAmount,
+						token: payrollToken.token,
+						tokenId: payrollToken.tokenId,
 						createdBy: request.user!.id,
 						error: validItems.length > 0 ? null : "no_valid_rows",
 					})
@@ -224,11 +244,15 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 			return reply.code(201).send({
 				runId: run!.id,
 				status: run!.status,
+				token: run!.token,
+				tokenId: run!.tokenId.toString(),
 				summary: {
 					total: items.length,
 					valid: validItems.length,
 					invalid: items.length - validItems.length,
 					totalAmount,
+					token: run!.token,
+					tokenId: run!.tokenId.toString(),
 				},
 				items,
 			});
@@ -279,13 +303,33 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 
 			const [treasury] = await db
 				.select({
+					address: orgTreasuries.address,
 					registered: sql<boolean>`${orgTreasuries.eercRegisteredAt} is not null`,
+					sealedEercKey: orgTreasuries.sealedEercKey,
 				})
 				.from(orgTreasuries)
 				.where(eq(orgTreasuries.orgId, run.orgId))
 				.limit(1);
-			if (!treasury?.registered) {
+			if (!treasury?.registered || !treasury.sealedEercKey) {
 				return reply.code(409).send({ error: "treasury_not_eerc_registered" });
+			}
+			if (run.status === "ready") {
+				const funding = await loadRunFundingStatus({
+					config: options.config,
+					sealedEercKey: treasury.sealedEercKey,
+					submitter: options.payrollSubmitter,
+					treasuryAddress: treasury.address,
+					run,
+				});
+				if (!funding.funded) {
+					return reply.code(409).send({
+						availableAmount: funding.availableAmount,
+						error: "treasury_underfunded",
+						requiredAmount: run.totalAmount,
+						token: run.token,
+						tokenId: run.tokenId.toString(),
+					});
+				}
 			}
 
 			await db
@@ -426,7 +470,7 @@ async function loadRunPayload(
 	return {
 		items: runItems,
 		progress: await getPayrollProgressCounts(db, runId),
-		run,
+		run: serializePayrollRun(run),
 	};
 }
 
@@ -520,4 +564,77 @@ async function streamPayrollProgress(
 		request.log.error({ err: error }, "payroll sse failed");
 		close();
 	}
+}
+
+type PayrollToken = "usdc" | "eurc";
+
+function resolvePayrollToken(
+	config: ApiConfig,
+	token: PayrollToken,
+): { token: PayrollToken; tokenId: bigint } | null {
+	const configured = config.treasuryFundingTokens.find(
+		(entry) => entry.token === token,
+	);
+	if (configured) {
+		return { token, tokenId: configured.tokenId };
+	}
+
+	if (token === "usdc") {
+		return { token, tokenId: config.payrollTokenId };
+	}
+
+	return null;
+}
+
+async function loadRunFundingStatus({
+	config,
+	run,
+	sealedEercKey,
+	submitter,
+	treasuryAddress,
+}: {
+	config: ApiConfig;
+	run: typeof payrollRuns.$inferSelect;
+	sealedEercKey: Buffer;
+	submitter: PayrollSubmitter;
+	treasuryAddress: string;
+}): Promise<{ availableAmount: string; funded: boolean }> {
+	const account = deserializeManagedEercAccount(
+		unsealString(config.appMasterKey, sealedEercKey),
+	);
+	const balance = await submitter.loadTreasuryBalance({
+		tokenId: run.tokenId,
+		treasuryAddress,
+	});
+	const available = getDecryptedBalance(account.privateKey, balance);
+	const required = parsePayrollAmount(
+		run.totalAmount,
+		config.payrollEercDecimals,
+	);
+
+	return {
+		availableAmount: formatPayrollAmount(available, config.payrollEercDecimals),
+		funded: available >= required,
+	};
+}
+
+function formatPayrollAmount(amount: bigint, decimals: number): string {
+	if (decimals <= 0) {
+		return amount.toString();
+	}
+
+	const scale = 10n ** BigInt(decimals);
+	const whole = amount / scale;
+	const fraction = (amount % scale)
+		.toString()
+		.padStart(decimals, "0")
+		.replace(/0+$/, "");
+	return fraction === "" ? whole.toString() : `${whole}.${fraction}`;
+}
+
+function serializePayrollRun(run: typeof payrollRuns.$inferSelect) {
+	return {
+		...run,
+		tokenId: run.tokenId.toString(),
+	};
 }

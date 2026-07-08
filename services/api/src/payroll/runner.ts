@@ -264,7 +264,7 @@ async function processPayrollItem(
 		const context = await options.submitter.loadTransferContext({
 			recipientAddress: row.item.resolvedAddress,
 			sender: eercAccount,
-			tokenId: options.config.payrollTokenId,
+			tokenId: row.run.tokenId,
 			treasuryAddress: treasury.address,
 		});
 		const built = buildTransferProofInput({
@@ -282,7 +282,7 @@ async function processPayrollItem(
 			eoaPrivateKey,
 			proof,
 			recipientAddress: row.item.resolvedAddress,
-			tokenId: options.config.payrollTokenId,
+			tokenId: row.run.tokenId,
 		});
 		await db
 			.update(payrollItems)
@@ -526,7 +526,7 @@ function payrollSingletonKey(runId: string, rowIndex: number): string {
 	return `${runId}:${rowIndex}`;
 }
 
-function parsePayrollAmount(amount: string, decimals: number): bigint {
+export function parsePayrollAmount(amount: string, decimals: number): bigint {
 	if (decimals < 0 || !Number.isInteger(decimals)) {
 		throw new Error("invalid_payroll_decimals");
 	}

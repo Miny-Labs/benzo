@@ -2067,9 +2067,35 @@ describe("@benzo/api orgs", () => {
 			});
 			expect(getRun.statusCode).toBe(200);
 			expect(getRun.json().run).toMatchObject({
-				status: "ready",
 				itemCount: 2,
+				status: "ready",
+				token: "usdc",
+				tokenId: "1",
 			});
+
+			const eurcRun = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/payroll`,
+				payload: { csv: `0x${"12".repeat(20)},3.25`, token: "eurc" },
+			});
+			expect(eurcRun.statusCode).toBe(201);
+			expect(eurcRun.json()).toMatchObject({
+				status: "ready",
+				summary: {
+					totalAmount: "3.25",
+					token: "eurc",
+					tokenId: "2",
+				},
+				token: "eurc",
+				tokenId: "2",
+			});
+			const [persistedEurcRun] = await db
+				.select({ token: payrollRuns.token, tokenId: payrollRuns.tokenId })
+				.from(payrollRuns)
+				.where(eq(payrollRuns.id, eurcRun.json().runId as string))
+				.limit(1);
+			expect(persistedEurcRun).toEqual({ token: "eurc", tokenId: 2n });
 
 			// A non-member can't see the run (404, existence not leaked).
 			const outsiderCookie = await session(db, config, `0x${"99".repeat(20)}`);
@@ -2140,15 +2166,28 @@ describe("@benzo/api orgs", () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
 		const boss = createBoss(config);
+		let registeredEercAccount: ManagedEercAccount | undefined;
 		const app = await buildApp({
 			boss,
 			config,
 			db,
 			logger: false,
 			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async loadTreasuryBalance(input) {
+					expect(input.tokenId).toBe(1n);
+					if (!registeredEercAccount) {
+						throw new Error("registered_eerc_account_missing");
+					}
+
+					return encryptedBalanceFor(registeredEercAccount, 3_000_000n);
+				},
+			}),
 			pool,
 			startBoss: false,
-			treasuryRegistrar: createTreasuryRegistrarStub(),
+			treasuryRegistrar: createTreasuryRegistrarStub(undefined, (input) => {
+				registeredEercAccount = input.eercAccount;
+			}),
 		});
 		const owner = `0x${"44".repeat(20)}`;
 
@@ -2214,6 +2253,89 @@ describe("@benzo/api orgs", () => {
 		}
 	});
 
+	it("blocks payroll start when the selected token treasury balance is too low", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		let registeredEercAccount: ManagedEercAccount | undefined;
+		const app = await buildApp({
+			config,
+			db,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async loadTreasuryBalance(input) {
+					expect(input.tokenId).toBe(2n);
+					if (!registeredEercAccount) {
+						throw new Error("registered_eerc_account_missing");
+					}
+
+					return encryptedBalanceFor(registeredEercAccount, 1_500_000n);
+				},
+			}),
+			pool,
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(undefined, (input) => {
+				registeredEercAccount = input.eercAccount;
+			}),
+		});
+		const owner = `0x${"46".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Underfunded Co", slug: `underfunded-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			const treasury = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+			expect(treasury.statusCode).toBe(201);
+
+			const preview = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/payroll`,
+				payload: {
+					csv: [`0x${"56".repeat(20)},1`, `0x${"67".repeat(20)},1`].join(
+						"\n",
+					),
+					token: "eurc",
+				},
+			});
+			expect(preview.statusCode).toBe(201);
+			const runId = preview.json().runId as string;
+
+			const started = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/payroll/${runId}/start`,
+			});
+			expect(started.statusCode).toBe(409);
+			expect(started.json()).toEqual({
+				availableAmount: "1.5",
+				error: "treasury_underfunded",
+				requiredAmount: "2",
+				token: "eurc",
+				tokenId: "2",
+			});
+			const [run] = await db
+				.select({ error: payrollRuns.error, status: payrollRuns.status })
+				.from(payrollRuns)
+				.where(eq(payrollRuns.id, runId))
+				.limit(1);
+			expect(run).toEqual({ error: null, status: "ready" });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 	it("processes same-org payroll items sequentially and links receipts", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
@@ -2227,6 +2349,8 @@ describe("@benzo/api orgs", () => {
 		let maxActiveProofs = 0;
 		let prepareCount = 0;
 		let submitCount = 0;
+		const contextTokenIds: bigint[] = [];
+		const preparedTokenIds: bigint[] = [];
 		const submittedRows: number[] = [];
 		const prover: PayrollProver = {
 			async proveRegistration() {
@@ -2242,7 +2366,8 @@ describe("@benzo/api orgs", () => {
 		};
 		const submitter: PayrollSubmitter = {
 			...createPayrollSubmitterStub(),
-			async loadTransferContext() {
+			async loadTransferContext(input) {
+				contextTokenIds.push(input.tokenId);
 				return {
 					auditorPublicKey: auditor.publicKey,
 					receiverPublicKey: receiver.publicKey,
@@ -2252,6 +2377,7 @@ describe("@benzo/api orgs", () => {
 			},
 			async prepareTransfer(input) {
 				prepareCount += 1;
+				preparedTokenIds.push(input.tokenId);
 				submittedRows.push(Number(input.proof.publicSignals[0]));
 				return {
 					rawTransaction: `0x${prepareCount.toString(16).padStart(64, "0")}`,
@@ -2299,6 +2425,8 @@ describe("@benzo/api orgs", () => {
 					itemCount: 3,
 					orgId: org!.id,
 					status: "running",
+					token: "eurc",
+					tokenId: 2n,
 					totalAmount: "6",
 				})
 				.returning({ id: payrollRuns.id });
@@ -2343,6 +2471,8 @@ describe("@benzo/api orgs", () => {
 			expect(maxActiveProofs).toBe(1);
 			expect(prepareCount).toBe(3);
 			expect(submitCount).toBe(3);
+			expect(contextTokenIds).toEqual([2n, 2n, 2n]);
+			expect(preparedTokenIds).toEqual([2n, 2n, 2n]);
 			expect(submittedRows).toEqual([1, 1, 1]);
 
 			const rows = await db
