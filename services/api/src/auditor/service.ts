@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	and,
 	desc,
@@ -13,7 +14,11 @@ import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
 import { auditLog, auditorKeys, events } from "../db/schema.js";
 import { unsealString } from "../crypto/seal.js";
-import { decryptAuditorAmountPct } from "./crypto.js";
+import {
+	decryptAuditorAmountPct,
+	signAuditorManifestHash,
+	type AuditorManifestSignature,
+} from "./crypto.js";
 
 export type AuditorEventRow = {
 	amount: string;
@@ -37,6 +42,32 @@ export type AuditorReport = {
 	toBlock: string | null;
 };
 
+export type AuditorPacketKey = {
+	active: boolean;
+	activatedBlockNumber: string;
+	activatedLogIndex: number | null;
+	activatedTransactionIndex: number | null;
+	id: string;
+	publicKey: [string, string];
+	retiredBlockNumber: string | null;
+	retiredLogIndex: number | null;
+	retiredTransactionIndex: number | null;
+	rotationTxHash: string | null;
+};
+
+export type AuditorPacket = {
+	address: string;
+	auditorKeys: AuditorPacketKey[];
+	fromBlock: string | null;
+	generatedAt: string;
+	inflow: string;
+	manifestHash: string;
+	outflow: string;
+	rows: AuditorEventRow[];
+	signature: AuditorManifestSignature & { signerKeyId: string };
+	toBlock: string | null;
+};
+
 type ListAuditorEventsInput = {
 	actor: string;
 	address?: string;
@@ -52,6 +83,9 @@ type BuildAuditorReportInput = {
 	fromBlock?: bigint;
 	toBlock?: bigint;
 };
+
+type ExportAuditorReportCsvInput = BuildAuditorReportInput;
+type BuildAuditorPacketInput = BuildAuditorReportInput;
 
 type EventRow = typeof events.$inferSelect;
 type AuditorKeyRow = typeof auditorKeys.$inferSelect;
@@ -89,6 +123,163 @@ export async function buildAuditorReport(
 	config: ApiConfig,
 	input: BuildAuditorReportInput,
 ): Promise<AuditorReport> {
+	const dataset = await buildAuditorReportDataset(db, config, input);
+
+	return dataset.report;
+}
+
+export async function exportAuditorReportCsv(
+	db: Database,
+	config: ApiConfig,
+	input: ExportAuditorReportCsvInput,
+): Promise<{ csv: string; report: AuditorReport }> {
+	const dataset = await buildAuditorReportDataset(db, config, input);
+
+	await db.insert(auditLog).values({
+		action: "auditor_report_csv_export",
+		actor: input.actor,
+		meta: {
+			address: input.address,
+			eventCount: dataset.report.eventCount,
+			fromBlock: dataset.report.fromBlock,
+			inflow: dataset.report.inflow,
+			outflow: dataset.report.outflow,
+			toBlock: dataset.report.toBlock,
+		},
+		subject: input.address,
+	});
+
+	return {
+		csv: serializeAuditorReportCsv(dataset.rows),
+		report: dataset.report,
+	};
+}
+
+export async function buildAuditorPacket(
+	db: Database,
+	config: ApiConfig,
+	input: BuildAuditorPacketInput,
+): Promise<AuditorPacket> {
+	const dataset = await buildAuditorReportDataset(db, config, input);
+	const keys = await loadAuditorKeys(db);
+	const signerKey = selectAuditorPacketSigner(keys);
+
+	if (!signerKey) {
+		throw new Error("auditor_key_missing_for_packet_signer");
+	}
+
+	// Always include the signer's key alongside the active + range-intersecting
+	// keys so a consumer can verify the signature from the packet alone, even if
+	// the signer's activation range does not overlap the requested block range.
+	const packetKeys = keys
+		.filter(
+			(key) =>
+				key.id === signerKey.id ||
+				key.active ||
+				auditorKeyRangeIntersects(
+					key,
+					input.fromBlock ?? null,
+					input.toBlock ?? null,
+				),
+		)
+		.map(serializeAuditorPacketKey);
+
+	const signerPrivateKey = unsealString(config.appMasterKey, signerKey.sealedKey);
+	const generatedAt = new Date().toISOString();
+	const manifestHash = hashAuditorPacketManifest({
+		address: input.address,
+		auditorKeys: packetKeys,
+		fromBlock: dataset.report.fromBlock,
+		generatedAt,
+		inflow: dataset.report.inflow,
+		outflow: dataset.report.outflow,
+		rows: dataset.rows,
+		signerKeyId: signerKey.id,
+		toBlock: dataset.report.toBlock,
+	});
+	const signature = {
+		...signAuditorManifestHash(signerPrivateKey, manifestHash),
+		signerKeyId: signerKey.id,
+	};
+	const packet: AuditorPacket = {
+		address: input.address,
+		auditorKeys: packetKeys,
+		fromBlock: dataset.report.fromBlock,
+		generatedAt,
+		inflow: dataset.report.inflow,
+		manifestHash,
+		outflow: dataset.report.outflow,
+		rows: dataset.rows,
+		signature,
+		toBlock: dataset.report.toBlock,
+	};
+
+	await db.insert(auditLog).values({
+		action: "auditor_packet_export",
+		actor: input.actor,
+		meta: {
+			address: packet.address,
+			auditorKeyIds: packet.auditorKeys.map((key) => key.id),
+			eventCount: packet.rows.length,
+			fromBlock: packet.fromBlock,
+			inflow: packet.inflow,
+			manifestHash: packet.manifestHash,
+			outflow: packet.outflow,
+			signerKeyId: packet.signature.signerKeyId,
+			toBlock: packet.toBlock,
+		},
+		subject: input.address,
+	});
+
+	return packet;
+}
+
+export type AuditorPacketManifest = {
+	address: string;
+	auditorKeys: AuditorPacketKey[];
+	fromBlock: string | null;
+	generatedAt: string;
+	inflow: string;
+	outflow: string;
+	rows: AuditorEventRow[];
+	signerKeyId: string;
+	toBlock: string | null;
+};
+
+// The manifest hash binds the ENTIRE compliance context — subject, block range,
+// totals, key set, and timestamp — not just the decrypted rows, so the auditor
+// signature cannot be replayed over a packet whose top-level fields were altered.
+export function hashAuditorPacketManifest(
+	manifest: AuditorPacketManifest,
+): string {
+	return `0x${createHash("sha256")
+		.update(canonicalizeAuditorPacketManifest(manifest))
+		.digest("hex")}`;
+}
+
+// Extracts the signed manifest view from a full packet so a consumer can
+// recompute the hash and verify the signature against the fields it displays.
+export function auditorPacketManifest(
+	packet: AuditorPacket,
+): AuditorPacketManifest {
+	return {
+		address: packet.address,
+		auditorKeys: packet.auditorKeys,
+		fromBlock: packet.fromBlock,
+		generatedAt: packet.generatedAt,
+		inflow: packet.inflow,
+		outflow: packet.outflow,
+		rows: packet.rows,
+		signerKeyId: packet.signature.signerKeyId,
+		toBlock: packet.toBlock,
+	};
+}
+
+async function buildAuditorReportDataset(
+	db: Database,
+	config: ApiConfig,
+	input: BuildAuditorReportInput,
+): Promise<{ report: AuditorReport; rows: AuditorEventRow[] }> {
 	const rows = await db
 		.select()
 		.from(events)
@@ -104,12 +295,15 @@ export async function buildAuditorReport(
 	const aggregate = await aggregateAuditorReport(db, input.address, decrypted);
 
 	return {
-		address: input.address,
-		eventCount: aggregate.eventCount,
-		fromBlock: input.fromBlock?.toString() ?? null,
-		inflow: aggregate.inflow,
-		outflow: aggregate.outflow,
-		toBlock: input.toBlock?.toString() ?? null,
+		report: {
+			address: input.address,
+			eventCount: aggregate.eventCount,
+			fromBlock: input.fromBlock?.toString() ?? null,
+			inflow: aggregate.inflow,
+			outflow: aggregate.outflow,
+			toBlock: input.toBlock?.toString() ?? null,
+		},
+		rows: decrypted,
 	};
 }
 
@@ -173,10 +367,7 @@ async function decryptRows(
 		return [];
 	}
 
-	const keys = await db
-		.select()
-		.from(auditorKeys)
-		.orderBy(auditorKeys.activatedBlockNumber);
+	const keys = await loadAuditorKeys(db);
 	const privateKeys = new Map<string, string>();
 	const decryptedRows: AuditorEventRow[] = [];
 	const auditRows: (typeof auditLog.$inferInsert)[] = [];
@@ -322,6 +513,164 @@ function serializeAuditorEvent(
 		eventName: row.eventName,
 		fromAddr: row.fromAddr,
 		id: row.id.toString(),
+		logIndex: row.logIndex,
+		toAddr: row.toAddr,
+		txHash: row.txHash,
+	};
+}
+
+async function loadAuditorKeys(db: Database): Promise<AuditorKeyRow[]> {
+	return db
+		.select()
+		.from(auditorKeys)
+		.orderBy(auditorKeys.activatedBlockNumber, auditorKeys.activatedLogIndex);
+}
+
+function selectAuditorPacketSigner(
+	keys: AuditorKeyRow[],
+): AuditorKeyRow | undefined {
+	return keys
+		.filter((key) => key.active)
+		.sort(compareAuditorKeysByActivation)
+		.at(-1);
+}
+
+function compareAuditorKeysByActivation(
+	left: AuditorKeyRow,
+	right: AuditorKeyRow,
+): number {
+	const blockDiff = compareBigint(
+		left.activatedBlockNumber,
+		right.activatedBlockNumber,
+	);
+
+	if (blockDiff !== 0) {
+		return blockDiff;
+	}
+
+	return (
+		(left.activatedLogIndex ?? -1) - (right.activatedLogIndex ?? -1) ||
+		(left.activatedTransactionIndex ?? -1) -
+			(right.activatedTransactionIndex ?? -1)
+	);
+}
+
+function compareBigint(left: bigint, right: bigint): number {
+	if (left < right) {
+		return -1;
+	}
+
+	if (left > right) {
+		return 1;
+	}
+
+	return 0;
+}
+
+function auditorKeyRangeIntersects(
+	key: AuditorKeyRow,
+	fromBlock: bigint | null,
+	toBlock: bigint | null,
+): boolean {
+	if (toBlock !== null && key.activatedBlockNumber > toBlock) {
+		return false;
+	}
+
+	if (fromBlock !== null && key.retiredBlockNumber !== null) {
+		return key.retiredBlockNumber >= fromBlock;
+	}
+
+	return true;
+}
+
+function serializeAuditorPacketKey(key: AuditorKeyRow): AuditorPacketKey {
+	return {
+		active: key.active,
+		activatedBlockNumber: key.activatedBlockNumber.toString(),
+		activatedLogIndex: key.activatedLogIndex,
+		activatedTransactionIndex: key.activatedTransactionIndex,
+		id: key.id,
+		publicKey: [key.publicKeyX, key.publicKeyY],
+		retiredBlockNumber: key.retiredBlockNumber?.toString() ?? null,
+		retiredLogIndex: key.retiredLogIndex,
+		retiredTransactionIndex: key.retiredTransactionIndex,
+		rotationTxHash: key.rotationTxHash,
+	};
+}
+
+function serializeAuditorReportCsv(rows: AuditorEventRow[]): string {
+	const fields = [
+		"id",
+		"txHash",
+		"logIndex",
+		"blockNumber",
+		"blockTime",
+		"eventName",
+		"fromAddr",
+		"toAddr",
+		"amount",
+		"auditorKeyId",
+	] as const;
+	const lines = [
+		fields.join(","),
+		...rows.map((row) =>
+			fields.map((field) => csvCell(row[field])).join(","),
+		),
+	];
+
+	return `${lines.join("\n")}\n`;
+}
+
+function csvCell(value: number | string | null): string {
+	const text = value === null ? "" : value.toString();
+
+	if (!/[",\n\r]/.test(text)) {
+		return text;
+	}
+
+	return `"${text.replaceAll("\"", "\"\"")}"`;
+}
+
+function canonicalizeAuditorPacketManifest(
+	manifest: AuditorPacketManifest,
+): string {
+	return JSON.stringify({
+		address: manifest.address,
+		auditorKeys: manifest.auditorKeys.map(canonicalizeAuditorPacketKey),
+		fromBlock: manifest.fromBlock,
+		generatedAt: manifest.generatedAt,
+		inflow: manifest.inflow,
+		outflow: manifest.outflow,
+		rows: manifest.rows.map(canonicalizeAuditorPacketRow),
+		signerKeyId: manifest.signerKeyId,
+		toBlock: manifest.toBlock,
+	});
+}
+
+function canonicalizeAuditorPacketKey(key: AuditorPacketKey): AuditorPacketKey {
+	return {
+		active: key.active,
+		activatedBlockNumber: key.activatedBlockNumber,
+		activatedLogIndex: key.activatedLogIndex,
+		activatedTransactionIndex: key.activatedTransactionIndex,
+		id: key.id,
+		publicKey: [key.publicKey[0], key.publicKey[1]],
+		retiredBlockNumber: key.retiredBlockNumber,
+		retiredLogIndex: key.retiredLogIndex,
+		retiredTransactionIndex: key.retiredTransactionIndex,
+		rotationTxHash: key.rotationTxHash,
+	};
+}
+
+function canonicalizeAuditorPacketRow(row: AuditorEventRow): AuditorEventRow {
+	return {
+		amount: row.amount,
+		auditorKeyId: row.auditorKeyId,
+		blockNumber: row.blockNumber,
+		blockTime: row.blockTime,
+		eventName: row.eventName,
+		fromAddr: row.fromAddr,
+		id: row.id,
 		logIndex: row.logIndex,
 		toAddr: row.toAddr,
 		txHash: row.txHash,

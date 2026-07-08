@@ -8,7 +8,9 @@ import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
 import { auditLog } from "../db/schema.js";
 import {
+	buildAuditorPacket,
 	buildAuditorReport,
+	exportAuditorReportCsv,
 	listAuditorEvents,
 } from "../auditor/service.js";
 
@@ -32,6 +34,12 @@ const reportParamsSchema = z.object({
 const reportQuerySchema = z.object({
 	from: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
 	to: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
+});
+
+const packetBodySchema = z.object({
+	address: z.string(),
+	fromBlock: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
+	toBlock: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
 });
 
 export const auditorRoutes: FastifyPluginAsync<AuditorRoutesOptions> = async (
@@ -116,6 +124,114 @@ export const auditorRoutes: FastifyPluginAsync<AuditorRoutesOptions> = async (
 			}
 		},
 	);
+
+	fastify.get(
+		"/auditor/report/:address/export",
+		{ preHandler: requireAuditor },
+		async (request, reply) => {
+			const params = reportParamsSchema.safeParse(request.params);
+			const query = reportQuerySchema.safeParse(request.query);
+
+			if (!params.success || !query.success || !request.user) {
+				return reply
+					.code(400)
+					.send({ error: "invalid_auditor_report_export_query" });
+			}
+
+			const address = normalizeOptionalAddress(params.data.address);
+
+			if (!address) {
+				return reply
+					.code(400)
+					.send({ error: "invalid_auditor_report_export_query" });
+			}
+
+			try {
+				const exportResult = await exportAuditorReportCsv(
+					options.db,
+					options.config,
+					{
+						actor: request.user.address,
+						address,
+						fromBlock:
+							query.data.from === undefined ? undefined : BigInt(query.data.from),
+						toBlock:
+							query.data.to === undefined ? undefined : BigInt(query.data.to),
+					},
+				);
+
+				return reply
+					.header("content-type", "text/csv; charset=utf-8")
+					.header(
+						"content-disposition",
+						`attachment; filename="${auditDownloadName(
+							"auditor-report",
+							address,
+							exportResult.report.fromBlock,
+							exportResult.report.toBlock,
+							"csv",
+						)}"`,
+					)
+					.send(exportResult.csv);
+			} catch (error) {
+				if (isMissingAuditorKeyError(error)) {
+					return reply.code(409).send({ error: "auditor_key_missing" });
+				}
+
+				throw error;
+			}
+		},
+	);
+
+	fastify.post(
+		"/auditor/packet",
+		{ preHandler: requireAuditor },
+		async (request, reply) => {
+			const body = packetBodySchema.safeParse(request.body);
+
+			if (!body.success || !request.user) {
+				return reply.code(400).send({ error: "invalid_auditor_packet_payload" });
+			}
+
+			const address = normalizeOptionalAddress(body.data.address);
+
+			if (!address) {
+				return reply.code(400).send({ error: "invalid_auditor_packet_payload" });
+			}
+
+			try {
+				const packet = await buildAuditorPacket(options.db, options.config, {
+					actor: request.user.address,
+					address,
+					fromBlock:
+						body.data.fromBlock === undefined
+							? undefined
+							: BigInt(body.data.fromBlock),
+					toBlock:
+						body.data.toBlock === undefined ? undefined : BigInt(body.data.toBlock),
+				});
+
+				return reply
+					.header(
+						"content-disposition",
+						`attachment; filename="${auditDownloadName(
+							"auditor-packet",
+							address,
+							packet.fromBlock,
+							packet.toBlock,
+							"json",
+						)}"`,
+					)
+					.send(packet);
+			} catch (error) {
+				if (isMissingAuditorKeyError(error)) {
+					return reply.code(409).send({ error: "auditor_key_missing" });
+				}
+
+				throw error;
+			}
+		},
+	);
 };
 
 function buildRequireAuditor(db: Database): preHandlerAsyncHookHandler {
@@ -157,4 +273,14 @@ function normalizeOptionalAddress(address: string | undefined): string | undefin
 
 function isMissingAuditorKeyError(error: unknown): boolean {
 	return error instanceof Error && error.message.startsWith("auditor_key_missing");
+}
+
+function auditDownloadName(
+	prefix: string,
+	address: string,
+	fromBlock: string | null,
+	toBlock: string | null,
+	extension: "csv" | "json",
+): string {
+	return `${prefix}-${address}-${fromBlock ?? "start"}-${toBlock ?? "latest"}.${extension}`;
 }
