@@ -453,7 +453,10 @@ export function createViemPayrollSubmitter(
 				account,
 				transport: http(config.benzonetRpcUrl),
 			});
-			const confirmations = input.confirmations ?? 1;
+			// A single confirmation can be undone by a reorg; fall back to the same
+			// depth the indexer trusts (default 6) so a persisted `confirmed`
+			// deposit reflects a tx that actually settled.
+			const confirmations = input.confirmations ?? config.indexerConfirmations;
 			const tokenAddress = normalizeAddress(input.tokenAddress);
 			const approvalTxHash = await walletClient.writeContract({
 				abi: erc20Abi,

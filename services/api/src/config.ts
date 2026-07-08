@@ -370,6 +370,13 @@ function resolveTreasuryFundingTokens(
 	manifestTokens: Record<string, ManifestTokenEntry>,
 ): TreasuryFundingToken[] {
 	const stablecoins = STABLECOINS[chainEnv];
+	// STABLECOINS is typed as total over DeploymentNetwork, but a misconfigured
+	// chain env would leave this undefined and silently yield zero funding
+	// tokens. Fail loudly at startup instead of surfacing a confusing runtime
+	// 503 on the deposit path. (benzonet is intentionally `{}`, not undefined.)
+	if (!stablecoins) {
+		throw new Error(`treasury_stablecoins_not_configured:${chainEnv}`);
+	}
 
 	return treasuryFundingSymbols.flatMap((symbol) => {
 		const stablecoin = stablecoins[symbol];

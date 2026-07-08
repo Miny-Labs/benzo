@@ -742,6 +742,9 @@ describe("@benzo/api orgs", () => {
 			});
 			expect(depositInput?.amountPCT).toHaveLength(7);
 			expect(depositInput?.eoaPrivateKey).toMatch(/^0x[0-9a-fA-F]{64}$/);
+			// Confirmations are threaded from config.indexerConfirmations (6), not
+			// the unsafe 1-confirmation default.
+			expect(depositInput?.confirmations).toBe(config.indexerConfirmations);
 
 			const [row] = await db
 				.select()
@@ -777,6 +780,212 @@ describe("@benzo/api orgs", () => {
 				url: `/orgs/${orgId}/treasury`,
 			});
 			expect(outsiderBalance.statusCode).toBe(404);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("pre-inserts a submitted deposit before broadcasting, then confirms it", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"05".repeat(32)}` as Hex;
+		const txHash = `0x${"06".repeat(32)}` as Hex;
+		let depositOrgId: string | undefined;
+		let statusAtBroadcast: string | undefined;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					// At broadcast time the durable row must already exist as
+					// `submitted`, so a crash here cannot lose the ledger entry.
+					const [pending] = await db
+						.select()
+						.from(treasuryDeposits)
+						.where(eq(treasuryDeposits.orgId, depositOrgId!))
+						.limit(1);
+					statusAtBroadcast = pending?.status;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d1".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Durable Co", slug: `durable-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			depositOrgId = orgId;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const deposited = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", token: "usdc" },
+			});
+			expect(deposited.statusCode).toBe(201);
+			// The row existed as `submitted` while the tx was broadcasting...
+			expect(statusAtBroadcast).toBe("submitted");
+
+			// ...and flipped to `confirmed` (with the tx hash) once it settled.
+			const [row] = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId))
+				.limit(1);
+			expect(row).toMatchObject({
+				status: "confirmed",
+				txHash: txHash.toLowerCase(),
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("marks the deposit failed and returns 502 when submission throws", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					throw new Error("treasury_deposit_reverted");
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d2".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Failure Co", slug: `failure-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const deposited = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", token: "usdc" },
+			});
+			expect(deposited.statusCode).toBe(502);
+			expect(deposited.json()).toMatchObject({
+				error: "treasury_deposit_failed",
+			});
+
+			// The durable row is retained as `failed` with no tx hash for
+			// observability; nothing sensitive is persisted.
+			const [row] = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId))
+				.limit(1);
+			expect(row).toMatchObject({ status: "failed", txHash: null });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("deduplicates a repeated idempotencyKey without a second submission", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"07".repeat(32)}` as Hex;
+		const txHash = `0x${"08".repeat(32)}` as Hex;
+		let submitCount = 0;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					submitCount += 1;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d3".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Idem Co", slug: `idem-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const key = randomUUID();
+			const first = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(first.statusCode).toBe(201);
+
+			const retry = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			// The retry returns the original record (200) and never re-submits.
+			expect(retry.statusCode).toBe(200);
+			expect(retry.json()).toMatchObject({
+				amount: "1000000",
+				status: "confirmed",
+				token: "usdc",
+				tokenId: "1",
+				txHash: txHash.toLowerCase(),
+			});
+			expect(submitCount).toBe(1);
+
+			// Exactly one durable row exists for the org.
+			const rows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId));
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.idempotencyKey).toBe(key);
 		} finally {
 			await app.close();
 			await pool.end();

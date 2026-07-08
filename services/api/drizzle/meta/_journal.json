@@ -85,6 +85,13 @@
       "when": 1783516836474,
       "tag": "0011_invite_escrow",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1783522753429,
+      "tag": "0012_treasury_deposits",
+      "breakpoints": true
     }
   ]
 }

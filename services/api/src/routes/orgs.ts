@@ -26,7 +26,11 @@ import {
 	serializeManagedEercAccount,
 	type ManagedEercAccount,
 } from "../payroll/eerc.js";
-import type { PayrollSubmitter, TreasuryRegistrar } from "../payroll/chain.js";
+import type {
+	PayrollSubmitter,
+	TreasuryDepositSubmissionResult,
+	TreasuryRegistrar,
+} from "../payroll/chain.js";
 
 type OrgsRoutesOptions = {
 	config: ApiConfig;
@@ -59,6 +63,9 @@ const provisionTreasurySchema = z.object({
 
 const treasuryDepositSchema = z.object({
 	amount: z.string().trim().regex(/^[1-9][0-9]*$/),
+	// Optional dedupe token: a retry carrying a previously seen key returns the
+	// original deposit instead of broadcasting a second approve/deposit.
+	idempotencyKey: z.string().trim().min(1).max(255).optional(),
 	token: z.enum(["usdc", "eurc"]),
 });
 
@@ -340,6 +347,30 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 			}
 
 			const amount = BigInt(body.data.amount);
+			const idempotencyKey = body.data.idempotencyKey ?? null;
+
+			// Idempotency: a retry reusing a key we've already recorded for this org
+			// returns the original record instead of broadcasting a second deposit.
+			if (idempotencyKey) {
+				const existing = await db.query.treasuryDeposits.findFirst({
+					where: (table, { and: andOp, eq: eqOp }) =>
+						andOp(
+							eqOp(table.orgId, orgId),
+							eqOp(table.idempotencyKey, idempotencyKey),
+						),
+				});
+				if (existing) {
+					return reply.code(200).send({
+						amount: existing.amount,
+						source: existing.source,
+						status: existing.status,
+						token: existing.token,
+						tokenId: existing.tokenId.toString(),
+						txHash: existing.txHash,
+					});
+				}
+			}
+
 			const eoaPrivateKey = unsealString(
 				options.config.appMasterKey,
 				treasury.sealedEoaKey,
@@ -347,22 +378,52 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 			const eercAccount = deserializeManagedEercAccount(
 				unsealString(options.config.appMasterKey, treasury.sealedEercKey),
 			);
-			const result = await options.payrollSubmitter.submitTreasuryDeposit({
-				amount,
-				amountPCT: encryptAmountPct(amount, eercAccount.publicKey),
-				eoaPrivateKey,
-				tokenAddress: token.address,
-			});
 
-			await db.insert(treasuryDeposits).values({
-				amount: amount.toString(),
-				orgId,
-				source: "direct",
-				status: "confirmed",
-				token: token.token,
-				tokenId: token.tokenId,
-				txHash: result.txHash.toLowerCase(),
-			});
+			// Durably record intent BEFORE the irreversible approve/deposit. If the
+			// process dies after the tx confirms, this `submitted` row survives so a
+			// keyed retry short-circuits above rather than double-funding.
+			const [pending] = await db
+				.insert(treasuryDeposits)
+				.values({
+					amount: amount.toString(),
+					idempotencyKey,
+					orgId,
+					source: "direct",
+					status: "submitted",
+					token: token.token,
+					tokenId: token.tokenId,
+				})
+				.returning({ id: treasuryDeposits.id });
+
+			let result: TreasuryDepositSubmissionResult;
+			try {
+				result = await options.payrollSubmitter.submitTreasuryDeposit({
+					amount,
+					amountPCT: encryptAmountPct(amount, eercAccount.publicKey),
+					confirmations: options.config.indexerConfirmations,
+					eoaPrivateKey,
+					tokenAddress: token.address,
+				});
+			} catch (error) {
+				await db
+					.update(treasuryDeposits)
+					.set({ status: "failed", updatedAt: new Date() })
+					.where(eq(treasuryDeposits.id, pending!.id));
+				request.log.error(
+					{ err: error, orgId },
+					"treasury_deposit_submit_failed",
+				);
+				return reply.code(502).send({ error: "treasury_deposit_failed" });
+			}
+
+			await db
+				.update(treasuryDeposits)
+				.set({
+					status: "confirmed",
+					txHash: result.txHash.toLowerCase(),
+					updatedAt: new Date(),
+				})
+				.where(eq(treasuryDeposits.id, pending!.id));
 
 			return reply.code(201).send({
 				amount: amount.toString(),

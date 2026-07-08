@@ -509,9 +509,14 @@ export const treasuryDeposits = pgTable(
 		token: text("token").notNull(),
 		tokenId: bigint("token_id", { mode: "bigint" }).notNull(),
 		amount: text("amount").notNull(),
-		txHash: text("tx_hash").notNull(),
+		// The hash is unknown until the on-chain approve/deposit confirms; a
+		// freshly inserted `submitted` row carries no tx_hash yet.
+		txHash: text("tx_hash"),
 		source: treasuryDepositSource("source").notNull(),
 		status: treasuryDepositStatus("status").notNull(),
+		// Optional client-supplied dedupe key. A retry reusing the same key for an
+		// org returns the original row instead of broadcasting a second deposit.
+		idempotencyKey: text("idempotency_key"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -523,6 +528,12 @@ export const treasuryDeposits = pgTable(
 		index("treasury_deposits_org_id_idx").on(table.orgId),
 		index("treasury_deposits_tx_hash_idx").on(table.txHash),
 		index("treasury_deposits_source_status_idx").on(table.source, table.status),
+		// Dedupe retries: NULL keys stay distinct in Postgres, so unkeyed deposits
+		// never collide and remain backward-compatible.
+		uniqueIndex("treasury_deposits_org_idempotency_key_uidx").on(
+			table.orgId,
+			table.idempotencyKey,
+		),
 	],
 );
 
