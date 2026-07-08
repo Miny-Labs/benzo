@@ -880,6 +880,85 @@ describe("@benzo/api orgs", () => {
 		}
 	});
 
+	it("resumes a keyed deposit whose first attempt crashed before broadcasting", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"07".repeat(32)}` as Hex;
+		const txHash = `0x${"08".repeat(32)}` as Hex;
+		let submitCalls = 0;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					submitCalls += 1;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d2".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Resume Co", slug: `resume-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			// Simulate a first attempt that inserted the `submitted` row but crashed
+			// BEFORE broadcasting (no txHash), long enough ago to be past the lease.
+			const key = randomUUID();
+			await db.insert(treasuryDeposits).values({
+				amount: "1000000",
+				idempotencyKey: key,
+				orgId,
+				source: "direct",
+				status: "submitted",
+				token: "usdc",
+				tokenId: 1n,
+				txHash: null,
+				updatedAt: new Date(Date.now() - 5 * 60_000),
+			});
+
+			// A retry with the same key must RESUME (re-broadcast), not return a
+			// terminal stuck `submitted`/txHash:null.
+			const resumed = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(resumed.statusCode).toBe(201);
+			expect(submitCalls).toBe(1);
+
+			// Still ONE row for the key (resumed in place), now confirmed with a hash.
+			const rows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId));
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toMatchObject({
+				status: "confirmed",
+				txHash: txHash.toLowerCase(),
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 	it("marks the deposit failed and returns 502 when submission throws", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);

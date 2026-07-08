@@ -359,8 +359,21 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 						eqOp(table.idempotencyKey, idempotencyKey),
 					),
 			});
-			if (existing) {
-				return reply.code(200).send({
+			// A submitted row can legitimately sit without a txHash only during the
+			// brief approve+deposit broadcast window; older than this it crashed
+			// BEFORE broadcasting and is resumable — otherwise a keyed retry would
+			// return a terminal `submitted`/txHash:null and stall the funding
+			// forever. A recent null-hash row is treated as still in-flight (202).
+			const TREASURY_DEPOSIT_LEASE_MS = 90_000;
+			const resumable =
+				existing?.status === "submitted" &&
+				!existing.txHash &&
+				Date.now() - existing.updatedAt.getTime() >
+					TREASURY_DEPOSIT_LEASE_MS;
+			if (existing && !resumable) {
+				const inFlightPreBroadcast =
+					existing.status === "submitted" && !existing.txHash;
+				return reply.code(inFlightPreBroadcast ? 202 : 200).send({
 					amount: existing.amount,
 					source: existing.source,
 					status: existing.status,
@@ -378,21 +391,49 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				unsealString(options.config.appMasterKey, treasury.sealedEercKey),
 			);
 
-			// Durably record intent BEFORE the irreversible approve/deposit. If the
-			// process dies after the tx confirms, this `submitted` row survives so a
-			// keyed retry short-circuits above rather than double-funding.
-			const [pending] = await db
-				.insert(treasuryDeposits)
-				.values({
-					amount: amount.toString(),
-					idempotencyKey,
-					orgId,
-					source: "direct",
-					status: "submitted",
-					token: token.token,
-					tokenId: token.tokenId,
-				})
-				.returning({ id: treasuryDeposits.id });
+			// Durably record intent BEFORE the irreversible approve/deposit. On
+			// resume, re-claim the crashed row under an optimistic lock on
+			// updatedAt so two concurrent resumes can't both broadcast; otherwise
+			// insert a fresh `submitted` row.
+			let pendingId: string;
+			if (resumable && existing) {
+				const [claimed] = await db
+					.update(treasuryDeposits)
+					.set({ status: "submitted", txHash: null, updatedAt: new Date() })
+					.where(
+						and(
+							eq(treasuryDeposits.id, existing.id),
+							eq(treasuryDeposits.updatedAt, existing.updatedAt),
+						),
+					)
+					.returning({ id: treasuryDeposits.id });
+				if (!claimed) {
+					// Another request claimed the resume; treat as in-flight.
+					return reply.code(202).send({
+						amount: existing.amount,
+						source: existing.source,
+						status: "submitted",
+						token: existing.token,
+						tokenId: existing.tokenId.toString(),
+						txHash: null,
+					});
+				}
+				pendingId = claimed.id;
+			} else {
+				const [pending] = await db
+					.insert(treasuryDeposits)
+					.values({
+						amount: amount.toString(),
+						idempotencyKey,
+						orgId,
+						source: "direct",
+						status: "submitted",
+						token: token.token,
+						tokenId: token.tokenId,
+					})
+					.returning({ id: treasuryDeposits.id });
+				pendingId = pending!.id;
+			}
 
 			// Captured the moment the deposit tx is broadcast (before the
 			// confirmation wait). Once set, the tx may have landed on-chain, so a
@@ -410,7 +451,7 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 						await db
 							.update(treasuryDeposits)
 							.set({ txHash: h.toLowerCase(), updatedAt: new Date() })
-							.where(eq(treasuryDeposits.id, pending!.id));
+							.where(eq(treasuryDeposits.id, pendingId));
 					},
 					tokenAddress: token.address,
 				});
@@ -437,7 +478,7 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				await db
 					.update(treasuryDeposits)
 					.set({ status: "failed", updatedAt: new Date() })
-					.where(eq(treasuryDeposits.id, pending!.id));
+					.where(eq(treasuryDeposits.id, pendingId));
 				request.log.error(
 					{ err: error, orgId },
 					"treasury_deposit_submit_failed",
@@ -452,7 +493,7 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					txHash: result.txHash.toLowerCase(),
 					updatedAt: new Date(),
 				})
-				.where(eq(treasuryDeposits.id, pending!.id));
+				.where(eq(treasuryDeposits.id, pendingId));
 
 			return reply.code(201).send({
 				amount: amount.toString(),
