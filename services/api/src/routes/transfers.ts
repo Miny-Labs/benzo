@@ -5,8 +5,7 @@ import { z } from "zod";
 import type { Database } from "../db/client.js";
 import { handles, users } from "../db/schema.js";
 import type { IdentityChainClient } from "../identity/chain.js";
-
-const HANDLE_PATTERN = /^[a-z0-9_]{3,20}$/;
+import { parseHandle } from "./identity.js";
 
 const resolveRecipientBodySchema = z
 	.object({
@@ -86,15 +85,16 @@ async function readAddressForHandle(
 ): Promise<
 	| { address: string; ok: true }
 	| {
-			error: "invalid_handle" | "recipient_not_found";
+			error: "invalid_handle" | "reserved_handle" | "recipient_not_found";
 			ok: false;
 			statusCode: 400 | 404;
 	  }
 > {
 	const normalizedHandle = handle.startsWith("@") ? handle.slice(1) : handle;
+	const handleResult = parseHandle(normalizedHandle);
 
-	if (!HANDLE_PATTERN.test(normalizedHandle)) {
-		return { error: "invalid_handle", ok: false, statusCode: 400 };
+	if (!handleResult.ok) {
+		return { error: handleResult.error, ok: false, statusCode: 400 };
 	}
 
 	const [row] = await db
@@ -103,7 +103,7 @@ async function readAddressForHandle(
 		})
 		.from(handles)
 		.innerJoin(users, eq(users.id, handles.userId))
-		.where(eq(handles.handle, normalizedHandle))
+		.where(eq(handles.handle, handleResult.handle))
 		.limit(1);
 
 	if (!row) {

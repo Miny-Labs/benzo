@@ -17,6 +17,8 @@ interface IPrivateGiftEscrowEerc {
     ) external;
 
     function registrar() external view returns (IRegistrar);
+
+    function tokenIds(address token) external view returns (uint256);
 }
 
 /// @title Private-token gift escrow for Benzo gift links.
@@ -72,6 +74,7 @@ contract PrivateGiftEscrow is ReentrancyGuard {
 
     error InvalidEerc(address eerc);
     error InvalidToken(address token);
+    error TokenNotRegistered(address token);
     error InvalidClaimAddress(address claimAddress);
     error InvalidRecipient(address recipient);
     error InvalidAmount();
@@ -105,9 +108,9 @@ contract PrivateGiftEscrow is ReentrancyGuard {
         return _gifts[giftId];
     }
 
-    /// @notice Creates a private escrow gift for any token accepted by the eERC converter.
+    /// @notice Creates a private escrow gift for a token already registered on the eERC converter.
     /// @param claimAddress Ephemeral EOA address whose private key is embedded in the off-chain gift link.
-    /// @param token ERC20 token to escrow.
+    /// @param token ERC20 token to escrow. Must be registered on the eERC so claims can deposit it.
     /// @param amount Public ERC20 amount to escrow.
     /// @param expiry Timestamp after which only the sender may refund.
     /// @return giftId Newly assigned gift id.
@@ -122,6 +125,14 @@ contract PrivateGiftEscrow is ReentrancyGuard {
         }
         if (token == address(0)) {
             revert InvalidToken(token);
+        }
+        // Only tokens the eERC can accept may be escrowed. An unregistered token
+        // (or a fee-on-transfer token the eERC rejects) would let createGift
+        // succeed while every claim reverts in depositFor, leaving the gift
+        // unclaimable until refund-after-expiry. Restricting to eERC-registered
+        // stablecoins (USDC/EURC, fee-free) keeps claims always redeemable.
+        if (eerc.tokenIds(token) == 0) {
+            revert TokenNotRegistered(token);
         }
         if (amount == 0) {
             revert InvalidAmount();

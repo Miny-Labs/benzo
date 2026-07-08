@@ -210,6 +210,24 @@ describe("transfer recipient resolution", () => {
 		expect(bareResponse.json()).toEqual({ error: "invalid_handle" });
 	});
 
+	it("rejects a reserved handle like the identity API", async () => {
+		const prefixedResponse = await app.inject({
+			method: "POST",
+			payload: { handle: "@admin" },
+			url: "/transfers/resolve-recipient",
+		});
+		const bareResponse = await app.inject({
+			method: "POST",
+			payload: { handle: "admin" },
+			url: "/transfers/resolve-recipient",
+		});
+
+		expect(prefixedResponse.statusCode).toBe(400);
+		expect(prefixedResponse.json()).toEqual({ error: "reserved_handle" });
+		expect(bareResponse.statusCode).toBe(400);
+		expect(bareResponse.json()).toEqual({ error: "reserved_handle" });
+	});
+
 	it("rejects an invite that specifies both a public giftAmount and a private escrow reference", async () => {
 		const creatorCookie = await session(db, config, CREATOR);
 

@@ -121,7 +121,23 @@ describe("PrivateGiftEscrow", () => {
 			await token
 				.connect(sender)
 				.approve(await escrow.getAddress(), 1_000_000_000n);
+			await registerTokenOnEerc(token, 1_000_000n);
 		}
+	};
+
+	// The eERC converter registers a token on its first deposit; a self-deposit
+	// from the (eERC-registered) owner is the only path to pre-register one so
+	// escrow.createGift, which now requires an eERC-registered token, accepts it.
+	const registerTokenOnEerc = async (token: MockUSDC, amount: bigint) => {
+		await token.mint(owner.address, amount);
+		await token.connect(owner).approve(await eerc.getAddress(), amount);
+		await eerc
+			.connect(owner)
+			["deposit(uint256,address,uint256[7])"](
+				amount,
+				await token.getAddress(),
+				pctFor(amount, ownerUser.publicKey),
+			);
 	};
 
 	const createGift = async (token: MockUSDC, expiryOffset = 3600) => {
@@ -188,6 +204,12 @@ describe("PrivateGiftEscrow", () => {
 				GIFT_AMOUNT,
 			);
 
+			// Baseline includes the token's pre-registration deposit; the claim
+			// should add exactly GIFT_AMOUNT to the eERC's holdings.
+			const eercBalanceBefore = await token.balanceOf(
+				await eerc.getAddress(),
+			);
+
 			await expect(
 				escrow
 					.connect(stranger)
@@ -207,7 +229,7 @@ describe("PrivateGiftEscrow", () => {
 			expect(gift.recipient).to.equal(recipient.signer.address);
 			expect(await token.balanceOf(await escrow.getAddress())).to.equal(0n);
 			expect(await token.balanceOf(await eerc.getAddress())).to.equal(
-				GIFT_AMOUNT,
+				eercBalanceBefore + GIFT_AMOUNT,
 			);
 
 			const balance = await eerc.getBalanceFromTokenAddress(
@@ -303,6 +325,7 @@ describe("PrivateGiftEscrow", () => {
 			18,
 		);
 		await deepToken.waitForDeployment();
+		await registerTokenOnEerc(deepToken, 10n ** 18n);
 		const belowScale = 500_000n; // < 10 ** (18 - 6)
 		await deepToken.mint(sender.address, belowScale);
 		await deepToken
@@ -339,56 +362,57 @@ describe("PrivateGiftEscrow", () => {
 		);
 	});
 
-	it("escrows the actually-received amount for fee-on-transfer tokens so refunds don't strand funds", async () => {
-		const feeBps = 100n; // 1%
-		const feeToken = await new MockFeeOnTransferToken__factory(owner).deploy(
-			"Fee Coin",
-			"FEE",
+	it("rejects createGift for a token not registered on the eERC", async () => {
+		const unregistered = await new MockUSDC__factory(owner).deploy(
+			"Unregistered Coin",
+			"UNREG",
 			6,
-			feeBps,
 		);
-		await feeToken.waitForDeployment();
-		const requested = GIFT_AMOUNT;
-		await feeToken.mint(sender.address, requested);
-		await feeToken
+		await unregistered.waitForDeployment();
+		await unregistered.mint(sender.address, GIFT_AMOUNT);
+		await unregistered
 			.connect(sender)
-			.approve(await escrow.getAddress(), requested);
+			.approve(await escrow.getAddress(), GIFT_AMOUNT);
 
 		const expiry = (await time.latest()) + 3600;
-		const tokenAddress = await feeToken.getAddress();
-		const received = requested - (requested * feeBps) / 10_000n;
-		const expectedGiftId = (await escrow.giftCount()) + 1n;
+		const tokenAddress = await unregistered.getAddress();
 
 		await expect(
 			escrow
 				.connect(sender)
-				.createGift(claimWallet.address, tokenAddress, requested, expiry),
+				.createGift(claimWallet.address, tokenAddress, GIFT_AMOUNT, expiry),
 		)
-			.to.emit(escrow, "GiftCreated")
-			.withArgs(
-				expectedGiftId,
-				sender.address,
-				claimWallet.address,
-				tokenAddress,
-				received,
-				expiry,
-			);
+			.to.be.revertedWithCustomError(escrow, "TokenNotRegistered")
+			.withArgs(tokenAddress);
+	});
 
-		const gift = await escrow.getGift(expectedGiftId);
-		expect(gift.amount).to.equal(received);
-		expect(await feeToken.balanceOf(await escrow.getAddress())).to.equal(
-			received,
+	it("rejects createGift for a fee-on-transfer token the eERC cannot accept", async () => {
+		// A fee-on-transfer token can never register on the eERC (its deposit
+		// reverts on the transfer shortfall), so every claim would revert in
+		// depositFor. Reject it at creation instead of stranding funds until
+		// refund-after-expiry.
+		const feeToken = await new MockFeeOnTransferToken__factory(owner).deploy(
+			"Fee Coin",
+			"FEE",
+			6,
+			100n, // 1%
 		);
+		await feeToken.waitForDeployment();
+		await feeToken.mint(sender.address, GIFT_AMOUNT);
+		await feeToken
+			.connect(sender)
+			.approve(await escrow.getAddress(), GIFT_AMOUNT);
 
-		await time.increaseTo(expiry);
+		const expiry = (await time.latest()) + 3600;
+		const tokenAddress = await feeToken.getAddress();
 
-		// Refund moves exactly the escrowed amount; with the requested amount it
-		// would exceed the escrow balance and revert, stranding funds.
-		await expect(escrow.connect(sender).refund(expectedGiftId))
-			.to.emit(escrow, "GiftRefunded")
-			.withArgs(expectedGiftId, sender.address, tokenAddress, received);
-
-		expect(await feeToken.balanceOf(await escrow.getAddress())).to.equal(0n);
+		await expect(
+			escrow
+				.connect(sender)
+				.createGift(claimWallet.address, tokenAddress, GIFT_AMOUNT, expiry),
+		)
+			.to.be.revertedWithCustomError(escrow, "TokenNotRegistered")
+			.withArgs(tokenAddress);
 	});
 
 	it("refunds only the sender after expiry", async () => {

@@ -604,7 +604,7 @@ function requireUser(request: FastifyRequest) {
 	return request.user;
 }
 
-function parseHandle(
+export function parseHandle(
 	value: string,
 ):
 	| { handle: string; ok: true }
