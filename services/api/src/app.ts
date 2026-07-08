@@ -52,6 +52,7 @@ import { onboardingRoutes } from "./routes/onboarding.js";
 import { onrampRoutes } from "./routes/onramp.js";
 import { orgsRoutes } from "./routes/orgs.js";
 import { payrollRoutes } from "./routes/payroll.js";
+import { transfersRoutes } from "./routes/transfers.js";
 import type { PgBoss } from "pg-boss";
 import type { Pool } from "pg";
 import {
@@ -187,6 +188,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		});
 		await fastify.register(payrollRoutes, { boss, db });
 		await fastify.register(onrampRoutes, { config, db, onrampChain });
+		await fastify.register(transfersRoutes, { db, identityChain });
 
 		if (options.startBoss !== false) {
 			await boss.start();

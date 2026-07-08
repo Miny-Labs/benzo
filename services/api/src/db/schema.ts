@@ -37,6 +37,10 @@ export type MockKycInputPayload = {
 };
 
 export const inviteKind = pgEnum("invite_kind", ["invite", "gift"]);
+export const inviteEscrowKind = pgEnum("invite_escrow_kind", [
+	"public",
+	"private",
+]);
 export const inviteStatus = pgEnum("invite_status", [
 	"created",
 	"claimed",
@@ -305,6 +309,8 @@ export const invites = pgTable(
 		creatorUserId: uuid("creator_user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
+		escrowGiftId: text("escrow_gift_id"),
+		escrowKind: inviteEscrowKind("escrow_kind"),
 		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 		giftAmount: text("gift_amount"),
 		id: uuid("id").defaultRandom().primaryKey(),
@@ -603,6 +609,7 @@ export type OnboardingStatus = (typeof onboardingStatus.enumValues)[number];
 export type OnrampStatus = (typeof onrampStatus.enumValues)[number];
 export type OnrampDestToken = (typeof onrampDestToken.enumValues)[number];
 export type InviteKind = (typeof inviteKind.enumValues)[number];
+export type InviteEscrowKind = (typeof inviteEscrowKind.enumValues)[number];
 export type InviteStatus = (typeof inviteStatus.enumValues)[number];
 export type OrgRole = (typeof orgRole.enumValues)[number];
 export type PayrollRunStatus = (typeof payrollRunStatus.enumValues)[number];
