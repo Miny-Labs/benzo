@@ -139,7 +139,7 @@ export function verifyAuditorManifestSignature(
 	}
 }
 
-function decodeAuditorPct(
+export function decodeAuditorPct(
 	amountPct: Buffer,
 ): [bigint, bigint, bigint, bigint, bigint, bigint, bigint] {
 	const [decoded] = decodeAbiParameters(

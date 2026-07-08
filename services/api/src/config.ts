@@ -44,6 +44,27 @@ const relayerPrivateKeySchema = z
 		}
 	})
 	.optional();
+// Secp256k1 (EVM) key used to sign Tier B proof-of-payment packets. Optional:
+// when unset the disclosure attestation endpoints report 503 rather than
+// blocking startup.
+const auditorAttestationPrivateKeySchema = z
+	.string()
+	.regex(
+		privateKeyPattern,
+		"AUDITOR_ATTESTATION_PRIVATE_KEY must be a 0x-prefixed private key",
+	)
+	.superRefine((value, ctx) => {
+		try {
+			privateKeyToAccount(value as `0x${string}`);
+		} catch {
+			ctx.addIssue({
+				code: "custom",
+				message:
+					"AUDITOR_ATTESTATION_PRIVATE_KEY must be a valid secp256k1 private key",
+			});
+		}
+	})
+	.optional();
 export const DEFAULT_CORS_ORIGINS = [
 	"https://wallet.benzo.space",
 	"https://console.benzo.space",
@@ -66,6 +87,7 @@ const envSchema = z
 			.regex(hex32BytesPattern, "APP_MASTER_KEY must be a 32-byte hex string")
 			.transform((value) => value.replace(/^0x/i, "").toLowerCase()),
 		API_DOMAIN: z.string().trim().min(1).optional(),
+		AUDITOR_ATTESTATION_PRIVATE_KEY: auditorAttestationPrivateKeySchema,
 		BENZO_CCTP_ROUTER_ADDRESS: z
 			.string()
 			.regex(evmAddressPattern, "BENZO_CCTP_ROUTER_ADDRESS must be an EVM address")
@@ -303,6 +325,7 @@ const envSchema = z
 		return {
 			appMasterKey: env.APP_MASTER_KEY,
 			apiDomain: env.API_DOMAIN ?? `localhost:${env.PORT}`,
+			auditorAttestationPrivateKey: env.AUDITOR_ATTESTATION_PRIVATE_KEY,
 			autoDepositRouterAddress:
 				env.BENZO_CCTP_ROUTER_ADDRESS?.toLowerCase() ??
 				cctp?.autoDepositRouter ??
@@ -359,7 +382,15 @@ const envSchema = z
 		};
 	});
 
-export type ApiConfig = z.infer<typeof envSchema>;
+// `auditorAttestationPrivateKey` is re-declared optional so callers that build a
+// config object directly (tests, tooling) are not forced to set the Tier B
+// signing key. `loadConfig` still populates it from the environment.
+export type ApiConfig = Omit<
+	z.infer<typeof envSchema>,
+	"auditorAttestationPrivateKey"
+> & {
+	auditorAttestationPrivateKey?: string;
+};
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 	return envSchema.parse(env);
