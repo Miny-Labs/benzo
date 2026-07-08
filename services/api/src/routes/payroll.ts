@@ -314,13 +314,24 @@ export const payrollRoutes: FastifyPluginAsync<PayrollRoutesOptions> = async (
 				return reply.code(409).send({ error: "treasury_not_eerc_registered" });
 			}
 			if (run.status === "ready") {
-				const funding = await loadRunFundingStatus({
-					config: options.config,
-					sealedEercKey: treasury.sealedEercKey,
-					submitter: options.payrollSubmitter,
-					treasuryAddress: treasury.address,
-					run,
-				});
+				let funding: Awaited<ReturnType<typeof loadRunFundingStatus>>;
+				try {
+					funding = await loadRunFundingStatus({
+						config: options.config,
+						sealedEercKey: treasury.sealedEercKey,
+						submitter: options.payrollSubmitter,
+						treasuryAddress: treasury.address,
+						run,
+					});
+				} catch (error) {
+					request.log.error(
+						{ err: error, runId },
+						"payroll treasury balance lookup failed",
+					);
+					return reply
+						.code(502)
+						.send({ error: "treasury_balance_unavailable" });
+				}
 				if (!funding.funded) {
 					return reply.code(409).send({
 						availableAmount: funding.availableAmount,
