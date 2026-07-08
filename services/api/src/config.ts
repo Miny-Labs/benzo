@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { STABLECOINS, type StablecoinSymbol } from "@benzo/config";
 import { privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
 import {
@@ -11,6 +12,7 @@ import {
 	isTestnetChainId,
 	isTestnetRpcHost,
 	loadDeploymentRegistry,
+	type ManifestTokenEntry,
 	NETWORK_TIER,
 	resolveRpcUrl,
 } from "./deployment-manifest.js";
@@ -24,6 +26,7 @@ const defaultPayrollZkArtifactDir = path.resolve(
 	"../zk-artifacts",
 );
 const defaultDripWei = "500000000000000000";
+const treasuryFundingSymbols = ["USDC", "EURC"] as const satisfies readonly StablecoinSymbol[];
 const relayerPrivateKeySchema = z
 	.string()
 	.regex(
@@ -47,6 +50,14 @@ export const DEFAULT_CORS_ORIGINS = [
 	"http://localhost:5173",
 	"http://localhost:5175",
 ];
+
+export type TreasuryFundingToken = {
+	address: string;
+	decimals: number;
+	symbol: StablecoinSymbol;
+	token: Lowercase<StablecoinSymbol>;
+	tokenId: bigint;
+};
 
 const envSchema = z
 	.object({
@@ -273,6 +284,7 @@ const envSchema = z
 		// Precedence: explicit ENV override → manifest → (hard error, no Fuji fallback).
 		const eercEncryptedErcAddress =
 			env.EERC_ENCRYPTED_ERC_ADDRESS?.toLowerCase() ??
+			registry.converterAddress ??
 			registry.encryptedErcAddress;
 
 		if (!eercEncryptedErcAddress) {
@@ -309,6 +321,7 @@ const envSchema = z
 			dripBalanceThresholdWei: BigInt(env.DRIP_BALANCE_THRESHOLD_WEI),
 			dripWei: BigInt(env.DRIP_WEI),
 			eercDeploymentManifest: env.EERC_DEPLOYMENT_MANIFEST,
+			eercConverterAddress: eercEncryptedErcAddress,
 			eercEncryptedErcAddress,
 			eercRegistrarAddress,
 			handleRegistryAddress:
@@ -339,6 +352,10 @@ const envSchema = z
 			sessionTtlDays: env.SESSION_TTL_DAYS,
 			siweNonceTtlMinutes: env.SIWE_NONCE_TTL_MINUTES,
 			tier,
+			treasuryFundingTokens: resolveTreasuryFundingTokens(
+				chainEnv,
+				registry.tokens,
+			),
 		};
 	});
 
@@ -346,4 +363,39 @@ export type ApiConfig = z.infer<typeof envSchema>;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 	return envSchema.parse(env);
+}
+
+function resolveTreasuryFundingTokens(
+	chainEnv: (typeof CHAIN_ENVS)[number],
+	manifestTokens: Record<string, ManifestTokenEntry>,
+): TreasuryFundingToken[] {
+	const stablecoins = STABLECOINS[chainEnv];
+
+	return treasuryFundingSymbols.flatMap((symbol) => {
+		const stablecoin = stablecoins[symbol];
+		const manifest = manifestTokens[symbol];
+
+		if (!stablecoin || !manifest) {
+			return [];
+		}
+
+		if (manifest.address.toLowerCase() !== stablecoin.address.toLowerCase()) {
+			throw new Error(`treasury_token_manifest_mismatch:${chainEnv}:${symbol}`);
+		}
+		if (manifest.decimals !== stablecoin.decimals) {
+			throw new Error(
+				`treasury_token_decimals_mismatch:${chainEnv}:${symbol}`,
+			);
+		}
+
+		return [
+			{
+				address: manifest.address,
+				decimals: manifest.decimals,
+				symbol,
+				token: symbol.toLowerCase() as Lowercase<StablecoinSymbol>,
+				tokenId: manifest.tokenId,
+			},
+		];
+	});
 }

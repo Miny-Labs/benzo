@@ -110,6 +110,9 @@ importers:
 
   services/api:
     dependencies:
+      '@benzo/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@fastify/cookie':
         specifier: ^11.0.2
         version: 11.0.2

@@ -184,6 +184,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 			config,
 			db,
 			onboardingChain,
+			payrollSubmitter,
 			treasuryRegistrar,
 		});
 		await fastify.register(payrollRoutes, { boss, db });

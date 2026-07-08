@@ -489,6 +489,43 @@ export const orgTreasuries = pgTable(
 	],
 );
 
+export const treasuryDepositSource = pgEnum("treasury_deposit_source", [
+	"direct",
+	"cctp",
+]);
+export const treasuryDepositStatus = pgEnum("treasury_deposit_status", [
+	"submitted",
+	"confirmed",
+	"failed",
+]);
+
+export const treasuryDeposits = pgTable(
+	"treasury_deposits",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		orgId: uuid("org_id")
+			.notNull()
+			.references(() => orgs.id, { onDelete: "cascade" }),
+		token: text("token").notNull(),
+		tokenId: bigint("token_id", { mode: "bigint" }).notNull(),
+		amount: text("amount").notNull(),
+		txHash: text("tx_hash").notNull(),
+		source: treasuryDepositSource("source").notNull(),
+		status: treasuryDepositStatus("status").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		index("treasury_deposits_org_id_idx").on(table.orgId),
+		index("treasury_deposits_tx_hash_idx").on(table.txHash),
+		index("treasury_deposits_source_status_idx").on(table.source, table.status),
+	],
+);
+
 export const payrollRuns = pgTable(
 	"payroll_runs",
 	{
@@ -614,3 +651,7 @@ export type InviteStatus = (typeof inviteStatus.enumValues)[number];
 export type OrgRole = (typeof orgRole.enumValues)[number];
 export type PayrollRunStatus = (typeof payrollRunStatus.enumValues)[number];
 export type PayrollItemStatus = (typeof payrollItemStatus.enumValues)[number];
+export type TreasuryDepositSource =
+	(typeof treasuryDepositSource.enumValues)[number];
+export type TreasuryDepositStatus =
+	(typeof treasuryDepositStatus.enumValues)[number];

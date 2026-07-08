@@ -37,6 +37,7 @@ function config(): ApiConfig {
 		dripBalanceThresholdWei: 500_000_000_000_000_000n,
 		dripWei: 500_000_000_000_000_000n,
 		eercDeploymentManifest: undefined,
+		eercConverterAddress: "0x46688f1704a69a6c276cccb823e36c80787b0fa2",
 		eercEncryptedErcAddress: "0x46688f1704a69a6c276cccb823e36c80787b0fa2",
 		eercRegistrarAddress: "0x9a63fea9851097dbaf3757b636217fdde50abaf0",
 		host: "127.0.0.1",
@@ -62,6 +63,7 @@ function config(): ApiConfig {
 		sessionCookieName: "benzo_test_session",
 		sessionTtlDays: 7,
 		siweNonceTtlMinutes: 10,
+		treasuryFundingTokens: [],
 	};
 }
 

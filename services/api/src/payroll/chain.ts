@@ -13,11 +13,13 @@ import type { ApiConfig } from "../config.js";
 import {
 	buildRegistrationProofInput,
 	createManagedEercAccount,
+	type EercBalance,
 	flattenEncryptedBalance,
 	getDecryptedBalance,
 	type ManagedEercAccount,
 	normalizeEercBalance,
 	normalizePublicKey,
+	type PoseidonPCT,
 	type TransferProofCalldata,
 } from "./eerc.js";
 import type { PayrollProver } from "./prover.js";
@@ -56,7 +58,24 @@ export type PreparedTransferSubmission = {
 	txHash: Hex;
 };
 
+export type TreasuryDepositSubmissionInput = {
+	amount: bigint;
+	amountPCT: PoseidonPCT;
+	confirmations?: number;
+	eoaPrivateKey: Hex;
+	tokenAddress: string;
+};
+
+export type TreasuryDepositSubmissionResult = {
+	approvalTxHash: Hex;
+	txHash: Hex;
+};
+
 export type PayrollSubmitter = {
+	loadTreasuryBalance: (input: {
+		tokenId: bigint;
+		treasuryAddress: string;
+	}) => Promise<EercBalance>;
 	loadTransferContext: (input: {
 		recipientAddress: string;
 		sender: ManagedEercAccount;
@@ -69,6 +88,9 @@ export type PayrollSubmitter = {
 	submitPreparedTransfer: (
 		input: PreparedTransferSubmission,
 	) => Promise<{ txHash: Hex }>;
+	submitTreasuryDeposit: (
+		input: TreasuryDepositSubmissionInput,
+	) => Promise<TreasuryDepositSubmissionResult>;
 	waitForConfirmations: (txHash: Hex, confirmations: number) => Promise<void>;
 };
 
@@ -193,6 +215,30 @@ const encryptedErcAbi = [
 		stateMutability: "nonpayable",
 		type: "function",
 	},
+	{
+		inputs: [
+			{ name: "amount", type: "uint256" },
+			{ name: "tokenAddress", type: "address" },
+			{ name: "amountPCT", type: "uint256[7]" },
+		],
+		name: "deposit",
+		outputs: [],
+		stateMutability: "nonpayable",
+		type: "function",
+	},
+] as const;
+
+const erc20Abi = [
+	{
+		inputs: [
+			{ name: "spender", type: "address" },
+			{ name: "amount", type: "uint256" },
+		],
+		name: "approve",
+		outputs: [{ name: "ok", type: "bool" }],
+		stateMutability: "nonpayable",
+		type: "function",
+	},
 ] as const;
 
 export function createViemTreasuryRegistrar(
@@ -275,7 +321,34 @@ export function createViemPayrollSubmitter(
 	config: ApiConfig,
 	publicClient: PublicClient,
 ): PayrollSubmitter {
+	const encryptedErcAddress = normalizeAddress(config.eercEncryptedErcAddress);
+	const converterAddress = normalizeAddress(config.eercConverterAddress);
+	const loadTreasuryBalance = async (input: {
+		tokenId: bigint;
+		treasuryAddress: string;
+	}): Promise<EercBalance> =>
+		normalizeEercBalance(
+			await publicClient.readContract({
+				abi: encryptedErcAbi,
+				address: encryptedErcAddress,
+				args: [normalizeAddress(input.treasuryAddress), input.tokenId],
+				functionName: "balanceOf",
+			}),
+		);
+	const waitForReceipt = async (
+		txHash: Hex,
+		confirmations: number,
+		revertMessage: string,
+	): Promise<void> => {
+		const receipt = await publicClient.waitForTransactionReceipt({
+			confirmations,
+			hash: txHash,
+		});
+		throwIfRevertedReceipt(receipt, revertMessage);
+	};
+
 	return {
+		loadTreasuryBalance,
 		async loadTransferContext(input) {
 			const recipient = normalizeAddress(input.recipientAddress);
 			const registered = await publicClient.readContract({
@@ -310,14 +383,10 @@ export function createViemPayrollSubmitter(
 				throw new Error("auditor_public_key_not_set");
 			}
 
-			const balance = normalizeEercBalance(
-				await publicClient.readContract({
-					abi: encryptedErcAbi,
-					address: normalizeAddress(config.eercEncryptedErcAddress),
-					args: [normalizeAddress(input.treasuryAddress), input.tokenId],
-					functionName: "balanceOf",
-				}),
-			);
+			const balance = await loadTreasuryBalance({
+				tokenId: input.tokenId,
+				treasuryAddress: input.treasuryAddress,
+			});
 
 			return {
 				auditorPublicKey,
@@ -346,7 +415,7 @@ export function createViemPayrollSubmitter(
 				account,
 				chain: null,
 				data,
-				to: normalizeAddress(config.eercEncryptedErcAddress),
+				to: encryptedErcAddress,
 			});
 			const rawTransaction = await walletClient.signTransaction({
 				...request,
@@ -374,12 +443,50 @@ export function createViemPayrollSubmitter(
 
 			return { txHash: input.txHash };
 		},
-		async waitForConfirmations(txHash, confirmations) {
-			const receipt = await publicClient.waitForTransactionReceipt({
-				confirmations,
-				hash: txHash,
+		async submitTreasuryDeposit(input) {
+			if (input.amount <= 0n) {
+				throw new Error("invalid_treasury_deposit_amount");
+			}
+
+			const account = privateKeyToAccount(input.eoaPrivateKey);
+			const walletClient = createWalletClient({
+				account,
+				transport: http(config.benzonetRpcUrl),
 			});
-			throwIfRevertedReceipt(receipt, "transfer_reverted");
+			const confirmations = input.confirmations ?? 1;
+			const tokenAddress = normalizeAddress(input.tokenAddress);
+			const approvalTxHash = await walletClient.writeContract({
+				abi: erc20Abi,
+				account,
+				address: tokenAddress,
+				args: [converterAddress, input.amount],
+				chain: null,
+				functionName: "approve",
+			});
+			await waitForReceipt(
+				approvalTxHash,
+				confirmations,
+				"treasury_deposit_approval_reverted",
+			);
+
+			const txHash = await walletClient.writeContract({
+				abi: encryptedErcAbi,
+				account,
+				address: converterAddress,
+				args: [input.amount, tokenAddress, input.amountPCT],
+				chain: null,
+				functionName: "deposit",
+			});
+			await waitForReceipt(
+				txHash,
+				confirmations,
+				"treasury_deposit_reverted",
+			);
+
+			return { approvalTxHash, txHash };
+		},
+		async waitForConfirmations(txHash, confirmations) {
+			await waitForReceipt(txHash, confirmations, "transfer_reverted");
 		},
 	};
 }

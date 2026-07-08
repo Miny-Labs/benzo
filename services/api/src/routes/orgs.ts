@@ -1,12 +1,17 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import { getAddress } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
-import type { ApiConfig } from "../config.js";
+import type { ApiConfig, TreasuryFundingToken } from "../config.js";
 import type { Database } from "../db/client.js";
 import { sealString, unsealString } from "../crypto/seal.js";
-import { orgMembers, orgTreasuries, orgs } from "../db/schema.js";
+import {
+	orgMembers,
+	orgTreasuries,
+	orgs,
+	treasuryDeposits,
+} from "../db/schema.js";
 import {
 	ROLE_RANK,
 	loadMembership,
@@ -16,15 +21,18 @@ import type { OnboardingChainClient } from "../onboarding/chain.js";
 import {
 	createManagedEercAccount,
 	deserializeManagedEercAccount,
+	encryptAmountPct,
+	getDecryptedBalance,
 	serializeManagedEercAccount,
 	type ManagedEercAccount,
 } from "../payroll/eerc.js";
-import type { TreasuryRegistrar } from "../payroll/chain.js";
+import type { PayrollSubmitter, TreasuryRegistrar } from "../payroll/chain.js";
 
 type OrgsRoutesOptions = {
 	config: ApiConfig;
 	db: Database;
 	onboardingChain: OnboardingChainClient;
+	payrollSubmitter: PayrollSubmitter;
 	treasuryRegistrar: TreasuryRegistrar;
 };
 
@@ -47,6 +55,11 @@ const provisionTreasurySchema = z.object({
 	// Managed-treasury custody is an explicit consent moment: the caller must
 	// acknowledge that Benzo will hold this treasury key on its servers.
 	consent: z.literal(true),
+});
+
+const treasuryDepositSchema = z.object({
+	amount: z.string().trim().regex(/^[1-9][0-9]*$/),
+	token: z.enum(["usdc", "eurc"]),
 });
 
 const evmAddress = /^0x[0-9a-fA-F]{40}$/;
@@ -297,6 +310,72 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 		},
 	);
 
+	// POST /orgs/:id/treasury/deposit — convert ERC20 into encrypted treasury
+	// balance. The managed EOA key is unsealed only for signing approve/deposit.
+	fastify.post(
+		"/orgs/:id/treasury/deposit",
+		{ preHandler: requireOrgRole("admin") },
+		async (request, reply) => {
+			const orgId = (request.params as { id: string }).id;
+			const body = treasuryDepositSchema.safeParse(request.body);
+			if (!body.success) {
+				return reply.code(400).send({ error: "invalid_treasury_deposit" });
+			}
+
+			const token = resolveFundingToken(options.config, body.data.token);
+			if (!token) {
+				return reply.code(503).send({ error: "treasury_token_not_configured" });
+			}
+
+			const treasury = await db.query.orgTreasuries.findFirst({
+				where: (table, { eq: eqOp }) => eqOp(table.orgId, orgId),
+			});
+			if (!treasury) {
+				return reply.code(404).send({ error: "treasury_not_found" });
+			}
+			if (!treasury.eercRegisteredAt || !treasury.sealedEercKey) {
+				return reply
+					.code(409)
+					.send({ error: "treasury_not_eerc_registered" });
+			}
+
+			const amount = BigInt(body.data.amount);
+			const eoaPrivateKey = unsealString(
+				options.config.appMasterKey,
+				treasury.sealedEoaKey,
+			) as `0x${string}`;
+			const eercAccount = deserializeManagedEercAccount(
+				unsealString(options.config.appMasterKey, treasury.sealedEercKey),
+			);
+			const result = await options.payrollSubmitter.submitTreasuryDeposit({
+				amount,
+				amountPCT: encryptAmountPct(amount, eercAccount.publicKey),
+				eoaPrivateKey,
+				tokenAddress: token.address,
+			});
+
+			await db.insert(treasuryDeposits).values({
+				amount: amount.toString(),
+				orgId,
+				source: "direct",
+				status: "confirmed",
+				token: token.token,
+				tokenId: token.tokenId,
+				txHash: result.txHash.toLowerCase(),
+			});
+
+			return reply.code(201).send({
+				amount: amount.toString(),
+				approvalTxHash: result.approvalTxHash,
+				source: "direct",
+				status: "confirmed",
+				token: token.token,
+				tokenId: token.tokenId.toString(),
+				txHash: result.txHash,
+			});
+		},
+	);
+
 	// GET /orgs/:id/treasury — custody status; never returns key material.
 	fastify.get(
 		"/orgs/:id/treasury",
@@ -309,7 +388,9 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				.select({
 					address: orgTreasuries.address,
 					consentedAt: orgTreasuries.consentedAt,
-					registered: sql<boolean>`${orgTreasuries.eercRegisteredAt} is not null`,
+					consentedBy: orgTreasuries.consentedBy,
+					eercRegisteredAt: orgTreasuries.eercRegisteredAt,
+					sealedEercKey: orgTreasuries.sealedEercKey,
 				})
 				.from(orgTreasuries)
 				.where(eq(orgTreasuries.orgId, orgId))
@@ -319,15 +400,76 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				return reply.code(404).send({ error: "treasury_not_found" });
 			}
 
+			const registered = treasury.eercRegisteredAt !== null;
+			const balances =
+				registered && treasury.sealedEercKey
+					? await loadTreasuryBalances({
+							config: options.config,
+							eercKey: treasury.sealedEercKey,
+							submitter: options.payrollSubmitter,
+							treasuryAddress: treasury.address,
+						})
+					: [];
+
 			return reply.send({
 				address: getAddress(treasury.address),
+				balances,
 				custody: "managed",
+				custodyConsent: {
+					consented: treasury.consentedAt !== null,
+					consentedAt: treasury.consentedAt?.toISOString() ?? null,
+					consentedBy: treasury.consentedBy,
+				},
 				consented: treasury.consentedAt !== null,
-				registered: treasury.registered,
+				registered,
 			});
 		},
 	);
 };
+
+function resolveFundingToken(
+	config: ApiConfig,
+	token: "usdc" | "eurc",
+): TreasuryFundingToken | null {
+	return (
+		config.treasuryFundingTokens.find(
+			(entry) => entry.token === token,
+		) ?? null
+	);
+}
+
+async function loadTreasuryBalances({
+	config,
+	eercKey,
+	submitter,
+	treasuryAddress,
+}: {
+	config: ApiConfig;
+	eercKey: Buffer;
+	submitter: PayrollSubmitter;
+	treasuryAddress: string;
+}) {
+	const account = deserializeManagedEercAccount(
+		unsealString(config.appMasterKey, eercKey),
+	);
+
+	return Promise.all(
+		config.treasuryFundingTokens.map(async (token) => {
+			const balance = await submitter.loadTreasuryBalance({
+				tokenId: token.tokenId,
+				treasuryAddress,
+			});
+
+			return {
+				amount: getDecryptedBalance(account.privateKey, balance).toString(),
+				decimals: token.decimals,
+				symbol: token.symbol,
+				token: token.token,
+				tokenId: token.tokenId.toString(),
+			};
+		}),
+	);
+}
 
 async function loadOrCreateTreasuryEercAccount(
 	db: Database,

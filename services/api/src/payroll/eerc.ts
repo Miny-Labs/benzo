@@ -469,6 +469,13 @@ export function processPoseidonPCT(
 	};
 }
 
+export function encryptAmountPct(
+	amount: bigint,
+	publicKey: [bigint, bigint],
+): PoseidonPCT {
+	return processPoseidonPCT([amount], publicKey, "amount_pct").pct;
+}
+
 // Ported from the vendored EncryptedERC TypeScript helpers in contracts/src.
 function encryptMessage(
 	publicKey: bigint[],

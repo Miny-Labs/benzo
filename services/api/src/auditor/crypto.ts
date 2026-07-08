@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import {
 	Base8,
 	type Point,
@@ -8,14 +7,13 @@ import {
 import {
 	formatPrivKeyForBabyJub,
 	genPrivKey,
-	genRandomBabyJubValue,
 	poseidonDecrypt,
-	poseidonEncrypt,
 	sign,
 	SNARK_FIELD_SIZE,
 	verifySignature,
 } from "maci-crypto";
 import { decodeAbiParameters, encodeAbiParameters } from "viem";
+import { encryptAmountPct } from "../payroll/eerc.js";
 
 export type AuditorKeypair = {
 	privateKey: string;
@@ -92,24 +90,10 @@ export function encryptAuditorAmountPct(
 	amount: bigint,
 	publicKey: AuditorPublicKey,
 ): Buffer {
-	const nonce = BigInt(`0x${randomBytes(16).toString("hex")}`) + 1n;
-	let encRandom = genRandomBabyJubValue();
-
-	while (encRandom >= subOrder) {
-		encRandom = genRandomBabyJubValue();
-	}
-
-	const authKey = mulPointEscalar(Base8, encRandom);
-	const sharedKey = mulPointEscalar(
-		publicKey.map((value) => BigInt(value)) as Point<bigint>,
-		encRandom,
-	);
-	const ciphertext = poseidonEncrypt([amount], sharedKey, nonce);
-	const pct = [
-		...ciphertext,
-		...authKey.map((value) => BigInt(value)),
-		nonce,
-	] as [bigint, bigint, bigint, bigint, bigint, bigint, bigint];
+	const pct = encryptAmountPct(amount, [
+		BigInt(publicKey[0]),
+		BigInt(publicKey[1]),
+	]);
 	const encoded = encodeAbiParameters([{ type: "uint256[7]" }], [pct]);
 
 	return Buffer.from(encoded.slice(2), "hex");
