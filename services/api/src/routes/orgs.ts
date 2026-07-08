@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import { getAddress, isAddress, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -926,7 +926,9 @@ async function recordMemberAllowlistChange({
 			.onConflictDoUpdate({
 				set: {
 					status,
-					txHash,
+					// Preserve a previously-recorded tx hash on a re-toggle or a Fuji
+					// no-op (where result.txHash is null) rather than nulling it out.
+					txHash: txHash ?? sql`${orgMemberAllowlist.txHash}`,
 					updatedAt: now,
 				},
 				target: [orgMemberAllowlist.orgId, orgMemberAllowlist.userId],
