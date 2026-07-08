@@ -74,6 +74,7 @@ const envSchema = z
 				return parsed.length > 0 ? parsed : [...DEFAULT_CORS_ORIGINS];
 			}),
 		DATABASE_URL: z.url(),
+		CCTP_DEST_DOMAIN: z.coerce.number().int().default(1),
 		DRIP_BALANCE_THRESHOLD_WEI: z
 			.string()
 			.regex(weiPattern, "DRIP_BALANCE_THRESHOLD_WEI must be a wei integer")
@@ -132,6 +133,12 @@ const envSchema = z
 			.min(1)
 			.default(defaultPayrollZkArtifactDir),
 		PORT: z.coerce.number().int().positive().default(3000),
+		RELAYER_PRIVATE_KEY: z
+			.string()
+			.regex(
+				privateKeyPattern,
+				"RELAYER_PRIVATE_KEY must be a 0x-prefixed private key",
+			),
 		SESSION_COOKIE_NAME: z.string().min(1).default("benzo_session"),
 		SESSION_TTL_DAYS: z.coerce.number().int().positive().default(7),
 		SIWE_NONCE_TTL_MINUTES: z.coerce.number().int().positive().default(10),
@@ -147,6 +154,14 @@ const envSchema = z
 				code: "custom",
 				message: "API_DOMAIN is required in production",
 				path: ["API_DOMAIN"],
+			});
+		}
+
+		if (env.CCTP_DEST_DOMAIN !== 1) {
+			ctx.addIssue({
+				code: "custom",
+				message: `CCTP_DEST_DOMAIN must be 1, got ${env.CCTP_DEST_DOMAIN}`,
+				path: ["CCTP_DEST_DOMAIN"],
 			});
 		}
 
@@ -257,6 +272,7 @@ const envSchema = z
 			benzonetChainId: env.BENZONET_CHAIN_ID,
 			benzonetRpcUrl,
 			cctpAttestationApiBase: ATTESTATION_API_BASE_BY_TIER[tier],
+			cctpDestDomain: env.CCTP_DEST_DOMAIN,
 			cctpDomain: cctp?.domain ?? null,
 			cctpMessageTransmitter: cctp?.messageTransmitter ?? null,
 			cctpTokenMessenger: cctp?.tokenMessenger ?? null,
@@ -289,6 +305,7 @@ const envSchema = z
 				env.PAYROLL_TOKEN_ID ?? registry.tokens.USDC?.tokenId ?? 1n,
 			payrollZkArtifactDir: path.resolve(env.PAYROLL_ZK_ARTIFACT_DIR),
 			port: env.PORT,
+			relayerPrivateKey: env.RELAYER_PRIVATE_KEY,
 			sessionCookieName: env.SESSION_COOKIE_NAME,
 			sessionTtlDays: env.SESSION_TTL_DAYS,
 			siweNonceTtlMinutes: env.SIWE_NONCE_TTL_MINUTES,

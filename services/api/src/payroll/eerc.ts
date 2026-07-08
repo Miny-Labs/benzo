@@ -437,7 +437,7 @@ function normalizePCT(value: unknown, label: string): PoseidonPCT {
 	return normalizeFixedBigintArray<PoseidonPCT>(value, 7, label);
 }
 
-function processPoseidonPCT(
+export function processPoseidonPCT(
 	inputs: bigint[],
 	publicKey: bigint[],
 	label: string,

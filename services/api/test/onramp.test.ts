@@ -5,22 +5,41 @@ import {
 	PostgreSqlContainer,
 	type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
+import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { decodeAbiParameters, getAddress } from "viem";
+import {
+	decodeAbiParameters,
+	encodeAbiParameters,
+	getAddress,
+	type Hex,
+} from "viem";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
+import {
+	createAuditorKeypair,
+	decryptAuditorAmountPct,
+} from "../src/auditor/crypto.js";
 import { DEFAULT_CORS_ORIGINS, type ApiConfig } from "../src/config.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
-import { sessions, users } from "../src/db/schema.js";
+import { onrampIntents, sessions, users } from "../src/db/schema.js";
+import { computeOnrampAmountPCT } from "../src/onramp/amountpct.js";
 import type { OnrampChainClient } from "../src/onramp/chain.js";
+import type { IrisClient } from "../src/onramp/cctp.js";
 import { encodeOnrampHookData } from "../src/onramp/hookdata.js";
+import { pollOnrampIntents } from "../src/onramp/poller.js";
+import type { OnrampRelayer } from "../src/onramp/relayer.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const REGISTERED = getAddress("0x1111111111111111111111111111111111111111");
 const UNREGISTERED = getAddress("0x2222222222222222222222222222222222222222");
+const PRECLAIMER = getAddress("0x3333333333333333333333333333333333333333");
 const ROUTER = getAddress("0x00000000000000000000000000000000000000aa");
+const BURN_TOKEN = getAddress("0x5425890298aed601595a70ab815c96711a31bc65");
+const TOKEN_MESSENGER = getAddress("0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa");
+const RELAYER_ADDRESS = getAddress("0x984E075152391C018Df97161D51C6BfE52631508");
 const PK_X = 123n;
 const PK_Y = 456n;
+const ATTESTATION = "0x1234" as Hex;
 
 function testConfig(databaseUrl: string): ApiConfig {
 	return {
@@ -32,6 +51,7 @@ function testConfig(databaseUrl: string): ApiConfig {
 		chainEnv: "fuji",
 		autoDepositRouterAddress: ROUTER,
 		cctpAttestationApiBase: "https://iris-api-sandbox.circle.com",
+		cctpDestDomain: 1,
 		cctpDomain: 1,
 		cctpMessageTransmitter: "0xe737e5cebeeba77efe34d4aa090756590b1ce275",
 		cctpTokenMessenger: "0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa",
@@ -59,6 +79,8 @@ function testConfig(databaseUrl: string): ApiConfig {
 		payrollTokenId: 1n,
 		payrollZkArtifactDir: "/tmp/benzo-test-zk-artifacts",
 		port: 0,
+		relayerPrivateKey:
+			"0x0000000000000000000000000000000000000000000000000000000000000002",
 		sessionCookieName: "benzo_test_session",
 		sessionTtlDays: 7,
 		siweNonceTtlMinutes: 10,
@@ -91,6 +113,77 @@ async function session(
 		userId: user!.id,
 	});
 	return `${config.sessionCookieName}=${sessionId}`;
+}
+
+async function userIdFor(db: Database, address: string): Promise<string> {
+	const [user] = await db
+		.insert(users)
+		.values({ address: address.toLowerCase(), roles: [] })
+		.onConflictDoUpdate({
+			set: { address: address.toLowerCase() },
+			target: users.address,
+		})
+		.returning({ id: users.id });
+
+	if (!user) {
+		throw new Error("test_user_insert_failed");
+	}
+
+	return user.id;
+}
+
+function concatHex(parts: Hex[]): Hex {
+	return `0x${parts.map((part) => part.slice(2)).join("")}` as Hex;
+}
+
+function uintHex(value: bigint | number, bytes: number): Hex {
+	return `0x${BigInt(value).toString(16).padStart(bytes * 2, "0")}` as Hex;
+}
+
+function addressBytes32(address: string): Hex {
+	return `0x${"00".repeat(12)}${getAddress(address).slice(2).toLowerCase()}` as Hex;
+}
+
+function buildBurnBody(input: {
+	amount: bigint;
+	feeExecuted?: bigint;
+	hookData: Hex;
+	mintRecipient?: string;
+}): Hex {
+	return concatHex([
+		uintHex(1, 4),
+		addressBytes32(BURN_TOKEN),
+		addressBytes32(input.mintRecipient ?? ROUTER),
+		uintHex(input.amount, 32),
+		addressBytes32(PRECLAIMER),
+		uintHex(input.feeExecuted ?? 0n, 32),
+		uintHex(input.feeExecuted ?? 0n, 32),
+		uintHex(0, 32),
+		input.hookData,
+	]);
+}
+
+function buildCctpMessage(input: {
+	amount: bigint;
+	feeExecuted?: bigint;
+	hookData: Hex;
+	nonce: bigint;
+	sourceDomain?: number;
+}): Hex {
+	const body = buildBurnBody(input);
+
+	return concatHex([
+		uintHex(1, 4),
+		uintHex(input.sourceDomain ?? 0, 4),
+		uintHex(1, 4),
+		uintHex(input.nonce, 32),
+		addressBytes32(TOKEN_MESSENGER),
+		addressBytes32(TOKEN_MESSENGER),
+		uintHex(0, 32),
+		uintHex(1000, 4),
+		uintHex(2000, 4),
+		body,
+	]);
 }
 
 describe("onramp intents", () => {
@@ -130,6 +223,23 @@ describe("onramp intents", () => {
 		expect(getAddress(user)).toBe(REGISTERED);
 		expect(x).toBe(PK_X);
 		expect(y).toBe(PK_Y);
+	});
+
+	it("computes amountPCT for the exact minted post-fee amount", () => {
+		const key = createAuditorKeypair(123_456n);
+		const mintedAmount = 975_000n;
+		const pct = computeOnrampAmountPCT(mintedAmount, [
+			BigInt(key.publicKey[0]),
+			BigInt(key.publicKey[1]),
+		]);
+		const encoded = encodeAbiParameters([{ type: "uint256[7]" }], [pct]);
+
+		expect(
+			decryptAuditorAmountPct(
+				key.privateKey,
+				Buffer.from(encoded.slice(2), "hex"),
+			),
+		).toBe(mintedAmount);
 	});
 
 	it("POST /onramp/quote returns signable burn params for a registered user", async () => {
@@ -209,4 +319,340 @@ describe("onramp intents", () => {
 		expect(res.statusCode).toBe(409);
 		expect(res.json().error).toBe("not_eerc_registered");
 	});
+
+	it("onramp poller credits a complete attestation and re-associates a preclaimed intent", async () => {
+		const sourceTxHash = `0x${"ef".repeat(32)}`;
+		const wrongUserId = await userIdFor(db, PRECLAIMER);
+		const realUserId = await userIdFor(db, REGISTERED);
+		const key = createAuditorKeypair(987_654n);
+		const publicKey = [
+			BigInt(key.publicKey[0]),
+			BigInt(key.publicKey[1]),
+		] as [bigint, bigint];
+		const message = buildCctpMessage({
+			amount: 1_000_000n,
+			feeExecuted: 25_000n,
+			hookData: encodeOnrampHookData({
+				pkX: publicKey[0],
+				pkY: publicKey[1],
+				user: REGISTERED,
+			}),
+			nonce: 11n,
+		});
+		const settlements: Parameters<OnrampRelayer["settleDeposit"]>[0][] = [];
+
+		await db.insert(onrampIntents).values({
+			destToken: "usdc",
+			sourceChainId: 11_155_111,
+			sourceDomain: 0,
+			sourceTxHash,
+			status: "burned",
+			userAddress: PRECLAIMER.toLowerCase(),
+			userId: wrongUserId,
+			userPubKeyX: "1",
+			userPubKeyY: "2",
+		});
+
+		const result = await pollOnrampIntents(db, {
+			chain: chainFor(REGISTERED, publicKey),
+			config,
+			iris: irisFor(sourceTxHash, message),
+			limit: 200,
+			relayer: {
+				relayerAddress: RELAYER_ADDRESS,
+				async settleDeposit(input) {
+					settlements.push(input);
+					return {
+						alreadySettled: false,
+						txHash: `0x${"12".repeat(32)}`,
+					};
+				},
+			},
+		});
+
+		const [row] = await db
+			.select()
+			.from(onrampIntents)
+			.where(eq(onrampIntents.sourceTxHash, sourceTxHash))
+			.limit(1);
+
+		expect(result.credited).toBe(1);
+		expect(row).toMatchObject({
+			amount: "975000",
+			error: null,
+			settleTxHash: `0x${"12".repeat(32)}`,
+			status: "credited",
+			userAddress: REGISTERED.toLowerCase(),
+			userId: realUserId,
+			userPubKeyX: publicKey[0].toString(),
+			userPubKeyY: publicKey[1].toString(),
+		});
+		expect(row?.cctpNonce).toBe(uintHex(11n, 32));
+		expect(settlements).toHaveLength(1);
+		const encodedPct = encodeAbiParameters(
+			[{ type: "uint256[7]" }],
+			[settlements[0]!.amountPCT],
+		);
+		expect(
+			decryptAuditorAmountPct(
+				key.privateKey,
+				Buffer.from(encodedPct.slice(2), "hex"),
+			),
+		).toBe(975_000n);
+	});
+
+	it("onramp poller retries transient relayer failures without double-crediting", async () => {
+		const sourceTxHash = `0x${"fa".repeat(32)}`;
+		const userId = await userIdFor(db, REGISTERED);
+		const key = createAuditorKeypair(222_333n);
+		const publicKey = [
+			BigInt(key.publicKey[0]),
+			BigInt(key.publicKey[1]),
+		] as [bigint, bigint];
+		const message = buildCctpMessage({
+			amount: 500_000n,
+			hookData: encodeOnrampHookData({
+				pkX: publicKey[0],
+				pkY: publicKey[1],
+				user: REGISTERED,
+			}),
+			nonce: 12n,
+		});
+		let settleCalls = 0;
+		const relayer: OnrampRelayer = {
+			relayerAddress: RELAYER_ADDRESS,
+			async settleDeposit() {
+				settleCalls += 1;
+				if (settleCalls === 1) {
+					throw new Error("rpc_timeout");
+				}
+
+				return {
+					alreadySettled: false,
+					txHash: `0x${"34".repeat(32)}`,
+				};
+			},
+		};
+
+		await db.insert(onrampIntents).values({
+			destToken: "usdc",
+			sourceChainId: 11_155_111,
+			sourceDomain: 0,
+			sourceTxHash,
+			status: "burned",
+			userAddress: REGISTERED.toLowerCase(),
+			userId,
+			userPubKeyX: publicKey[0].toString(),
+			userPubKeyY: publicKey[1].toString(),
+		});
+
+		await expect(
+			pollOnrampIntents(db, {
+				chain: chainFor(REGISTERED, publicKey),
+				config,
+				iris: irisFor(sourceTxHash, message),
+				limit: 200,
+				relayer,
+			}),
+		).rejects.toThrow("rpc_timeout");
+
+		const second = await pollOnrampIntents(db, {
+			chain: chainFor(REGISTERED, publicKey),
+			config,
+			iris: irisFor(sourceTxHash, message),
+			limit: 200,
+			relayer,
+		});
+		const [row] = await db
+			.select()
+			.from(onrampIntents)
+			.where(eq(onrampIntents.sourceTxHash, sourceTxHash))
+			.limit(1);
+
+		expect(second.credited).toBe(1);
+		expect(settleCalls).toBe(2);
+		expect(row).toMatchObject({
+			amount: "500000",
+			settleTxHash: `0x${"34".repeat(32)}`,
+			status: "credited",
+		});
+	});
+
+	it("onramp poller treats relayer replay as an idempotent credit", async () => {
+		const sourceTxHash = `0x${"ad".repeat(32)}`;
+		const userId = await userIdFor(db, REGISTERED);
+		const key = createAuditorKeypair(333_444n);
+		const publicKey = [
+			BigInt(key.publicKey[0]),
+			BigInt(key.publicKey[1]),
+		] as [bigint, bigint];
+		const message = buildCctpMessage({
+			amount: 250_000n,
+			hookData: encodeOnrampHookData({
+				pkX: publicKey[0],
+				pkY: publicKey[1],
+				user: REGISTERED,
+			}),
+			nonce: 14n,
+		});
+
+		await db.insert(onrampIntents).values({
+			destToken: "usdc",
+			sourceChainId: 11_155_111,
+			sourceDomain: 0,
+			sourceTxHash,
+			status: "attested",
+			userAddress: REGISTERED.toLowerCase(),
+			userId,
+			userPubKeyX: publicKey[0].toString(),
+			userPubKeyY: publicKey[1].toString(),
+		});
+
+		const result = await pollOnrampIntents(db, {
+			chain: chainFor(REGISTERED, publicKey),
+			config,
+			iris: irisFor(sourceTxHash, message),
+			limit: 200,
+			relayer: {
+				relayerAddress: RELAYER_ADDRESS,
+				async settleDeposit() {
+					return {
+						alreadySettled: true,
+						txHash: null,
+					};
+				},
+			},
+		});
+		const [row] = await db
+			.select()
+			.from(onrampIntents)
+			.where(eq(onrampIntents.sourceTxHash, sourceTxHash))
+			.limit(1);
+
+		expect(result.credited).toBe(1);
+		expect(row).toMatchObject({
+			amount: "250000",
+			settleTxHash: null,
+			status: "credited",
+		});
+	});
+
+	it("onramp poller parks unregistered recipients instead of revert-looping", async () => {
+		const sourceTxHash = `0x${"bc".repeat(32)}`;
+		const userId = await userIdFor(db, PRECLAIMER);
+		const key = createAuditorKeypair(444_555n);
+		const publicKey = [
+			BigInt(key.publicKey[0]),
+			BigInt(key.publicKey[1]),
+		] as [bigint, bigint];
+		const message = buildCctpMessage({
+			amount: 750_000n,
+			hookData: encodeOnrampHookData({
+				pkX: publicKey[0],
+				pkY: publicKey[1],
+				user: UNREGISTERED,
+			}),
+			nonce: 13n,
+		});
+		let settleCalls = 0;
+
+		await db.insert(onrampIntents).values({
+			destToken: "usdc",
+			sourceChainId: 11_155_111,
+			sourceDomain: 0,
+			sourceTxHash,
+			status: "burned",
+			userAddress: PRECLAIMER.toLowerCase(),
+			userId,
+			userPubKeyX: "1",
+			userPubKeyY: "2",
+		});
+
+		const result = await pollOnrampIntents(db, {
+			chain: chainFor(REGISTERED, publicKey),
+			config,
+			iris: irisFor(sourceTxHash, message),
+			limit: 200,
+			relayer: {
+				relayerAddress: RELAYER_ADDRESS,
+				async settleDeposit() {
+					settleCalls += 1;
+					throw new Error("settle_not_expected");
+				},
+			},
+		});
+		const [row] = await db
+			.select()
+			.from(onrampIntents)
+			.where(eq(onrampIntents.sourceTxHash, sourceTxHash))
+			.limit(1);
+
+		expect(result.parked).toBe(1);
+		expect(settleCalls).toBe(0);
+		expect(row).toMatchObject({
+			amount: "750000",
+			error: "recipient_not_eerc_registered",
+			status: "needs_onboarding",
+			userAddress: UNREGISTERED.toLowerCase(),
+		});
+	});
+
+	it("onramp poller no-ops cleanly until the router address is configured", async () => {
+		let irisCalls = 0;
+		const result = await pollOnrampIntents(db, {
+			chain: chainFor(REGISTERED, [PK_X, PK_Y]),
+			config: {
+				...config,
+				autoDepositRouterAddress: null,
+			},
+			iris: {
+				async getMessages() {
+					irisCalls += 1;
+					return [];
+				},
+			},
+			relayer: {
+				relayerAddress: RELAYER_ADDRESS,
+				async settleDeposit() {
+					throw new Error("settle_not_expected");
+				},
+			},
+		});
+
+		expect(result).toMatchObject({
+			polled: 0,
+			routerConfigured: false,
+		});
+		expect(irisCalls).toBe(0);
+	});
 });
+
+function chainFor(
+	registeredAddress: string,
+	publicKey: [bigint, bigint],
+): OnrampChainClient {
+	return {
+		async resolveUserKey(address) {
+			return getAddress(address) === getAddress(registeredAddress)
+				? { registered: true, publicKey }
+				: { registered: false, publicKey: null };
+		},
+	};
+}
+
+function irisFor(sourceTxHash: string, message: Hex): IrisClient {
+	return {
+		async getMessages(_sourceDomain, txHash) {
+			return txHash.toLowerCase() === sourceTxHash.toLowerCase()
+				? [
+						{
+							attestation: ATTESTATION,
+							eventNonce: uintHex(11n, 32),
+							message,
+							status: "complete",
+						},
+					]
+				: [];
+		},
+	};
+}

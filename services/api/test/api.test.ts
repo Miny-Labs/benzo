@@ -101,6 +101,7 @@ describe("@benzo/api", () => {
 			chainEnv: "fuji",
 			autoDepositRouterAddress: null,
 			cctpAttestationApiBase: "https://iris-api-sandbox.circle.com",
+			cctpDestDomain: 1,
 			cctpDomain: null,
 			cctpMessageTransmitter: null,
 			cctpTokenMessenger: null,
@@ -127,6 +128,8 @@ describe("@benzo/api", () => {
 			payrollTokenId: 1n,
 			payrollZkArtifactDir: "/tmp/benzo-test-zk-artifacts",
 			port: 0,
+			relayerPrivateKey:
+				"0x0000000000000000000000000000000000000000000000000000000000000002",
 			sessionCookieName: "benzo_test_session",
 			sessionTtlDays: 7,
 			siweNonceTtlMinutes: 10,

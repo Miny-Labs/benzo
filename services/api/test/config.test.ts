@@ -11,6 +11,8 @@ const baseEnv = {
 	NODE_ENV: "test",
 	OPS_PRIVATE_KEY:
 		"0x0000000000000000000000000000000000000000000000000000000000000001",
+	RELAYER_PRIVATE_KEY:
+		"0x0000000000000000000000000000000000000000000000000000000000000002",
 } satisfies NodeJS.ProcessEnv;
 
 const deploymentsDir = path.resolve(
@@ -92,6 +94,7 @@ describe("loadConfig", () => {
 		const config = loadConfig(baseEnv);
 
 		expect(config.cctpDomain).toBe(1);
+		expect(config.cctpDestDomain).toBe(1);
 		expect(config.cctpTokenMessenger).toBe(
 			"0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa",
 		);
@@ -104,6 +107,15 @@ describe("loadConfig", () => {
 		);
 		// fuji manifest has no auto-deposit router yet.
 		expect(config.autoDepositRouterAddress).toBeNull();
+	});
+
+	it("rejects a CCTP destination domain other than Avalanche", () => {
+		expect(() =>
+			loadConfig({
+				...baseEnv,
+				CCTP_DEST_DOMAIN: "0",
+			}),
+		).toThrow("CCTP_DEST_DOMAIN must be 1");
 	});
 
 	it("throws (no Fuji fallback) when neither the manifest nor an env override resolves an address", () => {
