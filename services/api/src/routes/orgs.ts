@@ -282,6 +282,10 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				});
 			}
 
+			// Durably record intent BEFORE the irreversible on-chain call, so a
+			// crash between the on-chain mutation and the finalizing DB write
+			// leaves a recoverable `pending` row instead of an untracked change.
+			await recordMemberAllowlistIntent(options.db, member);
 			const result = await options.adminChain.applyAllowlist(
 				member.address,
 				"enable",
@@ -324,6 +328,11 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				return reply.code(404).send({ error: "member_not_found" });
 			}
 
+			// Durably record intent BEFORE the irreversible on-chain call. Without
+			// this, a failed post-revoke DB write would leave the row asserting the
+			// now-false `enabled` state; the `pending` row instead flags the change
+			// as in-flight until the finalizing write lands.
+			await recordMemberAllowlistIntent(options.db, member);
 			const result = await options.adminChain.applyAllowlist(
 				member.address,
 				"revoke",
@@ -848,6 +857,38 @@ async function loadOrgMemberAllowlist(
 		orgId,
 		userId: row.userId,
 	};
+}
+
+// Persist a `pending` allowlist row before the irreversible on-chain
+// applyAllowlist call. Mirrors the treasury-deposit sign-first pattern: the row
+// is finalized to enabled/revoked (with tx hash) and audit-logged by
+// recordMemberAllowlistChange once the on-chain call returns. If that finalizing
+// write never runs (crash, transient DB error), a recoverable `pending` row is
+// left behind rather than nothing — and a failed revoke never strands the row
+// asserting the now-false `enabled` state. The tx hash is cleared here because
+// any previously recorded hash belongs to a prior, now-superseded change.
+async function recordMemberAllowlistIntent(
+	db: Database,
+	member: OrgMemberAllowlistRecord,
+): Promise<void> {
+	const now = new Date();
+	await db
+		.insert(orgMemberAllowlist)
+		.values({
+			orgId: member.orgId,
+			status: "pending",
+			txHash: null,
+			updatedAt: now,
+			userId: member.userId,
+		})
+		.onConflictDoUpdate({
+			set: {
+				status: "pending",
+				txHash: null,
+				updatedAt: now,
+			},
+			target: [orgMemberAllowlist.orgId, orgMemberAllowlist.userId],
+		});
 }
 
 async function recordMemberAllowlistChange({

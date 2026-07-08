@@ -408,7 +408,7 @@ export const orgRole = pgEnum("org_role", [
 ]);
 export const orgMemberAllowlistStatus = pgEnum(
 	"org_member_allowlist_status",
-	["enabled", "revoked"],
+	["pending", "enabled", "revoked"],
 );
 
 export const payrollRunStatus = pgEnum("payroll_run_status", [
@@ -466,6 +466,7 @@ export const orgMembers = pgTable(
 export const orgMemberAllowlist = pgTable(
 	"org_member_allowlist",
 	{
+		id: uuid("id").defaultRandom().primaryKey(),
 		orgId: uuid("org_id")
 			.notNull()
 			.references(() => orgs.id, { onDelete: "cascade" }),

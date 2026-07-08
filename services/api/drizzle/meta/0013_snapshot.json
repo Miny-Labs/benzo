@@ -1,5 +1,5 @@
 {
-  "id": "ca612e68-bd46-46fa-8c52-b7b362fb15c2",
+  "id": "bb6657c6-12f3-4bfb-84dc-8cfb042ae385",
   "prevId": "72d5492f-c782-4494-8c20-bb289bd0136d",
   "version": "7",
   "dialect": "postgresql",
@@ -1589,6 +1589,13 @@
       "name": "org_member_allowlist",
       "schema": "",
       "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
         "org_id": {
           "name": "org_id",
           "type": "uuid",
@@ -2719,6 +2726,7 @@
       "name": "org_member_allowlist_status",
       "schema": "public",
       "values": [
+        "pending",
         "enabled",
         "revoked"
       ]

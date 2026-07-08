@@ -173,8 +173,13 @@ type AdminAllowlistCall = {
 
 function createAdminChainStub({
 	mode = "benzonet",
+	onApplyAllowlist,
 }: {
 	mode?: "benzonet" | "fuji";
+	// Invoked at the moment applyAllowlist runs — after the durable-intent row
+	// has been persisted but before any on-chain state changes. Lets a test
+	// observe the pre-write ordering or simulate an on-chain failure by throwing.
+	onApplyAllowlist?: (call: AdminAllowlistCall) => void | Promise<void>;
 } = {}): AdminChainClient & { calls: AdminAllowlistCall[] } {
 	const calls: AdminAllowlistCall[] = [];
 	const enabled = new Set<string>();
@@ -186,6 +191,7 @@ function createAdminChainStub({
 		async applyAllowlist(address, action) {
 			const user = getAddress(address).toLowerCase();
 			calls.push({ action, address: user });
+			await onApplyAllowlist?.({ action, address: user });
 
 			if (mode === "fuji") {
 				return {
@@ -909,6 +915,199 @@ describe("@benzo/api orgs", () => {
 				},
 				status: "enabled",
 			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("durably records a pending allowlist intent before the on-chain call", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		let memberUserId: string | undefined;
+		let statusAtApply: string | null | undefined;
+		const adminChain = createAdminChainStub({
+			onApplyAllowlist: async () => {
+				if (!memberUserId) {
+					return;
+				}
+				const [row] = await db
+					.select()
+					.from(orgMemberAllowlist)
+					.where(eq(orgMemberAllowlist.userId, memberUserId))
+					.limit(1);
+				statusAtApply = row?.status ?? null;
+			},
+		});
+		const app = await buildApp({
+			adminChain,
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			startBoss: false,
+		});
+		const owner = `0x${"18".repeat(20)}`;
+		const member = `0x${"19".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			await session(db, config, member);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Durable Intent Co", slug: `durable-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members`,
+				payload: { address: member, role: "viewer" },
+			});
+
+			const memberUser = await db.query.users.findFirst({
+				where: (u, { eq: eqOp }) => eqOp(u.address, member),
+			});
+			expect(memberUser).toBeDefined();
+			memberUserId = memberUser!.id;
+			await db.insert(kycRecords).values({
+				approvedAt: new Date(),
+				payload: {
+					country: "US",
+					label: "MOCK_KYC_NO_DOCUMENTS",
+					name: "Durable Member",
+				},
+				provider: "mock",
+				userId: memberUser!.id,
+			});
+
+			const enabled = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(enabled.statusCode).toBe(200);
+			// The intent row was persisted as `pending` BEFORE the on-chain call ran,
+			// so a crash between the on-chain mutation and the finalizing write always
+			// leaves a recoverable record.
+			expect(statusAtApply).toBe("pending");
+			expect(enabled.json().allowlist).toMatchObject({
+				status: "enabled",
+				txHash: `0x${"11".repeat(32)}`,
+			});
+
+			const [row] = await db
+				.select()
+				.from(orgMemberAllowlist)
+				.where(eq(orgMemberAllowlist.userId, memberUser!.id))
+				.limit(1);
+			expect(row).toMatchObject({
+				status: "enabled",
+				txHash: `0x${"11".repeat(32)}`,
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("leaves a recoverable pending row when the on-chain allowlist call fails", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		let failRevoke = false;
+		const adminChain = createAdminChainStub({
+			onApplyAllowlist: async (call) => {
+				if (failRevoke && call.action === "revoke") {
+					throw new Error("benzonet_allowlist_send_failed");
+				}
+			},
+		});
+		const app = await buildApp({
+			adminChain,
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			startBoss: false,
+		});
+		const owner = `0x${"1a".repeat(20)}`;
+		const member = `0x${"1b".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			await session(db, config, member);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: {
+					name: "Recoverable Co",
+					slug: `recoverable-${randomUUID()}`,
+				},
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members`,
+				payload: { address: member, role: "viewer" },
+			});
+
+			const memberUser = await db.query.users.findFirst({
+				where: (u, { eq: eqOp }) => eqOp(u.address, member),
+			});
+			expect(memberUser).toBeDefined();
+			await db.insert(kycRecords).values({
+				approvedAt: new Date(),
+				payload: {
+					country: "US",
+					label: "MOCK_KYC_NO_DOCUMENTS",
+					name: "Recoverable Member",
+				},
+				provider: "mock",
+				userId: memberUser!.id,
+			});
+
+			// Enable succeeds and is finalized to `enabled`.
+			const enabled = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(enabled.statusCode).toBe(200);
+
+			// Now make the on-chain revoke throw. The pre-write intent flips the row
+			// to `pending` first, so a failed revoke never leaves the row falsely
+			// asserting the now-stale `enabled` state — it stays recoverable.
+			failRevoke = true;
+			const revoked = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "DELETE",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(revoked.statusCode).toBe(500);
+
+			const [row] = await db
+				.select()
+				.from(orgMemberAllowlist)
+				.where(eq(orgMemberAllowlist.userId, memberUser!.id))
+				.limit(1);
+			expect(row?.status).toBe("pending");
+
+			// No revoke audit entry was written for the change that never completed;
+			// only the successful enable is recorded.
+			const auditRows = await db
+				.select()
+				.from(auditLog)
+				.where(
+					eq(
+						auditLog.subject,
+						`org:${orgId}:member:${memberUser!.id}:allowlist`,
+					),
+				);
+			expect(auditRows.map((r) => r.action).sort()).toEqual([
+				"org_member_allowlist_enable",
+			]);
 		} finally {
 			await app.close();
 			await pool.end();

@@ -1,5 +1,6 @@
-CREATE TYPE "public"."org_member_allowlist_status" AS ENUM('enabled', 'revoked');--> statement-breakpoint
+CREATE TYPE "public"."org_member_allowlist_status" AS ENUM('pending', 'enabled', 'revoked');--> statement-breakpoint
 CREATE TABLE "org_member_allowlist" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"org_id" uuid NOT NULL,
 	"user_id" uuid NOT NULL,
 	"status" "org_member_allowlist_status" NOT NULL,
