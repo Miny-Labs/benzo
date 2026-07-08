@@ -429,6 +429,8 @@ export const payrollItemStatus = pgEnum("payroll_item_status", [
 	"failed",
 ]);
 
+export const payrollToken = pgEnum("payroll_token", ["usdc", "eurc"]);
+
 export const orgs = pgTable(
 	"orgs",
 	{
@@ -577,6 +579,10 @@ export const payrollRuns = pgTable(
 		status: payrollRunStatus("status").notNull().default("draft"),
 		itemCount: integer("item_count").notNull().default(0),
 		totalAmount: text("total_amount").notNull().default("0"),
+		token: payrollToken("token").notNull().default("usdc"),
+		tokenId: bigint("token_id", { mode: "bigint" })
+			.notNull()
+			.default(sql`1`),
 		createdBy: uuid("created_by").references(() => users.id, {
 			onDelete: "set null",
 		}),

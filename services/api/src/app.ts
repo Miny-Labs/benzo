@@ -188,7 +188,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
 			payrollSubmitter,
 			treasuryRegistrar,
 		});
-		await fastify.register(payrollRoutes, { boss, db });
+		await fastify.register(payrollRoutes, {
+			boss,
+			config,
+			db,
+			payrollSubmitter,
+		});
 		await fastify.register(onrampRoutes, { config, db, onrampChain });
 		await fastify.register(transfersRoutes, { db, identityChain });
 

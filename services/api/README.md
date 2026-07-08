@@ -25,7 +25,7 @@ number from `BENZONET_RPC_URL`.
 | `OPS_PRIVATE_KEY` | Yes | `0x`-prefixed operator key used for network-admin writes: auditor rotation, BenzoNet allowlist updates, and admin gas drips. It is validated at boot but never logged. |
 | `APP_MASTER_KEY` | Yes | 32-byte hex key reserved for libsodium secretbox encrypted-at-rest fields. It may include `0x`; the service normalizes it internally. |
 | `PAYROLL_ZK_ARTIFACT_DIR` | No | Directory containing `registration.wasm`, `registration.zkey`, `transfer.wasm`, and `transfer.zkey` for server-side treasury registration and payroll proving. Defaults to `services/api/zk-artifacts`. |
-| `PAYROLL_TOKEN_ID` | No | eERC converter token id used for payroll private transfers. Defaults to `1` (the first wrapped token). |
+| `PAYROLL_TOKEN_ID` | No | Legacy USDC payroll token id fallback used only when the deployment manifest has no USDC token entry. Multi-token payroll resolves token ids from the manifest tokens map. Defaults to `1`. |
 | `PAYROLL_EERC_DECIMALS` | No | Decimal precision used when scaling CSV amounts to eERC transfer values. Defaults to `6`. |
 | `BENZONET_CHAIN_ID` | No | SIWE chain id. Defaults to Fuji `43113`; set to BenzoNet `68420` when `CHAIN_ENV=benzonet`. |
 | `CHAIN_ENV` | No | `fuji` or `benzonet`. Defaults to `fuji` when `BENZONET_CHAIN_ID=43113`, otherwise `benzonet`. Config load rejects mismatched chain ids. Fuji records tx allowlist as a no-op and drips gas with a plain AVAX transfer. |
