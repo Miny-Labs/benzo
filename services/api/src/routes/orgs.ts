@@ -447,11 +447,16 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					confirmations: options.config.indexerConfirmations,
 					eoaPrivateKey,
 					onBroadcast: async (h) => {
-						broadcastTxHash = h;
+						// Persist the hash FIRST, then flip the in-memory flag. If this
+						// DB write fails, broadcastTxHash stays null so the catch marks
+						// the row `failed` (reconcilable against the on-chain tx) rather
+						// than returning 202 over a null-hash row that a later keyed
+						// retry would resume and re-broadcast — double-funding.
 						await db
 							.update(treasuryDeposits)
 							.set({ txHash: h.toLowerCase(), updatedAt: new Date() })
 							.where(eq(treasuryDeposits.id, pendingId));
+						broadcastTxHash = h;
 					},
 					tokenAddress: token.address,
 				});
