@@ -194,6 +194,7 @@ export async function buildAuditorPacket(
 		inflow: dataset.report.inflow,
 		outflow: dataset.report.outflow,
 		rows: dataset.rows,
+		signerKeyId: signerKey.id,
 		toBlock: dataset.report.toBlock,
 	});
 	const signature = {
@@ -241,6 +242,7 @@ export type AuditorPacketManifest = {
 	inflow: string;
 	outflow: string;
 	rows: AuditorEventRow[];
+	signerKeyId: string;
 	toBlock: string | null;
 };
 
@@ -268,6 +270,7 @@ export function auditorPacketManifest(
 		inflow: packet.inflow,
 		outflow: packet.outflow,
 		rows: packet.rows,
+		signerKeyId: packet.signature.signerKeyId,
 		toBlock: packet.toBlock,
 	};
 }
@@ -639,6 +642,7 @@ function canonicalizeAuditorPacketManifest(
 		inflow: manifest.inflow,
 		outflow: manifest.outflow,
 		rows: manifest.rows.map(canonicalizeAuditorPacketRow),
+		signerKeyId: manifest.signerKeyId,
 		toBlock: manifest.toBlock,
 	});
 }

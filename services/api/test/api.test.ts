@@ -2101,6 +2101,18 @@ describe("@benzo/api", () => {
 				),
 			).toBe(false);
 
+			// Relabelling which key signed the packet must invalidate it too.
+			const signerTampered = auditorPacketManifest({
+				...packet,
+				signature: { ...packet.signature, signerKeyId: keyARow.id },
+			});
+			expect(
+				verifyAuditorManifestSignature(
+					hashAuditorPacketManifest(signerTampered),
+					packet.signature,
+				),
+			).toBe(false);
+
 			const csvResponse = await app.inject({
 				headers: { cookie: auditorCookie },
 				method: "GET",
