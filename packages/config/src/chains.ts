@@ -1,6 +1,7 @@
 import { defineChain } from "viem";
 
 export const FUJI_CHAIN_ID = 43_113;
+export const AVALANCHE_CHAIN_ID = 43_114;
 export const BENZONET_CHAIN_ID = 68_420;
 export const BENZONET_BLOCKCHAIN_ID =
 	"21iisL1nkpM2AauUadAz7p1gK3waRBZLEJme3LU3gsWpaxy792";
@@ -40,6 +41,28 @@ export const fuji = defineChain({
 		},
 	},
 	testnet: true,
+});
+
+export const avalanche = defineChain({
+	id: AVALANCHE_CHAIN_ID,
+	name: "Avalanche C-Chain",
+	nativeCurrency: {
+		decimals: 18,
+		name: "Avalanche",
+		symbol: "AVAX",
+	},
+	rpcUrls: {
+		default: {
+			http: ["https://api.avax.network/ext/bc/C/rpc"],
+		},
+	},
+	blockExplorers: {
+		default: {
+			name: "Snowtrace",
+			url: "https://snowtrace.io",
+		},
+	},
+	testnet: false,
 });
 
 export const benzonet = defineChain({
