@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
 	createWalletClient,
 	getAddress,
@@ -11,8 +8,9 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { ApiConfig } from "../config.js";
+import type { ChainEnv } from "../deployment-manifest.js";
 
-export type ChainEnv = "fuji" | "benzonet";
+export type { ChainEnv };
 
 export type AllowlistStepResult =
 	| {
@@ -99,15 +97,10 @@ export function createOnboardingChainClient(
 	publicClient: PublicClient,
 ): OnboardingChainClient {
 	const account = privateKeyToAccount(config.opsPrivateKey as Hex);
-	let registrarAddressPromise: Promise<Address | null> | undefined;
 	const walletClient = createWalletClient({
 		account,
 		transport: http(config.benzonetRpcUrl),
 	});
-	const getRegistrarAddress = (): Promise<Address | null> => {
-		registrarAddressPromise ??= resolveRegistrarAddress(config);
-		return registrarAddressPromise;
-	};
 
 	return {
 		chainEnv: config.chainEnv,
@@ -189,15 +182,12 @@ export function createOnboardingChainClient(
 			});
 		},
 		async isUserRegistered(address) {
-			const registrarAddress = await getRegistrarAddress();
-
-			if (!registrarAddress) {
-				throw new Error("eerc_registrar_unconfigured");
-			}
-
+			// config.eercRegistrarAddress is resolved from the deployment manifest
+			// (or an explicit env override) at startup — see config.ts. There is no
+			// second manifest-resolution path here.
 			return publicClient.readContract({
 				abi: registrarAbi,
-				address: registrarAddress,
+				address: normalizeAddress(config.eercRegistrarAddress),
 				args: [normalizeAddress(address)],
 				functionName: "isUserRegistered",
 			});
@@ -207,108 +197,4 @@ export function createOnboardingChainClient(
 
 function normalizeAddress(address: string): Address {
 	return getAddress(address) as Address;
-}
-
-async function resolveRegistrarAddress(
-	config: ApiConfig,
-): Promise<Address | null> {
-	if (config.eercRegistrarAddress) {
-		return normalizeAddress(config.eercRegistrarAddress);
-	}
-
-	const manifestPath =
-		config.eercDeploymentManifest ??
-		path.resolve(
-			path.dirname(fileURLToPath(import.meta.url)),
-			`../../../../contracts/deployments/${config.chainEnv}.json`,
-		);
-
-	try {
-		const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
-		validateManifestMatchesConfig(manifest, config, manifestPath);
-		return findRegistrarAddress(manifest);
-	} catch (error) {
-		if (isMissingFileError(error)) {
-			return null;
-		}
-
-		throw error;
-	}
-}
-
-function validateManifestMatchesConfig(
-	manifest: unknown,
-	config: ApiConfig,
-	manifestPath: string,
-): void {
-	const manifestNetwork = readStringPath(manifest, ["network"]);
-
-	if (manifestNetwork && manifestNetwork !== config.chainEnv) {
-		throw new Error(
-			`eerc_manifest_network_mismatch:${manifestPath}:${manifestNetwork}:${config.chainEnv}`,
-		);
-	}
-
-	const manifestChainId = readNumberPath(manifest, ["chainId"]);
-
-	if (manifestChainId !== null && manifestChainId !== config.benzonetChainId) {
-		throw new Error(
-			`eerc_manifest_chain_id_mismatch:${manifestPath}:${manifestChainId}:${config.benzonetChainId}`,
-		);
-	}
-}
-
-function findRegistrarAddress(manifest: unknown): Address | null {
-	const candidates = [
-		readStringPath(manifest, ["contracts", "registrar"]),
-		readStringPath(manifest, ["contracts", "eercRegistrar"]),
-		readStringPath(manifest, ["contracts", "encryptedERCRegistrar"]),
-		readStringPath(manifest, ["registrar"]),
-		readStringPath(manifest, ["eercRegistrar"]),
-	];
-
-	for (const candidate of candidates) {
-		if (candidate && /^0x[0-9a-fA-F]{40}$/.test(candidate)) {
-			return normalizeAddress(candidate);
-		}
-	}
-
-	return null;
-}
-
-function readStringPath(value: unknown, keys: string[]): string | null {
-	let cursor = value;
-
-	for (const key of keys) {
-		if (!cursor || typeof cursor !== "object" || !(key in cursor)) {
-			return null;
-		}
-
-		cursor = (cursor as Record<string, unknown>)[key];
-	}
-
-	return typeof cursor === "string" ? cursor : null;
-}
-
-function readNumberPath(value: unknown, keys: string[]): number | null {
-	let cursor = value;
-
-	for (const key of keys) {
-		if (!cursor || typeof cursor !== "object" || !(key in cursor)) {
-			return null;
-		}
-
-		cursor = (cursor as Record<string, unknown>)[key];
-	}
-
-	return typeof cursor === "number" ? cursor : null;
-}
-
-function isMissingFileError(error: unknown): boolean {
-	return (
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		(error as { code?: unknown }).code === "ENOENT"
-	);
 }
