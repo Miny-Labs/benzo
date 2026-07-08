@@ -359,17 +359,21 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 						eqOp(table.idempotencyKey, idempotencyKey),
 					),
 			});
-			// A submitted row can legitimately sit without a txHash only during the
-			// brief approve+deposit broadcast window; older than this it crashed
-			// BEFORE broadcasting and is resumable — otherwise a keyed retry would
-			// return a terminal `submitted`/txHash:null and stall the funding
-			// forever. A recent null-hash row is treated as still in-flight (202).
+			// A keyed retry is resumable (re-attempts the funding, re-claiming the
+			// existing row) when either: (a) the previous attempt `failed` — a
+			// reverted approve/deposit moved no funds, so retrying with the same key
+			// is safe; or (b) it is `submitted` with no txHash and older than the
+			// lease, meaning it crashed BEFORE broadcasting (sign-first guarantees a
+			// null hash => not broadcast). A recent null-hash row is still in-flight
+			// (202); a confirmed or hash-bearing submitted row is terminal.
 			const TREASURY_DEPOSIT_LEASE_MS = 90_000;
 			const resumable =
-				existing?.status === "submitted" &&
-				!existing.txHash &&
-				Date.now() - existing.updatedAt.getTime() >
-					TREASURY_DEPOSIT_LEASE_MS;
+				existing != null &&
+				(existing.status === "failed" ||
+					(existing.status === "submitted" &&
+						!existing.txHash &&
+						Date.now() - existing.updatedAt.getTime() >
+							TREASURY_DEPOSIT_LEASE_MS));
 			if (existing && !resumable) {
 				const inFlightPreBroadcast =
 					existing.status === "submitted" && !existing.txHash;
@@ -392,23 +396,37 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 			);
 
 			// Durably record intent BEFORE the irreversible approve/deposit. On
-			// resume, re-claim the crashed row under an optimistic lock on
-			// updatedAt so two concurrent resumes can't both broadcast; otherwise
-			// insert a fresh `submitted` row.
+			// resume, re-claim the row under a SELECT ... FOR UPDATE row lock so two
+			// concurrent retries can't both broadcast. A row lock is used instead of
+			// an updatedAt-equality guard because Postgres timestamptz precision does
+			// not round-trip through a JS Date, so an equality guard would never match
+			// and would strand every resume at 202.
 			let pendingId: string;
 			if (resumable && existing) {
-				const [claimed] = await db
-					.update(treasuryDeposits)
-					.set({ status: "submitted", txHash: null, updatedAt: new Date() })
-					.where(
-						and(
-							eq(treasuryDeposits.id, existing.id),
-							eq(treasuryDeposits.updatedAt, existing.updatedAt),
-						),
-					)
-					.returning({ id: treasuryDeposits.id });
-				if (!claimed) {
-					// Another request claimed the resume; treat as in-flight.
+				const claimedId = await db.transaction(async (tx) => {
+					const [locked] = await tx
+						.select()
+						.from(treasuryDeposits)
+						.where(eq(treasuryDeposits.id, existing.id))
+						.for("update");
+					const stillResumable =
+						locked != null &&
+						(locked.status === "failed" ||
+							(locked.status === "submitted" &&
+								!locked.txHash &&
+								Date.now() - locked.updatedAt.getTime() >
+									TREASURY_DEPOSIT_LEASE_MS));
+					if (!stillResumable) {
+						return null;
+					}
+					await tx
+						.update(treasuryDeposits)
+						.set({ status: "submitted", txHash: null, updatedAt: new Date() })
+						.where(eq(treasuryDeposits.id, existing.id));
+					return existing.id;
+				});
+				if (!claimedId) {
+					// Another request claimed the resume, or it is no longer resumable.
 					return reply.code(202).send({
 						amount: existing.amount,
 						source: existing.source,
@@ -418,7 +436,7 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 						txHash: null,
 					});
 				}
-				pendingId = claimed.id;
+				pendingId = claimedId;
 			} else {
 				const [pending] = await db
 					.insert(treasuryDeposits)

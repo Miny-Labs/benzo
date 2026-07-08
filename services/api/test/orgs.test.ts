@@ -959,6 +959,78 @@ describe("@benzo/api orgs", () => {
 		}
 	});
 
+	it("re-attempts a keyed deposit whose previous attempt failed (revert is retryable)", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"0a".repeat(32)}` as Hex;
+		const txHash = `0x${"0b".repeat(32)}` as Hex;
+		let submitCalls = 0;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					submitCalls += 1;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d4".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Retry Co", slug: `retry-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			// A prior attempt that reverted on-chain and was marked `failed`.
+			const key = randomUUID();
+			await db.insert(treasuryDeposits).values({
+				amount: "1000000",
+				idempotencyKey: key,
+				orgId,
+				source: "direct",
+				status: "failed",
+				token: "usdc",
+				tokenId: 1n,
+				txHash: null,
+			});
+
+			// A same-key retry must RE-ATTEMPT (a revert moved no funds), not return
+			// the terminal failed row.
+			const retried = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(retried.statusCode).toBe(201);
+			expect(submitCalls).toBe(1);
+			const rows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId));
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toMatchObject({ status: "confirmed", txHash: txHash.toLowerCase() });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 	it("marks the deposit failed and returns 502 when the deposit reverts on-chain", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
