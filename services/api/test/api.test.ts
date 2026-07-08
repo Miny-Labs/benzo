@@ -30,7 +30,8 @@ import {
 	verifyAuditorManifestSignature,
 } from "../src/auditor/crypto.js";
 import {
-	hashAuditorPacketRows,
+	auditorPacketManifest,
+	hashAuditorPacketManifest,
 	type AuditorPacket,
 } from "../src/auditor/service.js";
 import { sealString } from "../src/crypto/seal.js";
@@ -2057,18 +2058,45 @@ describe("@benzo/api", () => {
 					publicKey: keyB.publicKey,
 				},
 			]);
-			expect(packet.manifestHash).toBe(hashAuditorPacketRows(packet.rows));
+			expect(packet.manifestHash).toBe(
+				hashAuditorPacketManifest(auditorPacketManifest(packet)),
+			);
 			expect(
 				verifyAuditorManifestSignature(packet.manifestHash, packet.signature),
 			).toBe(true);
 			expect(packet.signature.signerKeyId).toBe(keyBRow.id);
 
-			const tamperedRows = packet.rows.map((row, index) =>
-				index === 0 ? { ...row, amount: "13" } : row,
-			);
+			// Tampering with a decrypted row invalidates the signature.
+			const rowTampered = auditorPacketManifest({
+				...packet,
+				rows: packet.rows.map((row, index) =>
+					index === 0 ? { ...row, amount: "13" } : row,
+				),
+			});
 			expect(
 				verifyAuditorManifestSignature(
-					hashAuditorPacketRows(tamperedRows),
+					hashAuditorPacketManifest(rowTampered),
+					packet.signature,
+				),
+			).toBe(false);
+
+			// Tampering with a top-level compliance field (totals, range, subject,
+			// key set) must also invalidate the signature — the whole context is signed.
+			const totalsTampered = auditorPacketManifest({
+				...packet,
+				inflow: `${Number(packet.inflow) + 1}`,
+			});
+			expect(
+				verifyAuditorManifestSignature(
+					hashAuditorPacketManifest(totalsTampered),
+					packet.signature,
+				),
+			).toBe(false);
+
+			const rangeTampered = auditorPacketManifest({ ...packet, toBlock: "999" });
+			expect(
+				verifyAuditorManifestSignature(
+					hashAuditorPacketManifest(rangeTampered),
 					packet.signature,
 				),
 			).toBe(false);

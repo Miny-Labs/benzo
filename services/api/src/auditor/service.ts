@@ -180,7 +180,17 @@ export async function buildAuditorPacket(
 	}
 
 	const signerPrivateKey = unsealString(config.appMasterKey, signerKey.sealedKey);
-	const manifestHash = hashAuditorPacketRows(dataset.rows);
+	const generatedAt = new Date().toISOString();
+	const manifestHash = hashAuditorPacketManifest({
+		address: input.address,
+		auditorKeys: packetKeys,
+		fromBlock: dataset.report.fromBlock,
+		generatedAt,
+		inflow: dataset.report.inflow,
+		outflow: dataset.report.outflow,
+		rows: dataset.rows,
+		toBlock: dataset.report.toBlock,
+	});
 	const signature = {
 		...signAuditorManifestHash(signerPrivateKey, manifestHash),
 		signerKeyId: signerKey.id,
@@ -189,7 +199,7 @@ export async function buildAuditorPacket(
 		address: input.address,
 		auditorKeys: packetKeys,
 		fromBlock: dataset.report.fromBlock,
-		generatedAt: new Date().toISOString(),
+		generatedAt,
 		inflow: dataset.report.inflow,
 		manifestHash,
 		outflow: dataset.report.outflow,
@@ -218,10 +228,43 @@ export async function buildAuditorPacket(
 	return packet;
 }
 
-export function hashAuditorPacketRows(rows: AuditorEventRow[]): string {
+export type AuditorPacketManifest = {
+	address: string;
+	auditorKeys: AuditorPacketKey[];
+	fromBlock: string | null;
+	generatedAt: string;
+	inflow: string;
+	outflow: string;
+	rows: AuditorEventRow[];
+	toBlock: string | null;
+};
+
+// The manifest hash binds the ENTIRE compliance context — subject, block range,
+// totals, key set, and timestamp — not just the decrypted rows, so the auditor
+// signature cannot be replayed over a packet whose top-level fields were altered.
+export function hashAuditorPacketManifest(
+	manifest: AuditorPacketManifest,
+): string {
 	return `0x${createHash("sha256")
-		.update(canonicalizeAuditorPacketRows(rows))
+		.update(canonicalizeAuditorPacketManifest(manifest))
 		.digest("hex")}`;
+}
+
+// Extracts the signed manifest view from a full packet so a consumer can
+// recompute the hash and verify the signature against the fields it displays.
+export function auditorPacketManifest(
+	packet: AuditorPacket,
+): AuditorPacketManifest {
+	return {
+		address: packet.address,
+		auditorKeys: packet.auditorKeys,
+		fromBlock: packet.fromBlock,
+		generatedAt: packet.generatedAt,
+		inflow: packet.inflow,
+		outflow: packet.outflow,
+		rows: packet.rows,
+		toBlock: packet.toBlock,
+	};
 }
 
 async function buildAuditorReportDataset(
@@ -580,8 +623,34 @@ function csvCell(value: number | string | null): string {
 	return `"${text.replaceAll("\"", "\"\"")}"`;
 }
 
-function canonicalizeAuditorPacketRows(rows: AuditorEventRow[]): string {
-	return JSON.stringify(rows.map(canonicalizeAuditorPacketRow));
+function canonicalizeAuditorPacketManifest(
+	manifest: AuditorPacketManifest,
+): string {
+	return JSON.stringify({
+		address: manifest.address,
+		auditorKeys: manifest.auditorKeys.map(canonicalizeAuditorPacketKey),
+		fromBlock: manifest.fromBlock,
+		generatedAt: manifest.generatedAt,
+		inflow: manifest.inflow,
+		outflow: manifest.outflow,
+		rows: manifest.rows.map(canonicalizeAuditorPacketRow),
+		toBlock: manifest.toBlock,
+	});
+}
+
+function canonicalizeAuditorPacketKey(key: AuditorPacketKey): AuditorPacketKey {
+	return {
+		active: key.active,
+		activatedBlockNumber: key.activatedBlockNumber,
+		activatedLogIndex: key.activatedLogIndex,
+		activatedTransactionIndex: key.activatedTransactionIndex,
+		id: key.id,
+		publicKey: [key.publicKey[0], key.publicKey[1]],
+		retiredBlockNumber: key.retiredBlockNumber,
+		retiredLogIndex: key.retiredLogIndex,
+		retiredTransactionIndex: key.retiredTransactionIndex,
+		rotationTxHash: key.rotationTxHash,
+	};
 }
 
 function canonicalizeAuditorPacketRow(row: AuditorEventRow): AuditorEventRow {
