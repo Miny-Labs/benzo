@@ -17,6 +17,8 @@ import {
 	type Deployments,
 	deploymentsByNetwork,
 } from "./deployments.js";
+import { DEPLOYMENT_TIERS, NETWORK_TIER } from "./tiers.js";
+import { STABLECOINS } from "./tokens.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -30,9 +32,22 @@ const failures: string[] = [];
 for (const network of DEPLOYMENT_NETWORKS) {
 	const deployment = deploymentsByNetwork[network];
 
+	// Tier/chainId consistency is asserted for every network, including
+	// placeholder mainnet manifests that have no deployed addresses yet.
+	validateDeploymentTier(network, deployment);
+
+	// A source manifest flagged `"placeholder": true` (e.g. avalanche/mainnet
+	// before the flip) has no deployed contracts, so we skip the address-validity
+	// and compact-match checks for it rather than fabricate verifier addresses.
+	if (isPlaceholderManifest(network)) {
+		continue;
+	}
+
 	validateDeploymentAddresses(network, deployment);
 	assertDeploymentMatchesSource(network, deployment);
 }
+
+validateStablecoins();
 
 verifyCircuitManifestIfPresent();
 
@@ -73,6 +88,82 @@ function validateDeploymentAddresses(
 	}
 }
 
+function validateDeploymentTier(
+	network: DeploymentNetwork,
+	deployment: Deployments,
+): void {
+	const tier = NETWORK_TIER[network];
+
+	if (!DEPLOYMENT_TIERS.includes(tier)) {
+		failures.push(`${network}: no deployment tier is defined in NETWORK_TIER`);
+		return;
+	}
+
+	if (deployment.tier !== tier) {
+		failures.push(
+			`${network}: config tier "${deployment.tier}" does not match NETWORK_TIER "${tier}"`,
+		);
+	}
+
+	const { chainId } = deployment;
+
+	if (tier === "staging" && chainId !== 43_113 && chainId !== 68_420) {
+		failures.push(
+			`${network}: staging tier requires chainId 43113 or 68420, got ${chainId}`,
+		);
+	}
+
+	if (tier === "production" && chainId !== 43_114) {
+		failures.push(
+			`${network}: production tier requires chainId 43114, got ${chainId}`,
+		);
+	}
+}
+
+function isPlaceholderManifest(network: DeploymentNetwork): boolean {
+	const sourcePath = join(repoRoot, "contracts", "deployments", `${network}.json`);
+	const source = readJsonObject(sourcePath);
+
+	return source.placeholder === true;
+}
+
+function validateStablecoins(): void {
+	for (const [network, coins] of Object.entries(STABLECOINS)) {
+		for (const [symbol, info] of Object.entries(coins)) {
+			if (info === undefined) {
+				continue;
+			}
+
+			if (!isAddress(info.address)) {
+				failures.push(
+					`STABLECOINS.${network}.${symbol} is not a valid EVM address: ${info.address}`,
+				);
+			}
+
+			if (info.decimals !== 6) {
+				failures.push(
+					`STABLECOINS.${network}.${symbol} must have decimals === 6, got ${info.decimals}`,
+				);
+			}
+		}
+	}
+
+	// USDC must be registered for networks that wrap a real Circle token.
+	for (const network of ["fuji", "avalanche"] as const) {
+		if (STABLECOINS[network].USDC === undefined) {
+			failures.push(`STABLECOINS.${network}.USDC is required`);
+		}
+	}
+
+	// benzonet is exempt from the Circle-USDC requirement because it wraps a
+	// deployed TestUSDC — assert that TestUSDC still lives in its manifest.
+	if (deploymentsByNetwork.benzonet.contracts.tUSDC === undefined) {
+		failures.push(
+			"benzonet manifest must define a tUSDC/testUSDC address (STABLECOINS.benzonet is intentionally empty)",
+		);
+	}
+}
+
 function assertDeploymentMatchesSource(
 	network: DeploymentNetwork,
 	deployment: Deployments,
@@ -107,6 +198,13 @@ function compactDeployment(
 
 	copyOptionalAddress(compactContracts, "Registrar", eerc, ["registrar"]);
 	copyOptionalAddress(compactContracts, "EncryptedERC", eerc, ["encryptedERC"]);
+	// Project the multi-token map when the source declares one. No manifest
+	// carries `eercConverter.tokens` yet, so fuji/benzonet still resolve only the
+	// deprecated tUSDC alias below and nothing is added here.
+	const tokens = readOptionalTokens(eerc, ["tokens"]);
+	if (tokens !== undefined) {
+		compactContracts.tokens = tokens;
+	}
 	// Prefer the testUSDC deploy record; only fall back to wrappedToken if
 	// testUSDC is absent, so we never silently overwrite one with the other.
 	copyOptionalAddress(compactContracts, "tUSDC", eerc, ["testUSDC"]);
@@ -124,6 +222,7 @@ function compactDeployment(
 	return {
 		network,
 		chainId: chainId as Deployments["chainId"],
+		tier: NETWORK_TIER[network],
 		contracts: compactContracts,
 	};
 }
@@ -277,7 +376,7 @@ function verifyCircuitManifestEntry(
 
 function copyOptionalAddress(
 	target: DeploymentContracts,
-	key: Exclude<keyof DeploymentContracts, "verifiers">,
+	key: Exclude<keyof DeploymentContracts, "verifiers" | "tokens">,
 	source: JsonObject,
 	path: string[],
 ): void {
@@ -286,6 +385,38 @@ function copyOptionalAddress(
 	if (value !== undefined) {
 		target[key] = value;
 	}
+}
+
+function readOptionalTokens(
+	source: JsonObject,
+	path: string[],
+): DeploymentContracts["tokens"] {
+	const value = readPath(source, path);
+
+	if (!isJsonObject(value)) {
+		return undefined;
+	}
+
+	const tokens: NonNullable<DeploymentContracts["tokens"]> = {};
+
+	for (const [key, entry] of Object.entries(value)) {
+		if (!isJsonObject(entry)) {
+			continue;
+		}
+
+		const { address, decimals, tokenId, symbol } = entry;
+
+		if (
+			typeof address === "string" &&
+			typeof decimals === "number" &&
+			typeof tokenId === "number" &&
+			typeof symbol === "string"
+		) {
+			tokens[key] = { address: address as Address, decimals, tokenId, symbol };
+		}
+	}
+
+	return Object.keys(tokens).length > 0 ? tokens : undefined;
 }
 
 function readDeploymentAddress(source: JsonObject, path: string[]): Address {

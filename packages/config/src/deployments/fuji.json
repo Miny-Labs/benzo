@@ -1,6 +1,7 @@
 {
   "network": "fuji",
   "chainId": 43113,
+  "tier": "staging",
   "contracts": {
     "verifiers": {
       "registration": "0x4250bD1eb89Ef78469f94da2fE7738DCdcb09Ef7",

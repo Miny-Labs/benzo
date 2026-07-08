@@ -1,6 +1,7 @@
 {
   "network": "benzonet",
   "chainId": 68420,
+  "tier": "staging",
   "contracts": {
     "verifiers": {
       "registration": "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0",
