@@ -1,6 +1,18 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import {
+	ATTESTATION_API_BASE_BY_TIER,
+	CHAIN_ENVS,
+	CHAIN_ID_BY_ENV,
+	deriveChainEnv,
+	isLocalDatabaseUrl,
+	isTestnetChainId,
+	isTestnetRpcHost,
+	loadDeploymentRegistry,
+	NETWORK_TIER,
+	resolveRpcUrl,
+} from "./deployment-manifest.js";
 
 const hex32BytesPattern = /^(?:0x)?[0-9a-fA-F]{64}$/;
 const privateKeyPattern = /^0x[0-9a-fA-F]{64}$/;
@@ -11,11 +23,6 @@ const defaultPayrollZkArtifactDir = path.resolve(
 	"../zk-artifacts",
 );
 const defaultDripWei = "500000000000000000";
-const fujiChainId = 43_113;
-const benzonetChainId = 68_420;
-const fujiEncryptedErcAddress = "0x46688f1704a69a6c276cCCB823E36C80787B0FA2";
-const fujiRegistrarAddress = "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0";
-const fujiRpcUrl = "https://api.avax-test.network/ext/bc/C/rpc";
 export const DEFAULT_CORS_ORIGINS = [
 	"https://wallet.benzo.space",
 	"https://console.benzo.space",
@@ -31,8 +38,10 @@ const envSchema = z
 			.transform((value) => value.replace(/^0x/i, "").toLowerCase()),
 		API_DOMAIN: z.string().trim().min(1).optional(),
 		BENZONET_CHAIN_ID: z.coerce.number().int().positive().default(43_113),
-		BENZONET_RPC_URL: z.url().default(fujiRpcUrl),
-		CHAIN_ENV: z.enum(["fuji", "benzonet"]).optional(),
+		// Optional: resolves to a per-network default (fuji/avalanche) or is
+		// required explicitly (benzonet). Never silently defaults to Fuji.
+		BENZONET_RPC_URL: z.url().optional(),
+		CHAIN_ENV: z.enum(CHAIN_ENVS).optional(),
 		CORS_ORIGINS: z
 			.string()
 			.trim()
@@ -74,14 +83,16 @@ const envSchema = z
 			.regex(weiPattern, "DRIP_WEI must be a wei integer")
 			.default(defaultDripWei),
 		EERC_DEPLOYMENT_MANIFEST: z.string().trim().min(1).optional(),
+		// Optional ENV OVERRIDES only — when unset these resolve from the
+		// deployment manifest for the resolved CHAIN_ENV (no Fuji fallback).
 		EERC_ENCRYPTED_ERC_ADDRESS: z
 			.string()
 			.regex(evmAddressPattern, "EERC_ENCRYPTED_ERC_ADDRESS must be an EVM address")
-			.default(fujiEncryptedErcAddress),
+			.optional(),
 		EERC_REGISTRAR_ADDRESS: z
 			.string()
 			.regex(evmAddressPattern, "EERC_REGISTRAR_ADDRESS must be an EVM address")
-			.default(fujiRegistrarAddress),
+			.optional(),
 		HANDLE_REGISTRY_ADDRESS: z
 			.string()
 			.regex(evmAddressPattern, "HANDLE_REGISTRY_ADDRESS must be an EVM address")
@@ -112,7 +123,9 @@ const envSchema = z
 			.positive()
 			.default(15),
 		PAYROLL_EERC_DECIMALS: z.coerce.number().int().min(0).max(18).default(6),
-		PAYROLL_TOKEN_ID: z.coerce.bigint().nonnegative().default(1n),
+		// Optional ENV OVERRIDE only — resolves from the manifest USDC tokenId
+		// when unset, falling back to 1n only if neither is available.
+		PAYROLL_TOKEN_ID: z.coerce.bigint().nonnegative().optional(),
 		PAYROLL_ZK_ARTIFACT_DIR: z
 			.string()
 			.trim()
@@ -124,6 +137,11 @@ const envSchema = z
 		SIWE_NONCE_TTL_MINUTES: z.coerce.number().int().positive().default(10),
 	})
 	.superRefine((env, ctx) => {
+		const chainEnv = deriveChainEnv(env.CHAIN_ENV, env.BENZONET_CHAIN_ID);
+		const tier = NETWORK_TIER[chainEnv];
+		const expectedChainId = CHAIN_ID_BY_ENV[chainEnv];
+		const rpcUrl = resolveRpcUrl(chainEnv, env.BENZONET_RPC_URL);
+
 		if (env.NODE_ENV === "production" && !env.API_DOMAIN) {
 			ctx.addIssue({
 				code: "custom",
@@ -132,11 +150,8 @@ const envSchema = z
 			});
 		}
 
-		const chainEnv =
-			env.CHAIN_ENV ?? (env.BENZONET_CHAIN_ID === fujiChainId ? "fuji" : "benzonet");
-		const expectedChainId =
-			chainEnv === "fuji" ? fujiChainId : benzonetChainId;
-
+		// CHAIN_ENV ⇄ chain id consistency. This also enforces
+		// CHAIN_ENV=avalanche ⇒ chain id 43114 via CHAIN_ID_BY_ENV.
 		if (env.BENZONET_CHAIN_ID !== expectedChainId) {
 			ctx.addIssue({
 				code: "custom",
@@ -144,42 +159,136 @@ const envSchema = z
 				path: ["BENZONET_CHAIN_ID"],
 			});
 		}
+
+		// benzonet has no default RPC — require it explicitly rather than
+		// inheriting the Fuji endpoint.
+		if (!rpcUrl) {
+			ctx.addIssue({
+				code: "custom",
+				message: `BENZONET_RPC_URL is required for CHAIN_ENV=${chainEnv}`,
+				path: ["BENZONET_RPC_URL"],
+			});
+		}
+
+		if (env.NODE_ENV === "production") {
+			if (tier !== "production") {
+				ctx.addIssue({
+					code: "custom",
+					message: `NODE_ENV=production requires a production-tier network (CHAIN_ENV=avalanche); got CHAIN_ENV=${chainEnv} (${tier} tier)`,
+					path: ["CHAIN_ENV"],
+				});
+			}
+
+			if (isLocalDatabaseUrl(env.DATABASE_URL)) {
+				ctx.addIssue({
+					code: "custom",
+					message:
+						"DATABASE_URL must not point at a local database in production",
+					path: ["DATABASE_URL"],
+				});
+			}
+		}
+
+		// A production-tier network must never talk to a testnet chain/RPC.
+		if (tier === "production") {
+			if (isTestnetChainId(env.BENZONET_CHAIN_ID)) {
+				ctx.addIssue({
+					code: "custom",
+					message: `production tier (CHAIN_ENV=${chainEnv}) must not use a testnet chain id (${env.BENZONET_CHAIN_ID})`,
+					path: ["BENZONET_CHAIN_ID"],
+				});
+			}
+
+			if (rpcUrl && isTestnetRpcHost(rpcUrl)) {
+				ctx.addIssue({
+					code: "custom",
+					message: `production tier (CHAIN_ENV=${chainEnv}) must not use a testnet RPC host (${rpcUrl})`,
+					path: ["BENZONET_RPC_URL"],
+				});
+			}
+		}
 	})
-	.transform((env) => ({
-		appMasterKey: env.APP_MASTER_KEY,
-		apiDomain: env.API_DOMAIN ?? `localhost:${env.PORT}`,
-		benzonetChainId: env.BENZONET_CHAIN_ID,
-		benzonetRpcUrl: env.BENZONET_RPC_URL,
-		chainEnv:
-			env.CHAIN_ENV ?? (env.BENZONET_CHAIN_ID === fujiChainId ? "fuji" : "benzonet"),
-		corsOrigins: env.CORS_ORIGINS,
-		databaseUrl: env.DATABASE_URL,
-		dripBalanceThresholdWei: BigInt(env.DRIP_BALANCE_THRESHOLD_WEI),
-		dripWei: BigInt(env.DRIP_WEI),
-		eercDeploymentManifest: env.EERC_DEPLOYMENT_MANIFEST,
-		eercEncryptedErcAddress: env.EERC_ENCRYPTED_ERC_ADDRESS.toLowerCase(),
-		eercRegistrarAddress: env.EERC_REGISTRAR_ADDRESS.toLowerCase(),
-		handleRegistryAddress: env.HANDLE_REGISTRY_ADDRESS?.toLowerCase(),
-		host: env.HOST,
-		indexerConfirmations: env.INDEXER_CONFIRMATIONS,
-		indexerEnabled: env.INDEXER_ENABLED,
-		indexerMaxWindowBlocks: env.INDEXER_MAX_WINDOW_BLOCKS,
-		indexerPollCron: env.INDEXER_POLL_CRON,
-		indexerStartBlock: BigInt(env.INDEXER_START_BLOCK),
-		kycProvider: env.KYC_PROVIDER,
-		logLevel: env.LOG_LEVEL,
-		nodeEnv: env.NODE_ENV,
-		onboardingRegistrationPollSeconds:
-			env.ONBOARDING_REGISTRATION_POLL_SECONDS,
-		opsPrivateKey: env.OPS_PRIVATE_KEY,
-		payrollEercDecimals: env.PAYROLL_EERC_DECIMALS,
-		payrollTokenId: env.PAYROLL_TOKEN_ID,
-		payrollZkArtifactDir: path.resolve(env.PAYROLL_ZK_ARTIFACT_DIR),
-		port: env.PORT,
-		sessionCookieName: env.SESSION_COOKIE_NAME,
-		sessionTtlDays: env.SESSION_TTL_DAYS,
-		siweNonceTtlMinutes: env.SIWE_NONCE_TTL_MINUTES,
-	}));
+	.transform((env) => {
+		const chainEnv = deriveChainEnv(env.CHAIN_ENV, env.BENZONET_CHAIN_ID);
+		const tier = NETWORK_TIER[chainEnv];
+		const benzonetRpcUrl = resolveRpcUrl(chainEnv, env.BENZONET_RPC_URL);
+
+		if (!benzonetRpcUrl) {
+			// superRefine already flags this; guard again for type-narrowing.
+			throw new Error(`BENZONET_RPC_URL is required for CHAIN_ENV=${chainEnv}`);
+		}
+
+		// Resolve the on-chain registry from the deployment manifest. A missing
+		// or mismatched manifest throws here → fail fast at startup.
+		const registry = loadDeploymentRegistry({
+			chainEnv,
+			chainId: env.BENZONET_CHAIN_ID,
+			manifestPath: env.EERC_DEPLOYMENT_MANIFEST,
+		});
+
+		// Precedence: explicit ENV override → manifest → (hard error, no Fuji fallback).
+		const eercEncryptedErcAddress =
+			env.EERC_ENCRYPTED_ERC_ADDRESS?.toLowerCase() ??
+			registry.encryptedErcAddress;
+
+		if (!eercEncryptedErcAddress) {
+			throw new Error(`eerc_encrypted_erc_unresolved:${chainEnv}`);
+		}
+
+		const eercRegistrarAddress =
+			env.EERC_REGISTRAR_ADDRESS?.toLowerCase() ?? registry.registrarAddress;
+
+		if (!eercRegistrarAddress) {
+			throw new Error(`eerc_registrar_unresolved:${chainEnv}`);
+		}
+
+		const cctp = registry.cctp;
+
+		return {
+			appMasterKey: env.APP_MASTER_KEY,
+			apiDomain: env.API_DOMAIN ?? `localhost:${env.PORT}`,
+			autoDepositRouterAddress: cctp?.autoDepositRouter ?? null,
+			benzonetChainId: env.BENZONET_CHAIN_ID,
+			benzonetRpcUrl,
+			cctpAttestationApiBase: ATTESTATION_API_BASE_BY_TIER[tier],
+			cctpDomain: cctp?.domain ?? null,
+			cctpMessageTransmitter: cctp?.messageTransmitter ?? null,
+			cctpTokenMessenger: cctp?.tokenMessenger ?? null,
+			chainEnv,
+			corsOrigins: env.CORS_ORIGINS,
+			databaseUrl: env.DATABASE_URL,
+			dripBalanceThresholdWei: BigInt(env.DRIP_BALANCE_THRESHOLD_WEI),
+			dripWei: BigInt(env.DRIP_WEI),
+			eercDeploymentManifest: env.EERC_DEPLOYMENT_MANIFEST,
+			eercEncryptedErcAddress,
+			eercRegistrarAddress,
+			handleRegistryAddress:
+				env.HANDLE_REGISTRY_ADDRESS?.toLowerCase() ??
+				registry.handleRegistryAddress ??
+				undefined,
+			host: env.HOST,
+			indexerConfirmations: env.INDEXER_CONFIRMATIONS,
+			indexerEnabled: env.INDEXER_ENABLED,
+			indexerMaxWindowBlocks: env.INDEXER_MAX_WINDOW_BLOCKS,
+			indexerPollCron: env.INDEXER_POLL_CRON,
+			indexerStartBlock: BigInt(env.INDEXER_START_BLOCK),
+			kycProvider: env.KYC_PROVIDER,
+			logLevel: env.LOG_LEVEL,
+			nodeEnv: env.NODE_ENV,
+			onboardingRegistrationPollSeconds:
+				env.ONBOARDING_REGISTRATION_POLL_SECONDS,
+			opsPrivateKey: env.OPS_PRIVATE_KEY,
+			payrollEercDecimals: env.PAYROLL_EERC_DECIMALS,
+			payrollTokenId:
+				env.PAYROLL_TOKEN_ID ?? registry.tokens.USDC?.tokenId ?? 1n,
+			payrollZkArtifactDir: path.resolve(env.PAYROLL_ZK_ARTIFACT_DIR),
+			port: env.PORT,
+			sessionCookieName: env.SESSION_COOKIE_NAME,
+			sessionTtlDays: env.SESSION_TTL_DAYS,
+			siweNonceTtlMinutes: env.SIWE_NONCE_TTL_MINUTES,
+			tier,
+		};
+	});
 
 export type ApiConfig = z.infer<typeof envSchema>;
 

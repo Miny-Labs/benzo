@@ -86,6 +86,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
 			level: config.logLevel,
 		},
 	});
+	fastify.log.info(
+		{
+			chainId: config.benzonetChainId,
+			eercEncryptedErc: config.eercEncryptedErcAddress,
+			network: config.chainEnv,
+			tier: config.tier,
+		},
+		"benzo api config resolved",
+	);
 	const pool = options.pool ?? createPool(config, fastify.log);
 	const db = options.db ?? createDb(pool);
 	const boss = options.boss ?? createBoss(config);
