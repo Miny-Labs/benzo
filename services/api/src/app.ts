@@ -31,6 +31,10 @@ import {
 	createOnboardingChainClient,
 	type OnboardingChainClient,
 } from "./onboarding/chain.js";
+import {
+	createOnrampChainClient,
+	type OnrampChainClient,
+} from "./onramp/chain.js";
 import { createKycProvider, type KycProvider } from "./onboarding/kyc.js";
 import authPlugin from "./plugins/auth.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -40,6 +44,7 @@ import { authRoutes } from "./routes/auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { identityRoutes } from "./routes/identity.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
+import { onrampRoutes } from "./routes/onramp.js";
 import { orgsRoutes } from "./routes/orgs.js";
 import { payrollRoutes } from "./routes/payroll.js";
 import type { PgBoss } from "pg-boss";
@@ -66,6 +71,7 @@ export type BuildAppOptions = {
 	logger?: FastifyServerOptions["logger"];
 	onboarding?: OnboardingOrchestrator;
 	onboardingChain?: OnboardingChainClient;
+	onrampChain?: OnrampChainClient;
 	payrollProver?: PayrollProver;
 	payrollSubmitter?: PayrollSubmitter;
 	pool?: Pool;
@@ -121,6 +127,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	const treasuryRegistrar =
 		options.treasuryRegistrar ??
 		createViemTreasuryRegistrar(config, publicClient, payrollProver);
+	const onrampChain =
+		options.onrampChain ?? createOnrampChainClient(config, publicClient);
 	let bossStarted = false;
 
 	fastify.addHook("onClose", async () => {
@@ -171,6 +179,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 			treasuryRegistrar,
 		});
 		await fastify.register(payrollRoutes, { boss, db });
+		await fastify.register(onrampRoutes, { config, db, onrampChain });
 
 		if (options.startBoss !== false) {
 			await boss.start();

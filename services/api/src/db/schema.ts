@@ -540,8 +540,68 @@ export const payrollItems = pgTable(
 	],
 );
 
+export const onrampDestToken = pgEnum("onramp_dest_token", ["usdc", "eurc"]);
+export const onrampStatus = pgEnum("onramp_status", [
+	"initiated",
+	"burned",
+	"attested",
+	"minted",
+	"credited",
+	"needs_onboarding",
+	"failed",
+]);
+
+// CCTP onramp intents. One row tracks a user's bridge of USDC/EURC from a CCTP
+// source domain into their eERC balance on the destination. The relayer job
+// (#111) consumes these rows and drives the status machine. Every column here is
+// public chain data (addresses, tx hashes, the user's on-chain eERC public key);
+// no secret material is ever stored.
+export const onrampIntents = pgTable(
+	"onramp_intents",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		userAddress: text("user_address").notNull(),
+		sourceDomain: integer("source_domain").notNull(),
+		sourceChainId: integer("source_chain_id").notNull(),
+		// The source-chain burn tx. Globally unique: a single CCTP burn maps to at
+		// most one intent, which also makes intent creation idempotent per burn.
+		sourceTxHash: text("source_tx_hash").notNull(),
+		destToken: onrampDestToken("dest_token").notNull(),
+		// Burned amount in the token's smallest unit; unknown until the relayer
+		// reads it from the attested CCTP message, so nullable at creation.
+		amount: text("amount"),
+		// The user's eERC public key (BabyJubJub point) as decimal strings — public
+		// on-chain data, encoded into the CCTP hookData the mint hook consumes.
+		userPubKeyX: text("user_pub_key_x").notNull(),
+		userPubKeyY: text("user_pub_key_y").notNull(),
+		cctpNonce: text("cctp_nonce"),
+		messageHash: text("message_hash"),
+		status: onrampStatus("status").notNull().default("initiated"),
+		settleTxHash: text("settle_tx_hash"),
+		error: text("error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("onramp_intents_source_tx_hash_uidx").on(table.sourceTxHash),
+		index("onramp_intents_user_id_idx").on(table.userId),
+		index("onramp_intents_user_address_idx").on(table.userAddress),
+		index("onramp_intents_status_idx").on(table.status),
+		index("onramp_intents_updated_at_idx").on(table.updatedAt),
+	],
+);
+
 export type UserRole = (typeof userRole.enumValues)[number];
 export type OnboardingStatus = (typeof onboardingStatus.enumValues)[number];
+export type OnrampStatus = (typeof onrampStatus.enumValues)[number];
+export type OnrampDestToken = (typeof onrampDestToken.enumValues)[number];
 export type InviteKind = (typeof inviteKind.enumValues)[number];
 export type InviteStatus = (typeof inviteStatus.enumValues)[number];
 export type OrgRole = (typeof orgRole.enumValues)[number];
