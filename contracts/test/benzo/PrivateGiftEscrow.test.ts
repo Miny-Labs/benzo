@@ -8,6 +8,7 @@ import type { MockRegistrar } from "../../typechain-types/contracts/benzo/mocks/
 import type { MockUSDC } from "../../typechain-types/contracts/benzo/mocks/MockUSDC";
 import type { EncryptedERC } from "../../typechain-types/contracts/eerc/EncryptedERC";
 import { PrivateGiftEscrow__factory } from "../../typechain-types/factories/contracts/benzo/PrivateGiftEscrow.sol/PrivateGiftEscrow__factory";
+import { MockFeeOnTransferToken__factory } from "../../typechain-types/factories/contracts/benzo/mocks/MockFeeOnTransferToken__factory";
 import { MockRegistrar__factory } from "../../typechain-types/factories/contracts/benzo/mocks/MockRegistrar__factory";
 import { MockUSDC__factory } from "../../typechain-types/factories/contracts/benzo/mocks/MockUSDC__factory";
 import { EncryptedERC__factory } from "../../typechain-types/factories/contracts/eerc/EncryptedERC__factory";
@@ -291,6 +292,103 @@ describe("PrivateGiftEscrow", () => {
 		)
 			.to.be.revertedWithCustomError(escrow, "GiftExpired")
 			.withArgs(giftId, expiry, expiry);
+	});
+
+	it("reverts a claim that would credit zero encrypted value and keeps the gift refundable", async () => {
+		// Token with more decimals than the eERC (6): a sub-scaling-factor amount
+		// rounds down to zero encrypted value and is fully returned as dust.
+		const deepToken = await new MockUSDC__factory(owner).deploy(
+			"Deep Coin",
+			"DEEP",
+			18,
+		);
+		await deepToken.waitForDeployment();
+		const belowScale = 500_000n; // < 10 ** (18 - 6)
+		await deepToken.mint(sender.address, belowScale);
+		await deepToken
+			.connect(sender)
+			.approve(await escrow.getAddress(), belowScale);
+
+		const expiry = (await time.latest()) + 3600;
+		const tokenAddress = await deepToken.getAddress();
+		await escrow
+			.connect(sender)
+			.createGift(claimWallet.address, tokenAddress, belowScale, expiry);
+		const giftId = await escrow.giftCount();
+
+		const amountPCT = pctFor(belowScale, recipient.publicKey);
+		const sig = await validSignature(
+			giftId,
+			recipient.signer.address,
+			amountPCT,
+		);
+
+		await expect(
+			escrow
+				.connect(stranger)
+				.claim(giftId, recipient.signer.address, sig, amountPCT),
+		)
+			.to.be.revertedWithCustomError(escrow, "NoEncryptedValueCredited")
+			.withArgs(giftId);
+
+		const gift = await escrow.getGift(giftId);
+		expect(gift.status).to.equal(Status.Created);
+		expect(gift.recipient).to.equal(ethers.ZeroAddress);
+		expect(await deepToken.balanceOf(await escrow.getAddress())).to.equal(
+			belowScale,
+		);
+	});
+
+	it("escrows the actually-received amount for fee-on-transfer tokens so refunds don't strand funds", async () => {
+		const feeBps = 100n; // 1%
+		const feeToken = await new MockFeeOnTransferToken__factory(owner).deploy(
+			"Fee Coin",
+			"FEE",
+			6,
+			feeBps,
+		);
+		await feeToken.waitForDeployment();
+		const requested = GIFT_AMOUNT;
+		await feeToken.mint(sender.address, requested);
+		await feeToken
+			.connect(sender)
+			.approve(await escrow.getAddress(), requested);
+
+		const expiry = (await time.latest()) + 3600;
+		const tokenAddress = await feeToken.getAddress();
+		const received = requested - (requested * feeBps) / 10_000n;
+		const expectedGiftId = (await escrow.giftCount()) + 1n;
+
+		await expect(
+			escrow
+				.connect(sender)
+				.createGift(claimWallet.address, tokenAddress, requested, expiry),
+		)
+			.to.emit(escrow, "GiftCreated")
+			.withArgs(
+				expectedGiftId,
+				sender.address,
+				claimWallet.address,
+				tokenAddress,
+				received,
+				expiry,
+			);
+
+		const gift = await escrow.getGift(expectedGiftId);
+		expect(gift.amount).to.equal(received);
+		expect(await feeToken.balanceOf(await escrow.getAddress())).to.equal(
+			received,
+		);
+
+		await time.increaseTo(expiry);
+
+		// Refund moves exactly the escrowed amount; with the requested amount it
+		// would exceed the escrow balance and revert, stranding funds.
+		await expect(escrow.connect(sender).refund(expectedGiftId))
+			.to.emit(escrow, "GiftRefunded")
+			.withArgs(expectedGiftId, sender.address, tokenAddress, received);
+
+		expect(await feeToken.balanceOf(await escrow.getAddress())).to.equal(0n);
 	});
 
 	it("refunds only the sender after expiry", async () => {

@@ -192,6 +192,43 @@ describe("transfer recipient resolution", () => {
 		});
 	});
 
+	it("rejects an @-prefixed handle below the minimum length like the bare handle", async () => {
+		const prefixedResponse = await app.inject({
+			method: "POST",
+			payload: { handle: "@ab" },
+			url: "/transfers/resolve-recipient",
+		});
+		const bareResponse = await app.inject({
+			method: "POST",
+			payload: { handle: "ab" },
+			url: "/transfers/resolve-recipient",
+		});
+
+		expect(prefixedResponse.statusCode).toBe(400);
+		expect(prefixedResponse.json()).toEqual({ error: "invalid_handle" });
+		expect(bareResponse.statusCode).toBe(400);
+		expect(bareResponse.json()).toEqual({ error: "invalid_handle" });
+	});
+
+	it("rejects an invite that specifies both a public giftAmount and a private escrow reference", async () => {
+		const creatorCookie = await session(db, config, CREATOR);
+
+		const response = await app.inject({
+			headers: { cookie: creatorCookie },
+			method: "POST",
+			payload: {
+				escrowGiftId: "7",
+				escrowKind: "private",
+				giftAmount: "10",
+				kind: "gift",
+			},
+			url: "/invites",
+		});
+
+		expect(response.statusCode).toBe(400);
+		expect(response.json()).toEqual({ error: "invalid_invite" });
+	});
+
 	it("surfaces private gift escrow metadata through invite create, fetch, and claim", async () => {
 		const creatorCookie = await session(db, config, CREATOR);
 		const claimantCookie = await session(db, config, CLAIMANT);

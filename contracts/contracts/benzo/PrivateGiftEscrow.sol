@@ -4,6 +4,7 @@ pragma solidity 0.8.27;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IRegistrar} from "../eerc/interfaces/IRegistrar.sol";
 
 interface IPrivateGiftEscrowEerc {
@@ -21,7 +22,7 @@ interface IPrivateGiftEscrowEerc {
 /// @title Private-token gift escrow for Benzo gift links.
 /// @notice Escrows public ERC20 funds, then credits a registered recipient's eERC balance on claim.
 /// @dev This is a workflow privacy feature. Funds are credited privately through eERC, but escrow creation/refund timing, sender, token, and amount remain public on-chain.
-contract PrivateGiftEscrow {
+contract PrivateGiftEscrow is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     enum Status {
@@ -82,6 +83,7 @@ contract PrivateGiftEscrow {
     error OnlySender(uint256 giftId, address caller);
     error GiftExpired(uint256 giftId, uint64 expiry, uint256 currentTimestamp);
     error GiftNotExpired(uint256 giftId, uint64 expiry, uint256 currentTimestamp);
+    error NoEncryptedValueCredited(uint256 giftId);
 
     constructor(address eerc_) {
         if (eerc_ == address(0)) {
@@ -114,7 +116,7 @@ contract PrivateGiftEscrow {
         address token,
         uint256 amount,
         uint64 expiry
-    ) external returns (uint256 giftId) {
+    ) external nonReentrant returns (uint256 giftId) {
         if (claimAddress == address(0)) {
             revert InvalidClaimAddress(claimAddress);
         }
@@ -128,21 +130,31 @@ contract PrivateGiftEscrow {
             revert InvalidExpiry(expiry, block.timestamp);
         }
 
+        // Transfer first and record the actually-received amount via a balance
+        // delta so fee-on-transfer tokens escrow exactly what landed here.
+        // Otherwise later claim/refund would move more than the escrow holds and
+        // revert, stranding funds.
+        IERC20 erc20 = IERC20(token);
+        uint256 balanceBefore = erc20.balanceOf(address(this));
+        erc20.safeTransferFrom(msg.sender, address(this), amount);
+        uint256 received = erc20.balanceOf(address(this)) - balanceBefore;
+        if (received == 0) {
+            revert InvalidAmount();
+        }
+
         giftId = _nextGiftId++;
         _gifts[giftId] = Gift({
             sender: msg.sender,
             claimAddress: claimAddress,
             token: token,
             recipient: address(0),
-            amount: amount,
+            amount: received,
             createdAt: uint64(block.timestamp),
             expiry: expiry,
             status: Status.Created
         });
 
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-
-        emit GiftCreated(giftId, msg.sender, claimAddress, token, amount, expiry);
+        emit GiftCreated(giftId, msg.sender, claimAddress, token, received, expiry);
     }
 
     /// @notice Claims a gift into `recipient`'s encrypted eERC balance using a signature from the gift link's ephemeral key.
@@ -183,8 +195,17 @@ contract PrivateGiftEscrow {
         token.forceApprove(address(eerc), gift.amount);
         eerc.depositFor(recipient, gift.amount, gift.token, amountPCT, bytes(""));
 
-        uint256 expectedBalance = balanceBefore - gift.amount;
         uint256 balanceAfter = token.balanceOf(address(this));
+        uint256 consumed = balanceBefore - balanceAfter;
+        // If the eERC credited zero encrypted value (e.g. the amount is below the
+        // token's decimal-scaling factor and was fully returned as dust), revert
+        // so the gift stays Created (and refundable after expiry) instead of being
+        // marked Claimed with the recipient receiving nothing.
+        if (consumed == 0) {
+            revert NoEncryptedValueCredited(giftId);
+        }
+
+        uint256 expectedBalance = balanceBefore - gift.amount;
         if (balanceAfter > expectedBalance) {
             token.safeTransfer(gift.sender, balanceAfter - expectedBalance);
         }

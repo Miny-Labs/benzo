@@ -124,6 +124,17 @@ const main = async () => {
 	const eercAddress = resolveEercAddress(deployments);
 	const [deployer] = await ethers.getSigners();
 
+	// Preflight: setAuthorizedDepositor is owner-gated. Verify the deployer owns
+	// the eERC BEFORE deploying so a non-owner deployer fails fast instead of
+	// leaving an orphan PrivateGiftEscrow deploy and no manifest write.
+	const eerc = await ethers.getContractAt("EncryptedERC", eercAddress);
+	const eercOwner = await eerc.owner();
+	if (eercOwner.toLowerCase() !== deployer.address.toLowerCase()) {
+		throw new Error(
+			`Deployer ${deployer.address} is not the eERC owner (${eercOwner}); setAuthorizedDepositor would revert. Deploy PrivateGiftEscrow from the eERC owner account.`,
+		);
+	}
+
 	const privateGiftEscrow = await ethers.deployContract("PrivateGiftEscrow", [
 		eercAddress,
 	]);
@@ -137,7 +148,6 @@ const main = async () => {
 	console.log(`eERC converter: ${eercAddress}`);
 	console.log(`Snowtrace: ${snowtraceAddressUrl(address)}`);
 
-	const eerc = await ethers.getContractAt("EncryptedERC", eercAddress);
 	const authorizeTx = await eerc.setAuthorizedDepositor(address, true);
 	await authorizeTx.wait();
 	console.log(`Authorized PrivateGiftEscrow as eERC depositor: ${authorizeTx.hash}`);

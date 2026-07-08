@@ -109,6 +109,14 @@ const inviteBodySchema = z
 	.refine((value) => value.escrowKind == null || value.escrowGiftId != null, {
 		path: ["escrowGiftId"],
 	})
+	.refine(
+		(value) =>
+			value.giftAmount == null ||
+			(value.escrowGiftId == null && value.escrowKind == null),
+		{
+			path: ["giftAmount"],
+		},
+	)
 	.refine((value) => value.kind !== "gift" || value.giftAmount != null || value.escrowGiftId != null, {
 		path: ["giftAmount"],
 	});

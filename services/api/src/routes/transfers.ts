@@ -6,7 +6,7 @@ import type { Database } from "../db/client.js";
 import { handles, users } from "../db/schema.js";
 import type { IdentityChainClient } from "../identity/chain.js";
 
-const HANDLE_PATTERN = /^@?[a-z0-9_]{3,20}$/;
+const HANDLE_PATTERN = /^[a-z0-9_]{3,20}$/;
 
 const resolveRecipientBodySchema = z
 	.object({
@@ -93,7 +93,7 @@ async function readAddressForHandle(
 > {
 	const normalizedHandle = handle.startsWith("@") ? handle.slice(1) : handle;
 
-	if (!HANDLE_PATTERN.test(handle)) {
+	if (!HANDLE_PATTERN.test(normalizedHandle)) {
 		return { error: "invalid_handle", ok: false, statusCode: 400 };
 	}
 
