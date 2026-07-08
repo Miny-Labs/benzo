@@ -6,18 +6,23 @@ import {
 	PostgreSqlContainer,
 	type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import type { Hex } from "viem";
+import { getAddress, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { AdminChainClient, AllowlistAction } from "../src/admin/chain.js";
 import { buildApp } from "../src/app.js";
 import { DEFAULT_CORS_ORIGINS, type ApiConfig } from "../src/config.js";
 import { sealString, unsealString } from "../src/crypto/seal.js";
 import { createDb, createPool, type Database } from "../src/db/client.js";
 import {
+	auditLog,
 	eventLinks,
 	handles,
+	kycRecords,
+	onboardings,
+	orgMemberAllowlist,
 	orgMembers,
 	orgs,
 	orgTreasuries,
@@ -157,6 +162,113 @@ function createOnboardingChainStub(): OnboardingChainClient {
 		},
 		async isUserRegistered() {
 			return true;
+		},
+	};
+}
+
+type AdminAllowlistCall = {
+	action: AllowlistAction;
+	address: string;
+};
+
+function createAdminChainStub({
+	mode = "benzonet",
+}: {
+	mode?: "benzonet" | "fuji";
+} = {}): AdminChainClient & { calls: AdminAllowlistCall[] } {
+	const calls: AdminAllowlistCall[] = [];
+	const enabled = new Set<string>();
+	const enableTx = `0x${"11".repeat(32)}`;
+	const revokeTx = `0x${"12".repeat(32)}`;
+
+	return {
+		calls,
+		async applyAllowlist(address, action) {
+			const user = getAddress(address).toLowerCase();
+			calls.push({ action, address: user });
+
+			if (mode === "fuji") {
+				return {
+					action,
+					address: user,
+					enabled: true,
+					previousLevel: null,
+					result: "noop_fuji_no_tx_allowlist",
+					txHash: null,
+				};
+			}
+
+			const wasEnabled = enabled.has(user);
+			if (action === "enable") {
+				if (wasEnabled) {
+					return {
+						action,
+						address: user,
+						enabled: true,
+						previousLevel: "1",
+						result: "already_enabled",
+						txHash: null,
+					};
+				}
+
+				enabled.add(user);
+				return {
+					action,
+					address: user,
+					enabled: true,
+					previousLevel: "0",
+					result: "enabled",
+					txHash: enableTx,
+				};
+			}
+
+			if (!wasEnabled) {
+				return {
+					action,
+					address: user,
+					enabled: false,
+					previousLevel: "0",
+					result: "already_revoked",
+					txHash: null,
+				};
+			}
+
+			enabled.delete(user);
+			return {
+				action,
+				address: user,
+				enabled: false,
+				previousLevel: "1",
+				result: "revoked",
+				txHash: revokeTx,
+			};
+		},
+		async dripGas() {
+			throw new Error("admin_drip_not_expected");
+		},
+		async getAllowlistStatus(address) {
+			const user = getAddress(address).toLowerCase();
+
+			if (mode === "fuji") {
+				return {
+					address: user,
+					enabled: true,
+					level: null,
+				};
+			}
+
+			const isEnabled = enabled.has(user);
+			return {
+				address: user,
+				enabled: isEnabled,
+				level: isEnabled ? "1" : "0",
+			};
+		},
+		async getChainHealth() {
+			throw new Error("chain_health_not_expected");
+		},
+		async rotateAuditor() {
+			throw new Error("auditor_rotation_not_expected");
 		},
 	};
 }
@@ -493,6 +605,310 @@ describe("@benzo/api orgs", () => {
 				payload: { address: owner, role: "operator" },
 			});
 			expect(adminDemotesOwner.statusCode).toBe(403);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("requires approved KYC before org member tx allowlisting and audit-logs enable/revoke", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const adminChain = createAdminChainStub();
+		const app = await buildApp({
+			adminChain,
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			startBoss: false,
+		});
+		const owner = `0x${"13".repeat(20)}`;
+		const member = `0x${"14".repeat(20)}`;
+		const operator = `0x${"15".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			await session(db, config, member);
+			const operatorCookie = await session(db, config, operator);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "KYC Gate Co", slug: `kyc-gate-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+
+			const addMember = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members`,
+				payload: { address: member, role: "viewer" },
+			});
+			expect(addMember.statusCode).toBe(201);
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members`,
+				payload: { address: operator, role: "operator" },
+			});
+
+			const operatorAllowlist = await app.inject({
+				headers: { cookie: operatorCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(operatorAllowlist.statusCode).toBe(403);
+
+			const noKyc = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(noKyc.statusCode).toBe(409);
+			expect(noKyc.json()).toMatchObject({
+				error: "kyc_not_approved",
+				kyc: { approved: false, status: "not_started" },
+			});
+			expect(adminChain.calls).toEqual([]);
+
+			const memberUser = await db.query.users.findFirst({
+				where: (u, { eq: eqOp }) => eqOp(u.address, member),
+			});
+			expect(memberUser).toBeDefined();
+			const approvedAt = new Date();
+			await db.insert(kycRecords).values({
+				approvedAt,
+				payload: {
+					country: "US",
+					label: "MOCK_KYC_NO_DOCUMENTS",
+					name: "KYC Member",
+				},
+				provider: "mock",
+				userId: memberUser!.id,
+			});
+			await db.insert(onboardings).values({
+				chainEnv: config.chainEnv,
+				chainId: config.benzonetChainId,
+				kycApprovedAt: approvedAt,
+				status: "kyc_approved",
+				userId: memberUser!.id,
+			});
+
+			const enabled = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(enabled.statusCode).toBe(200);
+			const enableTxHash = `0x${"11".repeat(32)}`;
+			expect(enabled.json().allowlist).toMatchObject({
+				address: getAddress(member),
+				chain: {
+					address: member,
+					enabled: true,
+					level: "1",
+				},
+				kyc: {
+					approved: true,
+					onboardingStatus: "kyc_approved",
+					provider: "mock",
+					status: "approved",
+				},
+				result: {
+					result: "enabled",
+					txHash: enableTxHash,
+				},
+				status: "enabled",
+				txHash: enableTxHash,
+				userId: memberUser!.id,
+			});
+			expect(adminChain.calls).toEqual([{ action: "enable", address: member }]);
+
+			const status = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "GET",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(status.statusCode).toBe(200);
+			expect(status.json().allowlist).toMatchObject({
+				chain: {
+					address: member,
+					enabled: true,
+					level: "1",
+				},
+				kyc: { approved: true, status: "approved" },
+				status: "enabled",
+				txHash: enableTxHash,
+			});
+
+			const revoked = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "DELETE",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(revoked.statusCode).toBe(200);
+			const revokeTxHash = `0x${"12".repeat(32)}`;
+			expect(revoked.json().allowlist).toMatchObject({
+				chain: {
+					address: member,
+					enabled: false,
+					level: "0",
+				},
+				result: {
+					result: "revoked",
+					txHash: revokeTxHash,
+				},
+				status: "revoked",
+				txHash: revokeTxHash,
+			});
+			expect(adminChain.calls).toEqual([
+				{ action: "enable", address: member },
+				{ action: "revoke", address: member },
+			]);
+
+			const [allowlistRow] = await db
+				.select()
+				.from(orgMemberAllowlist)
+				.where(
+					and(
+						eq(orgMemberAllowlist.orgId, orgId),
+						eq(orgMemberAllowlist.userId, memberUser!.id),
+					),
+				)
+				.limit(1);
+			expect(allowlistRow).toMatchObject({
+				orgId,
+				status: "revoked",
+				txHash: revokeTxHash,
+				userId: memberUser!.id,
+			});
+
+			const auditRows = await db
+				.select()
+				.from(auditLog)
+				.where(
+					eq(
+						auditLog.subject,
+						`org:${orgId}:member:${memberUser!.id}:allowlist`,
+					),
+				);
+			expect(auditRows.map((row) => row.action).sort()).toEqual([
+				"org_member_allowlist_enable",
+				"org_member_allowlist_revoke",
+			]);
+			expect(auditRows).toHaveLength(2);
+			for (const row of auditRows) {
+				expect(row.actor).toBe(owner);
+				expect(row.meta).toMatchObject({
+					address: getAddress(member),
+					chainEnv: config.chainEnv,
+					chainId: config.benzonetChainId,
+					orgId,
+					userId: memberUser!.id,
+				});
+			}
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("records org member allowlisting as a clear Fuji no-op", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const adminChain = createAdminChainStub({ mode: "fuji" });
+		const app = await buildApp({
+			adminChain,
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			startBoss: false,
+		});
+		const owner = `0x${"16".repeat(20)}`;
+		const member = `0x${"17".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			await session(db, config, member);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Fuji Noop Co", slug: `fuji-noop-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members`,
+				payload: { address: member, role: "viewer" },
+			});
+
+			const memberUser = await db.query.users.findFirst({
+				where: (u, { eq: eqOp }) => eqOp(u.address, member),
+			});
+			expect(memberUser).toBeDefined();
+			await db.insert(kycRecords).values({
+				payload: {
+					country: "US",
+					label: "MOCK_KYC_NO_DOCUMENTS",
+					name: "Fuji Member",
+				},
+				provider: "mock",
+				userId: memberUser!.id,
+			});
+
+			const enabled = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(enabled.statusCode).toBe(200);
+			expect(enabled.json().allowlist).toMatchObject({
+				chain: {
+					address: member,
+					enabled: true,
+					level: null,
+				},
+				result: {
+					result: "noop_fuji_no_tx_allowlist",
+					txHash: null,
+				},
+				status: "enabled",
+				txHash: null,
+			});
+
+			const [allowlistRow] = await db
+				.select()
+				.from(orgMemberAllowlist)
+				.where(
+					and(
+						eq(orgMemberAllowlist.orgId, orgId),
+						eq(orgMemberAllowlist.userId, memberUser!.id),
+					),
+				)
+				.limit(1);
+			expect(allowlistRow).toMatchObject({
+				status: "enabled",
+				txHash: null,
+			});
+
+			const status = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "GET",
+				url: `/orgs/${orgId}/members/${member}/allowlist`,
+			});
+			expect(status.json().allowlist).toMatchObject({
+				chain: {
+					enabled: true,
+					level: null,
+				},
+				kyc: {
+					approved: true,
+					status: "approved",
+				},
+				status: "enabled",
+			});
 		} finally {
 			await app.close();
 			await pool.end();

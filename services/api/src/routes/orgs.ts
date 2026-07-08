@@ -1,16 +1,28 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
-import { getAddress, type Hex } from "viem";
+import { getAddress, isAddress, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
+import type {
+	AdminChainClient,
+	AllowlistActionResult,
+	AllowlistStatus,
+} from "../admin/chain.js";
 import type { ApiConfig, TreasuryFundingToken } from "../config.js";
 import type { Database } from "../db/client.js";
 import { sealString, unsealString } from "../crypto/seal.js";
 import {
+	auditLog,
+	kycRecords,
+	onboardings,
+	orgMemberAllowlist,
 	orgMembers,
 	orgTreasuries,
 	orgs,
 	treasuryDeposits,
+	users,
+	type OnboardingStatus,
+	type OrgMemberAllowlistStatus,
 } from "../db/schema.js";
 import {
 	ROLE_RANK,
@@ -33,6 +45,7 @@ import type {
 } from "../payroll/chain.js";
 
 type OrgsRoutesOptions = {
+	adminChain: AdminChainClient;
 	config: ApiConfig;
 	db: Database;
 	onboardingChain: OnboardingChainClient;
@@ -71,6 +84,13 @@ const treasuryDepositSchema = z.object({
 });
 
 const evmAddress = /^0x[0-9a-fA-F]{40}$/;
+const approvedKycOnboardingStatuses = new Set<OnboardingStatus>([
+	"kyc_approved",
+	"allowlisted",
+	"gas_dripped",
+	"awaiting_registration",
+	"complete",
+]);
 
 export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 	fastify,
@@ -211,6 +231,121 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				});
 
 			return reply.code(201).send({ userId: user.id, role: body.data.role });
+		},
+	);
+
+	fastify.get(
+		"/orgs/:id/members/:address/allowlist",
+		{ preHandler: requireOrgRole("viewer") },
+		async (request, reply) => {
+			const orgId = (request.params as { id: string }).id;
+			const address = normalizeMemberAddress(
+				(request.params as { address: string }).address,
+			);
+			if (!address) {
+				return reply.code(400).send({ error: "invalid_member" });
+			}
+
+			const member = await loadOrgMemberAllowlist(options.db, orgId, address);
+			if (!member) {
+				return reply.code(404).send({ error: "member_not_found" });
+			}
+
+			const chain = await options.adminChain.getAllowlistStatus(member.address);
+
+			return reply.send({
+				allowlist: serializeMemberAllowlist(member, chain),
+			});
+		},
+	);
+
+	fastify.post(
+		"/orgs/:id/members/:address/allowlist",
+		{ preHandler: requireOrgRole("admin") },
+		async (request, reply) => {
+			const orgId = (request.params as { id: string }).id;
+			const address = normalizeMemberAddress(
+				(request.params as { address: string }).address,
+			);
+			if (!address) {
+				return reply.code(400).send({ error: "invalid_member" });
+			}
+
+			const member = await loadOrgMemberAllowlist(options.db, orgId, address);
+			if (!member) {
+				return reply.code(404).send({ error: "member_not_found" });
+			}
+			if (!member.kyc.approved) {
+				return reply.code(409).send({
+					error: "kyc_not_approved",
+					kyc: member.kyc,
+				});
+			}
+
+			const result = await options.adminChain.applyAllowlist(
+				member.address,
+				"enable",
+			);
+			const updatedMember = withAllowlistChange(member, "enabled", result);
+			await recordMemberAllowlistChange({
+				action: "enable",
+				actor: request.user!.address,
+				chainEnv: options.config.chainEnv,
+				chainId: options.config.benzonetChainId,
+				db: options.db,
+				member,
+				result,
+			});
+
+			return reply.send({
+				allowlist: serializeMemberAllowlist(
+					updatedMember,
+					allowlistResultToStatus(result),
+					result,
+				),
+			});
+		},
+	);
+
+	fastify.delete(
+		"/orgs/:id/members/:address/allowlist",
+		{ preHandler: requireOrgRole("admin") },
+		async (request, reply) => {
+			const orgId = (request.params as { id: string }).id;
+			const address = normalizeMemberAddress(
+				(request.params as { address: string }).address,
+			);
+			if (!address) {
+				return reply.code(400).send({ error: "invalid_member" });
+			}
+
+			const member = await loadOrgMemberAllowlist(options.db, orgId, address);
+			if (!member) {
+				return reply.code(404).send({ error: "member_not_found" });
+			}
+
+			const result = await options.adminChain.applyAllowlist(
+				member.address,
+				"revoke",
+			);
+			const updatedMember = withAllowlistChange(member, "revoked", result);
+			await recordMemberAllowlistChange({
+				action: "revoke",
+				actor: request.user!.address,
+				chainEnv: options.config.chainEnv,
+				chainId: options.config.benzonetChainId,
+				db: options.db,
+				member,
+				result,
+			});
+
+			return reply.send({
+				allowlist: serializeMemberAllowlist(
+					updatedMember,
+					allowlistResultToStatus(result),
+					result,
+				),
+			});
 		},
 	);
 
@@ -632,6 +767,209 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 		},
 	);
 };
+
+type OrgMemberAllowlistRecord = {
+	address: string;
+	allowlist: {
+		status: OrgMemberAllowlistStatus;
+		txHash: string | null;
+		updatedAt: Date;
+	} | null;
+	kyc: {
+		approved: boolean;
+		approvedAt: string | null;
+		onboardingStatus: OnboardingStatus | null;
+		provider: string | null;
+		status: string;
+	};
+	orgId: string;
+	userId: string;
+};
+
+async function loadOrgMemberAllowlist(
+	db: Database,
+	orgId: string,
+	address: string,
+): Promise<OrgMemberAllowlistRecord | null> {
+	const [row] = await db
+		.select({
+			address: users.address,
+			allowlistStatus: orgMemberAllowlist.status,
+			allowlistTxHash: orgMemberAllowlist.txHash,
+			allowlistUpdatedAt: orgMemberAllowlist.updatedAt,
+			kycApprovedAt: kycRecords.approvedAt,
+			kycProvider: kycRecords.provider,
+			onboardingKycApprovedAt: onboardings.kycApprovedAt,
+			onboardingStatus: onboardings.status,
+			userId: orgMembers.userId,
+		})
+		.from(orgMembers)
+		.innerJoin(users, eq(users.id, orgMembers.userId))
+		.leftJoin(kycRecords, eq(kycRecords.userId, orgMembers.userId))
+		.leftJoin(onboardings, eq(onboardings.userId, orgMembers.userId))
+		.leftJoin(
+			orgMemberAllowlist,
+			and(
+				eq(orgMemberAllowlist.orgId, orgMembers.orgId),
+				eq(orgMemberAllowlist.userId, orgMembers.userId),
+			),
+		)
+		.where(and(eq(orgMembers.orgId, orgId), eq(users.address, address)))
+		.limit(1);
+
+	if (!row) {
+		return null;
+	}
+
+	const kycRecordApproved = row.kycApprovedAt !== null;
+	const onboardingApproved =
+		row.onboardingStatus !== null &&
+		approvedKycOnboardingStatuses.has(row.onboardingStatus);
+	const approved = kycRecordApproved || onboardingApproved;
+	const approvedAt = row.kycApprovedAt ?? row.onboardingKycApprovedAt;
+
+	return {
+		address: row.address,
+		allowlist:
+			row.allowlistStatus === null
+				? null
+				: {
+						status: row.allowlistStatus,
+						txHash: row.allowlistTxHash,
+						updatedAt: row.allowlistUpdatedAt!,
+					},
+		kyc: {
+			approved,
+			approvedAt: approvedAt?.toISOString() ?? null,
+			onboardingStatus: row.onboardingStatus,
+			provider: row.kycProvider,
+			status: approved ? "approved" : (row.onboardingStatus ?? "not_started"),
+		},
+		orgId,
+		userId: row.userId,
+	};
+}
+
+async function recordMemberAllowlistChange({
+	action,
+	actor,
+	chainEnv,
+	chainId,
+	db,
+	member,
+	result,
+}: {
+	action: "enable" | "revoke";
+	actor: string;
+	chainEnv: string;
+	chainId: number;
+	db: Database;
+	member: OrgMemberAllowlistRecord;
+	result: AllowlistActionResult;
+}): Promise<void> {
+	const now = new Date();
+	const status: OrgMemberAllowlistStatus =
+		action === "enable" ? "enabled" : "revoked";
+	const txHash = normalizeTxHash(result.txHash);
+
+	await db.transaction(async (tx) => {
+		await tx
+			.insert(orgMemberAllowlist)
+			.values({
+				orgId: member.orgId,
+				status,
+				txHash,
+				updatedAt: now,
+				userId: member.userId,
+			})
+			.onConflictDoUpdate({
+				set: {
+					status,
+					txHash,
+					updatedAt: now,
+				},
+				target: [orgMemberAllowlist.orgId, orgMemberAllowlist.userId],
+			});
+
+		await tx.insert(auditLog).values({
+			action: `org_member_allowlist_${action}`,
+			actor,
+			meta: {
+				address: getAddress(member.address),
+				chainEnv,
+				chainId,
+				kyc: member.kyc,
+				orgId: member.orgId,
+				result,
+				status,
+				userId: member.userId,
+			},
+			subject: orgMemberAllowlistSubject(member.orgId, member.userId),
+		});
+	});
+}
+
+function serializeMemberAllowlist(
+	member: OrgMemberAllowlistRecord,
+	chain: AllowlistStatus,
+	result?: AllowlistActionResult,
+) {
+	return {
+		address: getAddress(member.address),
+		chain,
+		kyc: member.kyc,
+		orgId: member.orgId,
+		result,
+		status: member.allowlist?.status ?? "not_requested",
+		txHash: member.allowlist?.txHash ?? null,
+		updatedAt: member.allowlist?.updatedAt.toISOString() ?? null,
+		userId: member.userId,
+	};
+}
+
+function withAllowlistChange(
+	member: OrgMemberAllowlistRecord,
+	status: OrgMemberAllowlistStatus,
+	result: AllowlistActionResult,
+): OrgMemberAllowlistRecord {
+	return {
+		...member,
+		allowlist: {
+			status,
+			txHash: normalizeTxHash(result.txHash),
+			updatedAt: new Date(),
+		},
+	};
+}
+
+function allowlistResultToStatus(result: AllowlistActionResult): AllowlistStatus {
+	return {
+		address: result.address,
+		enabled: result.enabled,
+		level:
+			result.result === "enabled"
+				? "1"
+				: result.result === "revoked"
+					? "0"
+					: result.previousLevel,
+	};
+}
+
+function normalizeMemberAddress(address: string): string | null {
+	if (!isAddress(address, { strict: false })) {
+		return null;
+	}
+
+	return getAddress(address).toLowerCase();
+}
+
+function normalizeTxHash(txHash: string | null): string | null {
+	return txHash?.toLowerCase() ?? null;
+}
+
+function orgMemberAllowlistSubject(orgId: string, userId: string): string {
+	return `org:${orgId}:member:${userId}:allowlist`;
+}
 
 function resolveFundingToken(
 	config: ApiConfig,

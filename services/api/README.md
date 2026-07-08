@@ -83,8 +83,17 @@ and return `404` (not `403`) to non-members so org existence isn't leaked.
 | `GET /orgs` | authenticated | Orgs the caller belongs to, with their role. |
 | `GET /orgs/:id` · `GET /orgs/:id/members` | `viewer` | Org detail / member list. |
 | `POST /orgs/:id/members` | `admin` | Add/update a member by wallet address (must be a known SIWE user). |
+| `GET /orgs/:id/members/:address/allowlist` | `viewer` | Member KYC status plus current tx-allowlist role. |
+| `POST /orgs/:id/members/:address/allowlist` | `admin` | Enable a KYC-approved member on the BenzoNet tx-allowlist. |
+| `DELETE /orgs/:id/members/:address/allowlist` | `admin` | Revoke a member from the BenzoNet tx-allowlist. |
 | `POST /orgs/:id/treasury` | `admin` | Provision the managed treasury (see below). |
 | `GET /orgs/:id/treasury` | `viewer` | Custody status only — never key material. |
+
+Org member allowlisting requires an approved KYC record before the API calls the
+tx-allowlist precompile. Each enable/revoke writes `org_member_allowlist` and
+`audit_log`. On Fuji the chain result is the documented
+`noop_fuji_no_tx_allowlist`; the real transaction gate exists only when
+`CHAIN_ENV=benzonet`.
 
 **Managed treasury custody.** eERC transfer proofs need the *sender's* key, so a
 payroll run can't prove client-side without pinning a browser tab. Each org may
