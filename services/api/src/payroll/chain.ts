@@ -65,7 +65,7 @@ export type TreasuryDepositSubmissionInput = {
 	eoaPrivateKey: Hex;
 	// Invoked with the deposit tx hash the moment it is broadcast, before the
 	// confirmation wait, so the ledger can track a broadcast-but-unconfirmed tx.
-	onBroadcast?: (txHash: Hex) => void | Promise<void>;
+	onBeforeBroadcast?: (txHash: Hex) => void | Promise<void>;
 	tokenAddress: string;
 };
 
@@ -475,18 +475,41 @@ export function createViemPayrollSubmitter(
 				"treasury_deposit_approval_reverted",
 			);
 
-			const txHash = await walletClient.writeContract({
+			// Sign the deposit FIRST, derive its hash, persist it, and only THEN
+			// broadcast. If the persist throws, the tx is never sent — so a
+			// null-txHash `submitted` row provably means "not broadcast" and can be
+			// safely resumed later without ever double-funding the treasury.
+			const depositData = encodeFunctionData({
 				abi: encryptedErcAbi,
-				account,
-				address: converterAddress,
 				args: [input.amount, tokenAddress, input.amountPCT],
-				chain: null,
 				functionName: "deposit",
 			});
-			// Surface the deposit hash before the confirmation wait: if that wait
-			// fails, the tx may still land, so the ledger must persist the hash now
-			// rather than only after `confirmed`.
-			await input.onBroadcast?.(txHash);
+			const depositRequest = await walletClient.prepareTransactionRequest({
+				account,
+				chain: null,
+				data: depositData,
+				to: converterAddress,
+			});
+			const rawDeposit = await walletClient.signTransaction({
+				...depositRequest,
+				chain: null,
+			});
+			const txHash = keccak256(rawDeposit);
+			await input.onBeforeBroadcast?.(txHash);
+			try {
+				const sentHash = await publicClient.sendRawTransaction({
+					serializedTransaction: rawDeposit,
+				});
+				if (sentHash.toLowerCase() !== txHash.toLowerCase()) {
+					throw new Error("submitted_deposit_hash_mismatch");
+				}
+			} catch (error) {
+				// A resume re-sends the same signed tx; an already-known / nonce error
+				// means it is already in the mempool or chain — safe to continue.
+				if (!isIdempotentRawTransactionError(error)) {
+					throw error;
+				}
+			}
 			await waitForReceipt(
 				txHash,
 				confirmations,

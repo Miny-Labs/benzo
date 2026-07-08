@@ -1031,9 +1031,9 @@ describe("@benzo/api orgs", () => {
 			onboardingChain: createOnboardingChainStub(),
 			payrollSubmitter: createPayrollSubmitterStub({
 				async submitTreasuryDeposit(input) {
-					// The tx was broadcast (hash surfaced via onBroadcast) but the
+					// The tx was broadcast (hash surfaced via onBeforeBroadcast) but the
 					// confirmation wait fails — the tx may still land on-chain.
-					await input.onBroadcast?.(txHash);
+					await input.onBeforeBroadcast?.(txHash);
 					throw new Error("treasury_deposit_confirmation_timeout");
 				},
 			}),

@@ -446,45 +446,26 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					amountPCT: encryptAmountPct(amount, eercAccount.publicKey),
 					confirmations: options.config.indexerConfirmations,
 					eoaPrivateKey,
-					onBroadcast: async (h) => {
-						// Flag the broadcast immediately so the catch always knows the tx
-						// went out, THEN persist the hash. Even if this persist fails, the
-						// catch re-persists best-effort so the hash is never lost and the
-						// row stays terminal (a keyed retry never re-broadcasts).
-						broadcastTxHash = h;
+					onBeforeBroadcast: async (h) => {
+						// Called AFTER signing, BEFORE sending. Persist the hash first,
+						// then flag it: with sign-first, if this persist throws the tx is
+						// never sent, so leaving broadcastTxHash null makes the catch mark
+						// the row `failed` (correct — nothing was broadcast, safe to retry).
 						await db
 							.update(treasuryDeposits)
 							.set({ txHash: h.toLowerCase(), updatedAt: new Date() })
 							.where(eq(treasuryDeposits.id, pendingId));
+						broadcastTxHash = h;
 					},
 					tokenAddress: token.address,
 				});
 			} catch (error) {
 				if (broadcastTxHash) {
-					// The deposit tx was broadcast but its confirmation wait failed
+					// The deposit was signed, its hash persisted, and it was sent, but
 					// (RPC timeout / transient error); it may still settle on-chain.
 					// Leave the row `submitted` with the persisted hash — never
 					// `failed` — so a follow-up reconciler/poller (out of scope) can
 					// settle it and no moved money is lost.
-					try {
-						await db
-							.update(treasuryDeposits)
-							.set({
-								txHash: (broadcastTxHash as string).toLowerCase(),
-								updatedAt: new Date(),
-							})
-							.where(
-								and(
-									eq(treasuryDeposits.id, pendingId),
-									isNull(treasuryDeposits.txHash),
-								),
-							);
-					} catch (persistError) {
-						request.log.error(
-							{ err: persistError, orgId, txHash: broadcastTxHash },
-							"treasury_deposit_hash_persist_failed",
-						);
-					}
 					request.log.warn(
 						{ err: error, orgId, txHash: broadcastTxHash },
 						"treasury_deposit_broadcast_unconfirmed",
