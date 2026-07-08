@@ -2,6 +2,7 @@
   "network": "benzonet",
   "chainId": 68420,
   "contracts": {
+    "cctp": null,
     "eercConverter": {
       "verifiers": {
         "registration": {

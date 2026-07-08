@@ -13,6 +13,12 @@
     "Registrar": "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0",
     "EncryptedERC": "0x46688f1704a69a6c276cCCB823E36C80787B0FA2",
     "tUSDC": "0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f",
-    "HandleRegistry": "0xC74EcCDE4D9A1F48D560de9A96521D28D58B474b"
+    "HandleRegistry": "0xC74EcCDE4D9A1F48D560de9A96521D28D58B474b",
+    "cctp": {
+      "domain": 1,
+      "tokenMessenger": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
+      "messageTransmitter": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
+      "autoDepositRouter": null
+    }
   }
 }

@@ -11,6 +11,20 @@ export type DeploymentNetwork = (typeof DEPLOYMENT_NETWORKS)[number];
 export type DeploymentChainId = 43_113 | 68_420 | 43_114;
 export type VerifierDeployments = Record<CircuitOperation, Address>;
 
+/**
+ * Per-network Circle CCTP V2 wiring. `domain` is the canonical CCTP domain id
+ * (Avalanche testnet and mainnet are both domain 1); `tokenMessenger` /
+ * `messageTransmitter` are the tier-shared V2 contract addresses (see
+ * ./cctp.ts). `autoDepositRouter` is the Benzo CCTP auto-deposit router and
+ * stays null until it deploys (#108).
+ */
+export type CctpDeploymentConfig = {
+	domain: number;
+	tokenMessenger: Address;
+	messageTransmitter: Address;
+	autoDepositRouter: Address | null;
+};
+
 export type DeploymentContracts = {
 	verifiers: VerifierDeployments;
 	Registrar?: Address;
@@ -28,6 +42,16 @@ export type DeploymentContracts = {
 	HandleRegistry?: Address;
 	InvoiceRegistry?: Address;
 	GiftEscrow?: Address;
+	/**
+	 * CCTP V2 wiring for this network's source domain, or `null` for networks
+	 * that are not a CCTP domain (BenzoNet).
+	 */
+	cctp?: CctpDeploymentConfig | null;
+	/**
+	 * Benzo CCTP auto-deposit router address. Absent until #108 deploys it;
+	 * projected from the source manifest when present.
+	 */
+	benzoCctpRouter?: Address;
 };
 
 export type Deployments = {

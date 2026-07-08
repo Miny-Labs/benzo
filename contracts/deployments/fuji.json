@@ -2,6 +2,12 @@
   "chainId": 43113,
   "contracts": {
     "handleRegistry": "0xC74EcCDE4D9A1F48D560de9A96521D28D58B474b",
+    "cctp": {
+      "domain": 1,
+      "tokenMessenger": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
+      "messageTransmitter": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
+      "autoDepositRouter": null
+    },
     "eercConverter": {
       "verifiers": {
         "registration": {

@@ -4,6 +4,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Address } from "viem";
 import { isAddress } from "viem";
+import { CCTP_DOMAINS, CCTP_SOURCE_CHAINS } from "./cctp.js";
 import {
 	CIRCUIT_EXTENSIONS,
 	type CircuitArtifactManifestEntry,
@@ -11,6 +12,7 @@ import {
 	circuitArtifactFile,
 } from "./circuits.js";
 import {
+	type CctpDeploymentConfig,
 	DEPLOYMENT_NETWORKS,
 	type DeploymentContracts,
 	type DeploymentNetwork,
@@ -48,6 +50,8 @@ for (const network of DEPLOYMENT_NETWORKS) {
 }
 
 validateStablecoins();
+
+validateCctp();
 
 verifyCircuitManifestIfPresent();
 
@@ -176,6 +180,85 @@ function validateStablecoins(): void {
 	}
 }
 
+function validateCctp(): void {
+	for (const network of DEPLOYMENT_NETWORKS) {
+		const cctp = deploymentsByNetwork[network].contracts.cctp;
+
+		// BenzoNet is a sovereign L1, not a CCTP domain — its block must be null.
+		if (network === "benzonet") {
+			if (cctp !== null) {
+				failures.push(
+					`${network}: contracts.cctp must be null (BenzoNet is not a CCTP domain)`,
+				);
+			}
+			continue;
+		}
+
+		// fuji + avalanche are Avalanche (CCTP domain 1), testnet and mainnet.
+		if (cctp === null || cctp === undefined) {
+			failures.push(`${network}: contracts.cctp block is required`);
+			continue;
+		}
+
+		validateCctpBlock(network, cctp);
+	}
+
+	// Every registered source-chain token must be a valid EVM address, and each
+	// source chain's domain must match its canonical CCTP domain id.
+	for (const [tier, chains] of Object.entries(CCTP_SOURCE_CHAINS)) {
+		for (const [chain, source] of Object.entries(chains)) {
+			if (source === undefined) {
+				continue;
+			}
+
+			if (source.domain !== CCTP_DOMAINS[chain as keyof typeof CCTP_DOMAINS]) {
+				failures.push(
+					`CCTP_SOURCE_CHAINS.${tier}.${chain}.domain ${source.domain} does not match CCTP_DOMAINS.${chain}`,
+				);
+			}
+
+			for (const [symbol, token] of Object.entries(source.tokens)) {
+				if (token === undefined) {
+					continue;
+				}
+
+				if (!isAddress(token.address)) {
+					failures.push(
+						`CCTP_SOURCE_CHAINS.${tier}.${chain}.${symbol} is not a valid EVM address: ${token.address}`,
+					);
+				}
+			}
+		}
+	}
+}
+
+function validateCctpBlock(
+	network: DeploymentNetwork,
+	cctp: CctpDeploymentConfig,
+): void {
+	if (!isAddress(cctp.tokenMessenger)) {
+		failures.push(
+			`${network}.cctp.tokenMessenger is not a valid EVM address: ${cctp.tokenMessenger}`,
+		);
+	}
+
+	if (!isAddress(cctp.messageTransmitter)) {
+		failures.push(
+			`${network}.cctp.messageTransmitter is not a valid EVM address: ${cctp.messageTransmitter}`,
+		);
+	}
+
+	if (cctp.domain !== 1) {
+		failures.push(`${network}.cctp.domain must be 1, got ${cctp.domain}`);
+	}
+
+	if (cctp.autoDepositRouter !== null && !isAddress(cctp.autoDepositRouter)) {
+		failures.push(
+			`${network}.cctp.autoDepositRouter must be null or a valid EVM address: ${cctp.autoDepositRouter}`,
+		);
+	}
+}
+
 function assertDeploymentMatchesSource(
 	network: DeploymentNetwork,
 	deployment: Deployments,
@@ -230,6 +313,14 @@ function compactDeployment(
 		"InvoiceRegistry",
 	]);
 	copyOptionalAddress(compactContracts, "GiftEscrow", contracts, ["GiftEscrow"]);
+	// Project the CCTP block last so it always trails the eERC/registry keys in
+	// the compact json. An explicit `null` (BenzoNet) is preserved; an absent
+	// block also collapses to null so the per-network cctp check catches it.
+	compactContracts.cctp = readOptionalCctp(contracts, ["cctp"]);
+	// benzoCctpRouter is absent until #108; projected here when a manifest adds it.
+	copyOptionalAddress(compactContracts, "benzoCctpRouter", contracts, [
+		"benzoCctpRouter",
+	]);
 
 	return {
 		network,
@@ -254,6 +345,7 @@ function deploymentAddressEntries(
 		"HandleRegistry",
 		"InvoiceRegistry",
 		"GiftEscrow",
+		"benzoCctpRouter",
 	] as const) {
 		const address = contracts[key];
 		if (address !== undefined) {
@@ -388,7 +480,7 @@ function verifyCircuitManifestEntry(
 
 function copyOptionalAddress(
 	target: DeploymentContracts,
-	key: Exclude<keyof DeploymentContracts, "verifiers" | "tokens">,
+	key: Exclude<keyof DeploymentContracts, "verifiers" | "tokens" | "cctp">,
 	source: JsonObject,
 	path: string[],
 ): void {
@@ -448,6 +540,31 @@ function readOptionalTokens(
 	}
 
 	return Object.keys(tokens).length > 0 ? tokens : undefined;
+}
+
+function readOptionalCctp(
+	source: JsonObject,
+	path: string[],
+): CctpDeploymentConfig | null {
+	const value = readPath(source, path);
+
+	// An explicit `null` (BenzoNet) or an absent block both project to null; the
+	// per-network cctp check then flags any network that requires a real block.
+	if (!isJsonObject(value)) {
+		return null;
+	}
+
+	const { domain, tokenMessenger, messageTransmitter, autoDepositRouter } = value;
+
+	return {
+		domain: domain as number,
+		tokenMessenger: tokenMessenger as Address,
+		messageTransmitter: messageTransmitter as Address,
+		autoDepositRouter:
+			typeof autoDepositRouter === "string"
+				? (autoDepositRouter as Address)
+				: null,
+	};
 }
 
 function readDeploymentAddress(source: JsonObject, path: string[]): Address {
