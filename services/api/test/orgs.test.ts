@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Base8, mulPointEscalar } from "@zk-kit/baby-jubjub";
 import {
 	PostgreSqlContainer,
 	type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
+import type { Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -22,6 +24,7 @@ import {
 	payrollItems,
 	payrollRuns,
 	sessions,
+	treasuryDeposits,
 	users,
 } from "../src/db/schema.js";
 import { createBoss, ensureQueues } from "../src/jobs/index.js";
@@ -33,6 +36,8 @@ import type {
 import {
 	createManagedEercAccount,
 	deserializeManagedEercAccount,
+	encryptAmountPct,
+	type EercBalance,
 	serializeManagedEercAccount,
 	type ManagedEercAccount,
 	type TransferProofCalldata,
@@ -45,6 +50,22 @@ import {
 
 const testMasterKey =
 	"0000000000000000000000000000000000000000000000000000000000000000";
+const testFundingTokens = [
+	{
+		address: "0x5425890298aed601595a70ab815c96711a31bc65",
+		decimals: 6,
+		symbol: "USDC",
+		token: "usdc",
+		tokenId: 1n,
+	},
+	{
+		address: "0x5e44db7996c682e92a960b65ac713a54ad815c6b",
+		decimals: 6,
+		symbol: "EURC",
+		token: "eurc",
+		tokenId: 2n,
+	},
+] satisfies ApiConfig["treasuryFundingTokens"];
 
 function baseConfig(databaseUrl: string): ApiConfig {
 	return {
@@ -65,6 +86,7 @@ function baseConfig(databaseUrl: string): ApiConfig {
 		dripBalanceThresholdWei: 500_000_000_000_000_000n,
 		dripWei: 500_000_000_000_000_000n,
 		eercDeploymentManifest: undefined,
+		eercConverterAddress: "0x46688f1704a69a6c276cccb823e36c80787b0fa2",
 		eercEncryptedErcAddress: "0x46688f1704a69a6c276cccb823e36c80787b0fa2",
 		eercRegistrarAddress: "0x9a63fea9851097dbaf3757b636217fdde50abaf0",
 		host: "127.0.0.1",
@@ -90,6 +112,7 @@ function baseConfig(databaseUrl: string): ApiConfig {
 		sessionCookieName: "benzo_test_session",
 		sessionTtlDays: 7,
 		siweNonceTtlMinutes: 10,
+		treasuryFundingTokens: testFundingTokens,
 	};
 }
 
@@ -272,6 +295,53 @@ function createTransferContextStub(): Pick<
 	};
 }
 
+function createPayrollSubmitterStub(
+	overrides: Partial<PayrollSubmitter> = {},
+): PayrollSubmitter {
+	return {
+		async loadTreasuryBalance() {
+			throw new Error("treasury_balance_not_expected");
+		},
+		async loadTransferContext() {
+			throw new Error("transfer_context_not_expected");
+		},
+		async prepareTransfer() {
+			throw new Error("prepare_transfer_not_expected");
+		},
+		async submitPreparedTransfer() {
+			throw new Error("submit_transfer_not_expected");
+		},
+		async submitTreasuryDeposit() {
+			throw new Error("treasury_deposit_not_expected");
+		},
+		async waitForConfirmations() {
+			throw new Error("confirmations_not_expected");
+		},
+		...overrides,
+	};
+}
+
+function encryptedBalanceFor(
+	account: ManagedEercAccount,
+	amount: bigint,
+): EercBalance {
+	const identity = mulPointEscalar(Base8, 0n).map((value) =>
+		BigInt(value),
+	) as [bigint, bigint];
+	const amountPoint = mulPointEscalar(Base8, amount).map((value) =>
+		BigInt(value),
+	) as [bigint, bigint];
+
+	return {
+		amountPCTs: [],
+		balancePCT: encryptAmountPct(amount, account.publicKey),
+		eGCT: {
+			c1: identity,
+			c2: amountPoint,
+		},
+	};
+}
+
 describe("@benzo/api orgs", () => {
 	let postgres: StartedPostgreSqlContainer;
 	let config: ApiConfig;
@@ -437,6 +507,15 @@ describe("@benzo/api orgs", () => {
 			config,
 			logger: false,
 			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async loadTreasuryBalance() {
+					if (!registeredEercAccount) {
+						throw new Error("registered_eerc_account_missing");
+					}
+
+					return encryptedBalanceFor(registeredEercAccount, 0n);
+				},
+			}),
 			startBoss: false,
 			treasuryRegistrar: createTreasuryRegistrarStub(undefined, (input) => {
 				registeredEercAccount = input.eercAccount;
@@ -529,11 +608,754 @@ describe("@benzo/api orgs", () => {
 			});
 			expect(status.json()).toMatchObject({
 				address,
+				balances: [
+					{
+						amount: "0",
+						decimals: 6,
+						symbol: "USDC",
+						token: "usdc",
+						tokenId: "1",
+					},
+					{
+						amount: "0",
+						decimals: 6,
+						symbol: "EURC",
+						token: "eurc",
+						tokenId: "2",
+					},
+				],
 				custody: "managed",
 				consented: true,
+				custodyConsent: {
+					consented: true,
+					consentedBy: expect.any(String),
+				},
 				registered: true,
 			});
 			expect(JSON.stringify(status.json())).not.toContain(recoveredKey);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("deposits treasury funding as admin and returns decrypted token balances to members", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"03".repeat(32)}` as Hex;
+		const txHash = `0x${"04".repeat(32)}` as Hex;
+		// The route generates + seals its own managed eERC account during
+		// provisioning; capture it so the balance stub encrypts under the same
+		// key the GET handler decrypts with.
+		let registeredEercAccount: ManagedEercAccount | undefined;
+		let depositInput:
+			| Parameters<PayrollSubmitter["submitTreasuryDeposit"]>[0]
+			| undefined;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async loadTreasuryBalance(input) {
+					if (!registeredEercAccount) {
+						throw new Error("registered_eerc_account_missing");
+					}
+					return encryptedBalanceFor(
+						registeredEercAccount,
+						input.tokenId === 1n ? 7_650_000n : 0n,
+					);
+				},
+				async submitTreasuryDeposit(input) {
+					depositInput = input;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(undefined, (input) => {
+				registeredEercAccount = input.eercAccount;
+			}),
+		});
+		const owner = `0x${"a7".repeat(20)}`;
+		const operator = `0x${"b8".repeat(20)}`;
+		const outsider = `0x${"c9".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const operatorCookie = await session(db, config, operator);
+			const outsiderCookie = await session(db, config, outsider);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Treasury Co", slug: `treasury-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/members`,
+				payload: { address: operator, role: "operator" },
+			});
+			const provisioned = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+			expect(provisioned.statusCode).toBe(201);
+
+			const operatorDeposit = await app.inject({
+				headers: { cookie: operatorCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: {
+					amount: "2500000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
+			});
+			expect(operatorDeposit.statusCode).toBe(403);
+
+			const invalidDeposit = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "0", idempotencyKey: randomUUID(), token: "usdc" },
+			});
+			expect(invalidDeposit.statusCode).toBe(400);
+
+			// A money-movement deposit must be safe to retry, so the idempotency key
+			// is mandatory: a request omitting it is rejected before any broadcast.
+			const missingKeyDeposit = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "2500000", token: "usdc" },
+			});
+			expect(missingKeyDeposit.statusCode).toBe(400);
+
+			const deposited = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: {
+					amount: "2500000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
+			});
+			expect(deposited.statusCode).toBe(201);
+			expect(deposited.json()).toMatchObject({
+				amount: "2500000",
+				approvalTxHash,
+				source: "direct",
+				status: "confirmed",
+				token: "usdc",
+				tokenId: "1",
+				txHash,
+			});
+			expect(depositInput).toMatchObject({
+				amount: 2_500_000n,
+				tokenAddress: testFundingTokens[0].address,
+			});
+			expect(depositInput?.amountPCT).toHaveLength(7);
+			expect(depositInput?.eoaPrivateKey).toMatch(/^0x[0-9a-fA-F]{64}$/);
+			// Confirmations are threaded from config.indexerConfirmations (6), not
+			// the unsafe 1-confirmation default.
+			expect(depositInput?.confirmations).toBe(config.indexerConfirmations);
+
+			const [row] = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId))
+				.limit(1);
+			expect(row).toMatchObject({
+				amount: "2500000",
+				source: "direct",
+				status: "confirmed",
+				token: "usdc",
+				tokenId: 1n,
+				txHash: txHash.toLowerCase(),
+			});
+
+			const balance = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "GET",
+				url: `/orgs/${orgId}/treasury`,
+			});
+			expect(balance.statusCode).toBe(200);
+			expect(balance.json()).toMatchObject({
+				balances: [
+					{ amount: "7650000", token: "usdc", tokenId: "1" },
+					{ amount: "0", token: "eurc", tokenId: "2" },
+				],
+				registered: true,
+			});
+
+			const outsiderBalance = await app.inject({
+				headers: { cookie: outsiderCookie },
+				method: "GET",
+				url: `/orgs/${orgId}/treasury`,
+			});
+			expect(outsiderBalance.statusCode).toBe(404);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("pre-inserts a submitted deposit before broadcasting, then confirms it", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"05".repeat(32)}` as Hex;
+		const txHash = `0x${"06".repeat(32)}` as Hex;
+		let depositOrgId: string | undefined;
+		let statusAtBroadcast: string | undefined;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					// At broadcast time the durable row must already exist as
+					// `submitted`, so a crash here cannot lose the ledger entry.
+					const [pending] = await db
+						.select()
+						.from(treasuryDeposits)
+						.where(eq(treasuryDeposits.orgId, depositOrgId!))
+						.limit(1);
+					statusAtBroadcast = pending?.status;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d1".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Durable Co", slug: `durable-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			depositOrgId = orgId;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const deposited = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: {
+					amount: "1000000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
+			});
+			expect(deposited.statusCode).toBe(201);
+			// The row existed as `submitted` while the tx was broadcasting...
+			expect(statusAtBroadcast).toBe("submitted");
+
+			// ...and flipped to `confirmed` (with the tx hash) once it settled.
+			const [row] = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId))
+				.limit(1);
+			expect(row).toMatchObject({
+				status: "confirmed",
+				txHash: txHash.toLowerCase(),
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("resumes a keyed deposit whose first attempt crashed before broadcasting", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"07".repeat(32)}` as Hex;
+		const txHash = `0x${"08".repeat(32)}` as Hex;
+		let submitCalls = 0;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					submitCalls += 1;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d2".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Resume Co", slug: `resume-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			// Simulate a first attempt that inserted the `submitted` row but crashed
+			// BEFORE broadcasting (no txHash), long enough ago to be past the lease.
+			const key = randomUUID();
+			await db.insert(treasuryDeposits).values({
+				amount: "1000000",
+				idempotencyKey: key,
+				orgId,
+				source: "direct",
+				status: "submitted",
+				token: "usdc",
+				tokenId: 1n,
+				txHash: null,
+				updatedAt: new Date(Date.now() - 5 * 60_000),
+			});
+
+			// A retry with the same key must RESUME (re-broadcast), not return a
+			// terminal stuck `submitted`/txHash:null.
+			const resumed = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(resumed.statusCode).toBe(201);
+			expect(submitCalls).toBe(1);
+
+			// Still ONE row for the key (resumed in place), now confirmed with a hash.
+			const rows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId));
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toMatchObject({
+				status: "confirmed",
+				txHash: txHash.toLowerCase(),
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("re-attempts a keyed deposit whose previous attempt failed (revert is retryable)", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"0a".repeat(32)}` as Hex;
+		const txHash = `0x${"0b".repeat(32)}` as Hex;
+		let submitCalls = 0;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					submitCalls += 1;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d4".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Retry Co", slug: `retry-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			// A prior attempt that reverted on-chain and was marked `failed`.
+			const key = randomUUID();
+			await db.insert(treasuryDeposits).values({
+				amount: "1000000",
+				idempotencyKey: key,
+				orgId,
+				source: "direct",
+				status: "failed",
+				token: "usdc",
+				tokenId: 1n,
+				txHash: null,
+			});
+
+			// A same-key retry must RE-ATTEMPT (a revert moved no funds), not return
+			// the terminal failed row.
+			const retried = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(retried.statusCode).toBe(201);
+			expect(submitCalls).toBe(1);
+			const rows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId));
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toMatchObject({ status: "confirmed", txHash: txHash.toLowerCase() });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("rejects an idempotency key reused with a different amount/token (409)", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					return {
+						approvalTxHash: `0x${"0c".repeat(32)}` as Hex,
+						txHash: `0x${"0d".repeat(32)}` as Hex,
+					};
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d5".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Conflict Co", slug: `conflict-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const key = randomUUID();
+			const first = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(first.statusCode).toBe(201);
+
+			// Same key, different amount -> conflict, not a silent resolve.
+			const conflict = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "2000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(conflict.statusCode).toBe(409);
+			expect(conflict.json()).toMatchObject({ error: "idempotency_key_conflict" });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("marks the deposit failed and returns 502 when the deposit reverts on-chain", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					throw new Error("treasury_deposit_reverted");
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d2".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Failure Co", slug: `failure-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const deposited = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: {
+					amount: "1000000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
+			});
+			expect(deposited.statusCode).toBe(502);
+			expect(deposited.json()).toMatchObject({
+				error: "treasury_deposit_reverted",
+			});
+
+			// The durable row is retained as `failed` with no tx hash for
+			// observability; nothing sensitive is persisted.
+			const [row] = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId))
+				.limit(1);
+			expect(row).toMatchObject({ status: "failed", txHash: null });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("keeps the deposit submitted and returns 202 on a transient (non-revert) error", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					// A transient RPC/receipt failure before the deposit hash exists —
+					// NOT a confirmed revert. The funding must stay resumable.
+					throw new Error("HTTP request failed");
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d3".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Transient Co", slug: `transient-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const deposited = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: randomUUID(), token: "usdc" },
+			});
+			// Resumable, not stranded: 202 with the row left `submitted` (null hash).
+			expect(deposited.statusCode).toBe(202);
+			const [row] = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId))
+				.limit(1);
+			expect(row).toMatchObject({ status: "submitted", txHash: null });
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("keeps the deposit submitted with its hash and returns 202 when only the confirmation wait fails", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const txHash = `0x${"0a".repeat(32)}` as Hex;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit(input) {
+					// The tx was broadcast (hash surfaced via onBeforeBroadcast) but the
+					// confirmation wait fails — the tx may still land on-chain.
+					await input.onBeforeBroadcast?.(txHash);
+					throw new Error("treasury_deposit_confirmation_timeout");
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d4".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: {
+					name: "Unconfirmed Co",
+					slug: `unconfirmed-${randomUUID()}`,
+				},
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const deposited = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: {
+					amount: "1000000",
+					idempotencyKey: randomUUID(),
+					token: "usdc",
+				},
+			});
+			// Broadcast-but-unconfirmed: 202, not 502, and the hash is returned.
+			expect(deposited.statusCode).toBe(202);
+			expect(deposited.json()).toMatchObject({
+				amount: "1000000",
+				source: "direct",
+				status: "submitted",
+				token: "usdc",
+				tokenId: "1",
+				txHash,
+			});
+
+			// The row is left `submitted` with the persisted hash for later
+			// reconciliation — never `failed`, so no moved money is lost.
+			const [row] = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId))
+				.limit(1);
+			expect(row).toMatchObject({
+				status: "submitted",
+				txHash: txHash.toLowerCase(),
+			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("deduplicates a repeated idempotencyKey without a second submission", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const approvalTxHash = `0x${"07".repeat(32)}` as Hex;
+		const txHash = `0x${"08".repeat(32)}` as Hex;
+		let submitCount = 0;
+		const app = await buildApp({
+			config,
+			logger: false,
+			onboardingChain: createOnboardingChainStub(),
+			payrollSubmitter: createPayrollSubmitterStub({
+				async submitTreasuryDeposit() {
+					submitCount += 1;
+					return { approvalTxHash, txHash };
+				},
+			}),
+			startBoss: false,
+			treasuryRegistrar: createTreasuryRegistrarStub(),
+		});
+		const owner = `0x${"d3".repeat(20)}`;
+
+		try {
+			const ownerCookie = await session(db, config, owner);
+			const created = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: "/orgs",
+				payload: { name: "Idem Co", slug: `idem-${randomUUID()}` },
+			});
+			const orgId = created.json().org.id as string;
+			await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury`,
+				payload: { consent: true },
+			});
+
+			const key = randomUUID();
+			const first = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			expect(first.statusCode).toBe(201);
+
+			const retry = await app.inject({
+				headers: { cookie: ownerCookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/deposit`,
+				payload: { amount: "1000000", idempotencyKey: key, token: "usdc" },
+			});
+			// The retry returns the original record (200) and never re-submits.
+			expect(retry.statusCode).toBe(200);
+			expect(retry.json()).toMatchObject({
+				amount: "1000000",
+				status: "confirmed",
+				token: "usdc",
+				tokenId: "1",
+				txHash: txHash.toLowerCase(),
+			});
+			expect(submitCount).toBe(1);
+
+			// Exactly one durable row exists for the org.
+			const rows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId));
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.idempotencyKey).toBe(key);
 		} finally {
 			await app.close();
 			await pool.end();
@@ -804,6 +1626,7 @@ describe("@benzo/api orgs", () => {
 			},
 		};
 		const submitter: PayrollSubmitter = {
+			...createPayrollSubmitterStub(),
 			async loadTransferContext() {
 				return {
 					auditorPublicKey: auditor.publicKey,
@@ -956,6 +1779,7 @@ describe("@benzo/api orgs", () => {
 		let submitCalls = 0;
 		const uniqueBroadcasts = new Set<string>();
 		const submitter: PayrollSubmitter = {
+			...createPayrollSubmitterStub(),
 			...createTransferContextStub(),
 			async prepareTransfer() {
 				prepareCount += 1;
@@ -1012,6 +1836,7 @@ describe("@benzo/api orgs", () => {
 		const fixture = await insertPayrollWorkerFixture(db, config);
 		const txHash = `0x${"ef".repeat(32)}` as `0x${string}`;
 		const submitter: PayrollSubmitter = {
+			...createPayrollSubmitterStub(),
 			...createTransferContextStub(),
 			async prepareTransfer() {
 				return {
@@ -1059,6 +1884,7 @@ describe("@benzo/api orgs", () => {
 		const fixture = await insertPayrollWorkerFixture(db, config);
 		const txHash = `0x${"34".repeat(32)}` as `0x${string}`;
 		const submitter: PayrollSubmitter = {
+			...createPayrollSubmitterStub(),
 			...createTransferContextStub(),
 			async prepareTransfer() {
 				return {

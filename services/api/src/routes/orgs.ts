@@ -1,12 +1,17 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
-import { getAddress } from "viem";
+import { getAddress, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
-import type { ApiConfig } from "../config.js";
+import type { ApiConfig, TreasuryFundingToken } from "../config.js";
 import type { Database } from "../db/client.js";
 import { sealString, unsealString } from "../crypto/seal.js";
-import { orgMembers, orgTreasuries, orgs } from "../db/schema.js";
+import {
+	orgMembers,
+	orgTreasuries,
+	orgs,
+	treasuryDeposits,
+} from "../db/schema.js";
 import {
 	ROLE_RANK,
 	loadMembership,
@@ -16,15 +21,22 @@ import type { OnboardingChainClient } from "../onboarding/chain.js";
 import {
 	createManagedEercAccount,
 	deserializeManagedEercAccount,
+	encryptAmountPct,
+	getDecryptedBalance,
 	serializeManagedEercAccount,
 	type ManagedEercAccount,
 } from "../payroll/eerc.js";
-import type { TreasuryRegistrar } from "../payroll/chain.js";
+import type {
+	PayrollSubmitter,
+	TreasuryDepositSubmissionResult,
+	TreasuryRegistrar,
+} from "../payroll/chain.js";
 
 type OrgsRoutesOptions = {
 	config: ApiConfig;
 	db: Database;
 	onboardingChain: OnboardingChainClient;
+	payrollSubmitter: PayrollSubmitter;
 	treasuryRegistrar: TreasuryRegistrar;
 };
 
@@ -47,6 +59,15 @@ const provisionTreasurySchema = z.object({
 	// Managed-treasury custody is an explicit consent moment: the caller must
 	// acknowledge that Benzo will hold this treasury key on its servers.
 	consent: z.literal(true),
+});
+
+const treasuryDepositSchema = z.object({
+	amount: z.string().trim().regex(/^[1-9][0-9]*$/),
+	// Required dedupe token: a money-movement deposit must be safe to retry, so
+	// callers always supply a key. A retry carrying a previously seen key returns
+	// the original deposit instead of broadcasting a second approve/deposit.
+	idempotencyKey: z.string().trim().min(1).max(255),
+	token: z.enum(["usdc", "eurc"]),
 });
 
 const evmAddress = /^0x[0-9a-fA-F]{40}$/;
@@ -297,6 +318,270 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 		},
 	);
 
+	// POST /orgs/:id/treasury/deposit — convert ERC20 into encrypted treasury
+	// balance. The managed EOA key is unsealed only for signing approve/deposit.
+	fastify.post(
+		"/orgs/:id/treasury/deposit",
+		{ preHandler: requireOrgRole("admin") },
+		async (request, reply) => {
+			const orgId = (request.params as { id: string }).id;
+			const body = treasuryDepositSchema.safeParse(request.body);
+			if (!body.success) {
+				return reply.code(400).send({ error: "invalid_treasury_deposit" });
+			}
+
+			const token = resolveFundingToken(options.config, body.data.token);
+			if (!token) {
+				return reply.code(503).send({ error: "treasury_token_not_configured" });
+			}
+
+			const treasury = await db.query.orgTreasuries.findFirst({
+				where: (table, { eq: eqOp }) => eqOp(table.orgId, orgId),
+			});
+			if (!treasury) {
+				return reply.code(404).send({ error: "treasury_not_found" });
+			}
+			if (!treasury.eercRegisteredAt || !treasury.sealedEercKey) {
+				return reply
+					.code(409)
+					.send({ error: "treasury_not_eerc_registered" });
+			}
+
+			const amount = BigInt(body.data.amount);
+			const idempotencyKey = body.data.idempotencyKey;
+
+			// Idempotency: a retry reusing a key we've already recorded for this org
+			// returns the original record instead of broadcasting a second deposit.
+			const existing = await db.query.treasuryDeposits.findFirst({
+				where: (table, { and: andOp, eq: eqOp }) =>
+					andOp(
+						eqOp(table.orgId, orgId),
+						eqOp(table.idempotencyKey, idempotencyKey),
+					),
+			});
+			// An idempotency key is bound to its request: reusing it with a
+			// different amount or token is a distinct funding action, not a retry,
+			// and must be rejected rather than silently resolving to the original.
+			if (
+				existing &&
+				(existing.amount !== amount.toString() ||
+					existing.token !== token.token)
+			) {
+				return reply.code(409).send({ error: "idempotency_key_conflict" });
+			}
+			// A keyed retry is resumable (re-attempts the funding, re-claiming the
+			// existing row) when either: (a) the previous attempt `failed` — a
+			// reverted approve/deposit moved no funds, so retrying with the same key
+			// is safe; or (b) it is `submitted` with no txHash and older than the
+			// lease, meaning it crashed BEFORE broadcasting (sign-first guarantees a
+			// null hash => not broadcast). A recent null-hash row is still in-flight
+			// (202); a confirmed or hash-bearing submitted row is terminal.
+			const TREASURY_DEPOSIT_LEASE_MS = 90_000;
+			const resumable =
+				existing != null &&
+				(existing.status === "failed" ||
+					(existing.status === "submitted" &&
+						!existing.txHash &&
+						Date.now() - existing.updatedAt.getTime() >
+							TREASURY_DEPOSIT_LEASE_MS));
+			if (existing && !resumable) {
+				const inFlightPreBroadcast =
+					existing.status === "submitted" && !existing.txHash;
+				return reply.code(inFlightPreBroadcast ? 202 : 200).send({
+					amount: existing.amount,
+					source: existing.source,
+					status: existing.status,
+					token: existing.token,
+					tokenId: existing.tokenId.toString(),
+					txHash: existing.txHash,
+				});
+			}
+
+			const eoaPrivateKey = unsealString(
+				options.config.appMasterKey,
+				treasury.sealedEoaKey,
+			) as `0x${string}`;
+			const eercAccount = deserializeManagedEercAccount(
+				unsealString(options.config.appMasterKey, treasury.sealedEercKey),
+			);
+
+			// Durably record intent BEFORE the irreversible approve/deposit. On
+			// resume, re-claim the row under a SELECT ... FOR UPDATE row lock so two
+			// concurrent retries can't both broadcast. A row lock is used instead of
+			// an updatedAt-equality guard because Postgres timestamptz precision does
+			// not round-trip through a JS Date, so an equality guard would never match
+			// and would strand every resume at 202.
+			let pendingId: string;
+			if (resumable && existing) {
+				const claimedId = await db.transaction(async (tx) => {
+					const [locked] = await tx
+						.select()
+						.from(treasuryDeposits)
+						.where(eq(treasuryDeposits.id, existing.id))
+						.for("update");
+					const stillResumable =
+						locked != null &&
+						(locked.status === "failed" ||
+							(locked.status === "submitted" &&
+								!locked.txHash &&
+								Date.now() - locked.updatedAt.getTime() >
+									TREASURY_DEPOSIT_LEASE_MS));
+					if (!stillResumable) {
+						return null;
+					}
+					await tx
+						.update(treasuryDeposits)
+						.set({ status: "submitted", txHash: null, updatedAt: new Date() })
+						.where(eq(treasuryDeposits.id, existing.id));
+					return existing.id;
+				});
+				if (!claimedId) {
+					// Another request claimed the resume, or it is no longer resumable.
+					return reply.code(202).send({
+						amount: existing.amount,
+						source: existing.source,
+						status: "submitted",
+						token: existing.token,
+						tokenId: existing.tokenId.toString(),
+						txHash: null,
+					});
+				}
+				pendingId = claimedId;
+			} else {
+				const [pending] = await db
+					.insert(treasuryDeposits)
+					.values({
+						amount: amount.toString(),
+						idempotencyKey,
+						orgId,
+						source: "direct",
+						status: "submitted",
+						token: token.token,
+						tokenId: token.tokenId,
+					})
+					.returning({ id: treasuryDeposits.id });
+				pendingId = pending!.id;
+			}
+
+			// Captured the moment the deposit tx is broadcast (before the
+			// confirmation wait). Once set, the tx may have landed on-chain, so a
+			// later failure must never mark the row `failed`.
+			let broadcastTxHash: Hex | null = null;
+			let result: TreasuryDepositSubmissionResult;
+			try {
+				result = await options.payrollSubmitter.submitTreasuryDeposit({
+					amount,
+					amountPCT: encryptAmountPct(amount, eercAccount.publicKey),
+					confirmations: options.config.indexerConfirmations,
+					eoaPrivateKey,
+					onBeforeBroadcast: async (h) => {
+						// Called AFTER signing, BEFORE sending. Persist the hash first,
+						// then flag it: with sign-first, if this persist throws the tx is
+						// never sent, so leaving broadcastTxHash null makes the catch mark
+						// the row `failed` (correct — nothing was broadcast, safe to retry).
+						await db
+							.update(treasuryDeposits)
+							.set({ txHash: h.toLowerCase(), updatedAt: new Date() })
+							.where(eq(treasuryDeposits.id, pendingId));
+						broadcastTxHash = h;
+					},
+					tokenAddress: token.address,
+				});
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "";
+				if (message === "treasury_deposit_send_rejected") {
+					// The signed tx was rejected by the node and never entered the mempool.
+					// Clear the pre-persisted hash so the row is resumable (a keyed retry
+					// re-signs and re-sends) rather than stranded `submitted` with a dead hash.
+					await db
+						.update(treasuryDeposits)
+						.set({ status: "submitted", txHash: null, updatedAt: new Date() })
+						.where(eq(treasuryDeposits.id, pendingId));
+					request.log.warn({ err: error, orgId }, "treasury_deposit_send_rejected");
+					return reply.code(202).send({
+						amount: amount.toString(),
+						source: "direct",
+						status: "submitted",
+						token: token.token,
+						tokenId: token.tokenId.toString(),
+						txHash: null,
+					});
+				}
+				const reverted =
+					message === "treasury_deposit_reverted" ||
+					message === "treasury_deposit_approval_reverted";
+
+				if (reverted) {
+					// A confirmed on-chain revert is terminal — the funding did not happen,
+					// so mark the row `failed` instead of leaving it `submitted` as if it
+					// might still settle.
+					await db
+						.update(treasuryDeposits)
+						.set({ status: "failed", updatedAt: new Date() })
+						.where(eq(treasuryDeposits.id, pendingId));
+					request.log.error(
+						{ err: error, orgId, txHash: broadcastTxHash },
+						"treasury_deposit_reverted",
+					);
+					return reply.code(502).send({ error: "treasury_deposit_reverted" });
+				}
+
+				if (broadcastTxHash) {
+					// Deposit signed, hash persisted, and sent, but the confirmation wait
+					// failed transiently; it may still settle. Leave `submitted` with the
+					// hash so a reconciler can settle it and no money is lost.
+					request.log.warn(
+						{ err: error, orgId, txHash: broadcastTxHash },
+						"treasury_deposit_broadcast_unconfirmed",
+					);
+					return reply.code(202).send({
+						amount: amount.toString(),
+						source: "direct",
+						status: "submitted",
+						token: token.token,
+						tokenId: token.tokenId.toString(),
+						txHash: broadcastTxHash,
+					});
+				}
+
+				// No deposit hash and not a revert: a transient failure before the deposit
+				// was broadcast (e.g. an approve-receipt timeout). Leave the row `submitted`
+				// (null hash) so a keyed retry resumes rather than being stranded `failed`.
+				request.log.warn(
+					{ err: error, orgId },
+					"treasury_deposit_prebroadcast_unconfirmed",
+				);
+				return reply.code(202).send({
+					amount: amount.toString(),
+					source: "direct",
+					status: "submitted",
+					token: token.token,
+					tokenId: token.tokenId.toString(),
+					txHash: null,
+				});
+			}
+
+			await db
+				.update(treasuryDeposits)
+				.set({
+					status: "confirmed",
+					txHash: result.txHash.toLowerCase(),
+					updatedAt: new Date(),
+				})
+				.where(eq(treasuryDeposits.id, pendingId));
+
+			return reply.code(201).send({
+				amount: amount.toString(),
+				approvalTxHash: result.approvalTxHash,
+				source: "direct",
+				status: "confirmed",
+				token: token.token,
+				tokenId: token.tokenId.toString(),
+				txHash: result.txHash,
+			});
+		},
+	);
+
 	// GET /orgs/:id/treasury — custody status; never returns key material.
 	fastify.get(
 		"/orgs/:id/treasury",
@@ -309,7 +594,9 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				.select({
 					address: orgTreasuries.address,
 					consentedAt: orgTreasuries.consentedAt,
-					registered: sql<boolean>`${orgTreasuries.eercRegisteredAt} is not null`,
+					consentedBy: orgTreasuries.consentedBy,
+					eercRegisteredAt: orgTreasuries.eercRegisteredAt,
+					sealedEercKey: orgTreasuries.sealedEercKey,
 				})
 				.from(orgTreasuries)
 				.where(eq(orgTreasuries.orgId, orgId))
@@ -319,15 +606,76 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				return reply.code(404).send({ error: "treasury_not_found" });
 			}
 
+			const registered = treasury.eercRegisteredAt !== null;
+			const balances =
+				registered && treasury.sealedEercKey
+					? await loadTreasuryBalances({
+							config: options.config,
+							eercKey: treasury.sealedEercKey,
+							submitter: options.payrollSubmitter,
+							treasuryAddress: treasury.address,
+						})
+					: [];
+
 			return reply.send({
 				address: getAddress(treasury.address),
+				balances,
 				custody: "managed",
+				custodyConsent: {
+					consented: treasury.consentedAt !== null,
+					consentedAt: treasury.consentedAt?.toISOString() ?? null,
+					consentedBy: treasury.consentedBy,
+				},
 				consented: treasury.consentedAt !== null,
-				registered: treasury.registered,
+				registered,
 			});
 		},
 	);
 };
+
+function resolveFundingToken(
+	config: ApiConfig,
+	token: "usdc" | "eurc",
+): TreasuryFundingToken | null {
+	return (
+		config.treasuryFundingTokens.find(
+			(entry) => entry.token === token,
+		) ?? null
+	);
+}
+
+async function loadTreasuryBalances({
+	config,
+	eercKey,
+	submitter,
+	treasuryAddress,
+}: {
+	config: ApiConfig;
+	eercKey: Buffer;
+	submitter: PayrollSubmitter;
+	treasuryAddress: string;
+}) {
+	const account = deserializeManagedEercAccount(
+		unsealString(config.appMasterKey, eercKey),
+	);
+
+	return Promise.all(
+		config.treasuryFundingTokens.map(async (token) => {
+			const balance = await submitter.loadTreasuryBalance({
+				tokenId: token.tokenId,
+				treasuryAddress,
+			});
+
+			return {
+				amount: getDecryptedBalance(account.privateKey, balance).toString(),
+				decimals: token.decimals,
+				symbol: token.symbol,
+				token: token.token,
+				tokenId: token.tokenId.toString(),
+			};
+		}),
+	);
+}
 
 async function loadOrCreateTreasuryEercAccount(
 	db: Database,

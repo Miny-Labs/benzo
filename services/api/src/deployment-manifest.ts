@@ -126,6 +126,7 @@ export type ManifestTokenEntry = {
 export type DeploymentRegistry = {
 	network: string | null;
 	chainId: number | null;
+	converterAddress: string | null;
 	encryptedErcAddress: string | null;
 	registrarAddress: string | null;
 	handleRegistryAddress: string | null;
@@ -151,6 +152,7 @@ export function resolveManifestPath(
 const EMPTY_DEPLOYMENT_REGISTRY: DeploymentRegistry = {
 	network: null,
 	chainId: null,
+	converterAddress: null,
 	encryptedErcAddress: null,
 	registrarAddress: null,
 	handleRegistryAddress: null,
@@ -236,13 +238,15 @@ function assertManifestMatches(
 
 function extractRegistry(manifest: unknown): DeploymentRegistry {
 	const converter = ["contracts", "eercConverter"];
+	const converterAddress = normalizeMaybeAddress(
+		readStringPath(manifest, [...converter, "encryptedERC", "address"]),
+	);
 
 	return {
 		network: readStringPath(manifest, ["network"]),
 		chainId: readNumberPath(manifest, ["chainId"]),
-		encryptedErcAddress: normalizeMaybeAddress(
-			readStringPath(manifest, [...converter, "encryptedERC", "address"]),
-		),
+		converterAddress,
+		encryptedErcAddress: converterAddress,
 		registrarAddress: normalizeMaybeAddress(
 			readStringPath(manifest, [...converter, "registrar", "address"]),
 		),

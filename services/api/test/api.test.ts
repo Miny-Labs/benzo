@@ -118,6 +118,7 @@ describe("@benzo/api", () => {
 			dripBalanceThresholdWei: 500_000_000_000_000_000n,
 			dripWei: 500_000_000_000_000_000n,
 			eercDeploymentManifest: undefined,
+			eercConverterAddress: testEncryptedErcAddress,
 			eercEncryptedErcAddress: testEncryptedErcAddress,
 			eercRegistrarAddress: testRegistrarAddress,
 			host: "127.0.0.1",
@@ -142,6 +143,7 @@ describe("@benzo/api", () => {
 			sessionCookieName: "benzo_test_session",
 			sessionTtlDays: 7,
 			siweNonceTtlMinutes: 10,
+			treasuryFundingTokens: [],
 		};
 
 		await migrateTestDatabase(config);

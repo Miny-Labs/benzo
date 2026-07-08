@@ -45,6 +45,7 @@ function testConfig(databaseUrl: string): ApiConfig {
 		dripBalanceThresholdWei: 500_000_000_000_000_000n,
 		dripWei: 500_000_000_000_000_000n,
 		eercDeploymentManifest: undefined,
+		eercConverterAddress: "0x9e16ed3b799541b4929f7e2014904c65e81035b1",
 		eercEncryptedErcAddress: "0x9e16ed3b799541b4929f7e2014904c65e81035b1",
 		eercRegistrarAddress: "0x9a63fea9851097dbaf3757b636217fdde50abaf0",
 		handleRegistryAddress: undefined,
@@ -72,6 +73,7 @@ function testConfig(databaseUrl: string): ApiConfig {
 		sessionTtlDays: 7,
 		siweNonceTtlMinutes: 10,
 		tier: "staging",
+		treasuryFundingTokens: [],
 	};
 }
 
