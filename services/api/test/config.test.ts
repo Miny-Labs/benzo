@@ -106,13 +106,34 @@ describe("loadConfig", () => {
 		expect(config.autoDepositRouterAddress).toBeNull();
 	});
 
-	it("fails fast when the deployment manifest is missing (no Fuji fallback)", () => {
+	it("throws (no Fuji fallback) when neither the manifest nor an env override resolves an address", () => {
 		expect(() =>
 			loadConfig({
 				...baseEnv,
 				EERC_DEPLOYMENT_MANIFEST: path.join(deploymentsDir, "does-not-exist.json"),
 			}),
-		).toThrow("eerc_manifest_missing");
+		).toThrow("eerc_encrypted_erc_unresolved");
+	});
+
+	it("resolves from env overrides when the manifest file is absent (deployed image)", () => {
+		// The deployed API image does not bundle contracts/deployments, so the
+		// addresses come from EERC_*_ADDRESS and an absent manifest must still boot.
+		const config = loadConfig({
+			...baseEnv,
+			EERC_DEPLOYMENT_MANIFEST: path.join(deploymentsDir, "does-not-exist.json"),
+			EERC_ENCRYPTED_ERC_ADDRESS:
+				"0x9e16ed3b799541b4929f7e2014904c65e81035b1",
+			EERC_REGISTRAR_ADDRESS: "0x9a63fea9851097dbaf3757b636217fdde50abaf0",
+		});
+
+		expect(config.eercEncryptedErcAddress).toBe(
+			"0x9e16ed3b799541b4929f7e2014904c65e81035b1",
+		);
+		expect(config.eercRegistrarAddress).toBe(
+			"0x9a63fea9851097dbaf3757b636217fdde50abaf0",
+		);
+		// No manifest → payroll tokenId falls back to the default (USDC=tokenId 1).
+		expect(config.payrollTokenId).toBe(1n);
 	});
 
 	it("fails fast when the manifest network disagrees with CHAIN_ENV", () => {

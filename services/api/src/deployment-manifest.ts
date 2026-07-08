@@ -145,9 +145,25 @@ export function resolveManifestPath(
 	return override ?? path.join(deploymentsDir, `${chainEnv}.json`);
 }
 
-// Reads + validates the deployment manifest for a network. A missing manifest
-// or a manifest whose network/chainId disagrees with the resolved config is a
-// startup-time error — there is intentionally no Fuji fallback.
+// An absent manifest yields this empty registry, so on-chain addresses must then
+// come from the EERC_*_ADDRESS env overrides (config throws eerc_*_unresolved when
+// they are also absent — still no silent Fuji fallback).
+const EMPTY_DEPLOYMENT_REGISTRY: DeploymentRegistry = {
+	network: null,
+	chainId: null,
+	encryptedErcAddress: null,
+	registrarAddress: null,
+	handleRegistryAddress: null,
+	tokens: {},
+	cctp: null,
+};
+
+// Reads + validates the deployment manifest for a network. The manifest is
+// OPTIONAL at the file level: the deployed API image is built from services/api
+// and does not bundle contracts/deployments, so there the addresses come from the
+// EERC_*_ADDRESS env overrides and an absent manifest yields an empty registry
+// (rather than crashing at boot). A manifest that IS present but has a mismatched
+// network/chainId or malformed JSON is still a startup-time error.
 export function loadDeploymentRegistry(params: {
 	chainEnv: ChainEnv;
 	chainId: number;
@@ -160,7 +176,7 @@ export function loadDeploymentRegistry(params: {
 		raw = readFileSync(manifestPath, "utf8");
 	} catch (error) {
 		if (isMissingFileError(error)) {
-			throw new Error(`eerc_manifest_missing:${manifestPath}`);
+			return EMPTY_DEPLOYMENT_REGISTRY;
 		}
 
 		throw error;
