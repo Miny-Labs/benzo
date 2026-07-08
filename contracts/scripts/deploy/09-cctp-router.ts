@@ -158,8 +158,13 @@ const main = async () => {
 	const eurc = tokenAddress(tokens, "EURC");
 
 	const [deployer] = await ethers.getSigners();
+	// The gas-sponsoring settlement relayer (benzo-relayer). Default to the known
+	// relayer rather than the deployer, so a deploy without CCTP_RELAYER_ADDRESS
+	// doesn't grant the deployer key a settlement role or leave the intended relayer
+	// unable to settle. Override with CCTP_RELAYER_ADDRESS.
+	const BENZO_RELAYER = "0x984E075152391C018Df97161D51C6BfE52631508";
 	const relayer = ethers.getAddress(
-		process.env.CCTP_RELAYER_ADDRESS ?? deployer.address,
+		process.env.CCTP_RELAYER_ADDRESS ?? BENZO_RELAYER,
 	);
 	const router = await ethers.deployContract("BenzoCCTPRouter", [
 		messageTransmitter,

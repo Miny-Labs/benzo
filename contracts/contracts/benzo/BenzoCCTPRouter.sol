@@ -2,6 +2,7 @@
 pragma solidity 0.8.27;
 
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -12,7 +13,7 @@ import {CctpMessageV2} from "./libraries/CctpMessageV2.sol";
 
 /// @title Benzo CCTP auto-deposit router.
 /// @notice Receives Circle CCTP V2 mints and deposits the minted token into a registered user's eERC balance.
-contract BenzoCCTPRouter is Ownable2Step {
+contract BenzoCCTPRouter is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using CctpMessageV2 for bytes;
 
@@ -32,6 +33,7 @@ contract BenzoCCTPRouter is Ownable2Step {
         bytes32 indexed cctpNonce
     );
     event Rescue(address indexed token, address indexed to, uint256 amount);
+    event MessageReceivedForRescue(address indexed by);
 
     error ZeroAddress();
     error NotRelayer(address caller);
@@ -87,7 +89,7 @@ contract BenzoCCTPRouter is Ownable2Step {
         bytes calldata message,
         bytes calldata attestation,
         uint256[7] calldata amountPCT
-    ) external {
+    ) external nonReentrant {
         if (!relayers[msg.sender]) {
             revert NotRelayer(msg.sender);
         }
@@ -104,6 +106,24 @@ contract BenzoCCTPRouter is Ownable2Step {
         eerc.depositFor(user, amount, token, amountPCT, message);
 
         emit OnrampSettled(user, token, amount, nonce);
+    }
+
+    /// @notice Owner-only recovery for a CCTP message that mints to this router but
+    /// cannot be settled as a Benzo onramp — e.g. a plain depositForBurn or a burn
+    /// carrying malformed/empty hookData that {settleDeposit}'s decoder would reject.
+    /// This receives the message (minting the token to the router) WITHOUT attempting
+    /// an eERC deposit, so the funds land here and are recoverable via {rescue}
+    /// instead of being stranded on CCTP. Does not credit any encrypted balance.
+    function receiveForRescue(bytes calldata message, bytes calldata attestation)
+        external
+        onlyOwner
+        nonReentrant
+    {
+        if (!messageTransmitter.receiveMessage(message, attestation)) {
+            revert MessageReceiveFailed();
+        }
+
+        emit MessageReceivedForRescue(msg.sender);
     }
 
     function rescue(address token, address to) external onlyOwner {
