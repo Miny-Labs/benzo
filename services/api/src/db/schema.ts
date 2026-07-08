@@ -654,6 +654,12 @@ export const onrampIntents = pgTable(
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
 		userAddress: text("user_address").notNull(),
+		// Set for a cross-chain TREASURY funding (issue #114): the same CCTP router
+		// + relayer that credit a user onramp also credit an org treasury, with the
+		// hookData binding the treasury's eERC pubkey. NULL for an ordinary user
+		// onramp. When set, the relayer writes a `treasury_deposits` (source='cctp')
+		// row on credit so the funding shows up in the treasury deposits ledger.
+		orgId: uuid("org_id").references(() => orgs.id, { onDelete: "cascade" }),
 		sourceDomain: integer("source_domain").notNull(),
 		sourceChainId: integer("source_chain_id").notNull(),
 		// The source-chain burn tx. Globally unique: a single CCTP burn maps to at
@@ -683,6 +689,7 @@ export const onrampIntents = pgTable(
 		uniqueIndex("onramp_intents_source_tx_hash_uidx").on(table.sourceTxHash),
 		index("onramp_intents_user_id_idx").on(table.userId),
 		index("onramp_intents_user_address_idx").on(table.userAddress),
+		index("onramp_intents_org_id_idx").on(table.orgId),
 		index("onramp_intents_status_idx").on(table.status),
 		index("onramp_intents_updated_at_idx").on(table.updatedAt),
 	],

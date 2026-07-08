@@ -3,6 +3,7 @@ import type { ApiConfig } from "../config.js";
 import type { Database } from "../db/client.js";
 import {
 	onrampIntents,
+	treasuryDeposits,
 	users,
 	type OnrampStatus,
 } from "../db/schema.js";
@@ -125,7 +126,10 @@ async function processIntent(
 	intent: OnrampIntentRow,
 ): Promise<PollOutcome> {
 	if (intent.status === "minted" && intent.settleTxHash) {
-		await transitionIntent(db, intent.id, "credited", { error: null });
+		const credited = await transitionIntent(db, intent.id, "credited", {
+			error: null,
+		});
+		await finalizeTreasuryFunding(db, options.config, credited);
 		return "credited";
 	}
 
@@ -212,8 +216,50 @@ async function processIntent(
 		throw error;
 	}
 
-	await markCredited(db, attested, settle);
+	const credited = await markCredited(db, attested, settle);
+	await finalizeTreasuryFunding(db, options.config, credited);
 	return "credited";
+}
+
+// When a cross-chain TREASURY funding intent (#114) is credited, mirror it into
+// the treasury_deposits ledger as a `cctp` deposit so it shows up alongside the
+// org's direct deposits. A plain user onramp (no orgId) credits the user's own
+// eERC balance and writes nothing here. Idempotent on (orgId, idempotencyKey):
+// an idempotent CCTP replay re-crediting the same intent never double-inserts.
+async function finalizeTreasuryFunding(
+	db: Database,
+	config: ApiConfig,
+	intent: OnrampIntentRow,
+): Promise<void> {
+	if (!intent.orgId || !intent.amount) {
+		return;
+	}
+
+	const token = config.treasuryFundingTokens.find(
+		(entry) => entry.token === intent.destToken,
+	);
+	// A funding whose destination token isn't configured can't be mapped to an
+	// eERC tokenId; leave the credited intent as the record of truth rather than
+	// writing a malformed ledger row.
+	if (!token) {
+		return;
+	}
+
+	await db
+		.insert(treasuryDeposits)
+		.values({
+			amount: intent.amount,
+			idempotencyKey: `cctp:${intent.id}`,
+			orgId: intent.orgId,
+			source: "cctp",
+			status: "confirmed",
+			token: token.token,
+			tokenId: token.tokenId,
+			txHash: intent.settleTxHash?.toLowerCase() ?? null,
+		})
+		.onConflictDoNothing({
+			target: [treasuryDeposits.orgId, treasuryDeposits.idempotencyKey],
+		});
 }
 
 function selectIrisMessage(
