@@ -11,6 +11,9 @@ import {
 	genRandomBabyJubValue,
 	poseidonDecrypt,
 	poseidonEncrypt,
+	sign,
+	SNARK_FIELD_SIZE,
+	verifySignature,
 } from "maci-crypto";
 import { decodeAbiParameters, encodeAbiParameters } from "viem";
 
@@ -20,6 +23,14 @@ export type AuditorKeypair = {
 };
 
 export type AuditorPublicKey = [string, string];
+export type AuditorManifestSignature = {
+	R8: [string, string];
+	S: string;
+	algorithm: "poseidon-eddsa-babyjubjub";
+	publicKey: AuditorPublicKey;
+};
+
+const manifestHashPattern = /^0x[0-9a-fA-F]{64}$/;
 
 export function createAuditorKeypair(privateKey = genPrivKey()): AuditorKeypair {
 	const formattedPrivateKey = formatPrivKeyForBabyJub(privateKey) % subOrder;
@@ -104,6 +115,46 @@ export function encryptAuditorAmountPct(
 	return Buffer.from(encoded.slice(2), "hex");
 }
 
+export function signAuditorManifestHash(
+	privateKey: string,
+	manifestHash: string,
+): AuditorManifestSignature {
+	const normalizedPrivateKey = parseAuditorPrivateKey(privateKey).toString();
+	const signature = sign(
+		normalizedPrivateKey,
+		manifestHashSignatureMessage(manifestHash),
+	);
+
+	return {
+		R8: [signature.R8[0].toString(), signature.R8[1].toString()],
+		S: signature.S.toString(),
+		algorithm: "poseidon-eddsa-babyjubjub",
+		publicKey: publicKeyForPrivateKey(normalizedPrivateKey),
+	};
+}
+
+export function verifyAuditorManifestSignature(
+	manifestHash: string,
+	signature: AuditorManifestSignature,
+): boolean {
+	if (signature.algorithm !== "poseidon-eddsa-babyjubjub") {
+		return false;
+	}
+
+	try {
+		return verifySignature(
+			manifestHashSignatureMessage(manifestHash),
+			{
+				R8: [BigInt(signature.R8[0]), BigInt(signature.R8[1])],
+				S: BigInt(signature.S),
+			},
+			signature.publicKey.map((value) => BigInt(value)) as Point<bigint>,
+		);
+	} catch {
+		return false;
+	}
+}
+
 function decodeAuditorPct(
 	amountPct: Buffer,
 ): [bigint, bigint, bigint, bigint, bigint, bigint, bigint] {
@@ -127,4 +178,12 @@ function decodeAuditorPct(
 	}
 
 	return [first, second, third, fourth, fifth, sixth, seventh];
+}
+
+function manifestHashSignatureMessage(manifestHash: string): bigint {
+	if (!manifestHashPattern.test(manifestHash)) {
+		throw new Error("invalid_manifest_hash");
+	}
+
+	return BigInt(manifestHash) % SNARK_FIELD_SIZE;
 }

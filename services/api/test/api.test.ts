@@ -27,7 +27,12 @@ import {
 	createAuditorKeypair,
 	encryptAuditorAmountPct,
 	type AuditorPublicKey,
+	verifyAuditorManifestSignature,
 } from "../src/auditor/crypto.js";
+import {
+	hashAuditorPacketRows,
+	type AuditorPacket,
+} from "../src/auditor/service.js";
 import { sealString } from "../src/crypto/seal.js";
 import {
 	auditLog,
@@ -1924,6 +1929,191 @@ describe("@benzo/api", () => {
 		}
 	});
 
+	it("exports signed auditor packets and CSV rows across key rotation", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({
+			config,
+			db,
+			logger: false,
+			pool,
+			startBoss: false,
+		});
+		const auditor = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777791",
+		);
+		const subject = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777792",
+		);
+		const counterparty = normalizeTestAddress(
+			"0x7777777777777777777777777777777777777793",
+		);
+		const keyA = createAuditorKeypair(901n);
+		const keyB = createAuditorKeypair(902n);
+
+		try {
+			await resetComplianceTables(db);
+			await db.insert(auditorKeys).values([
+				{
+					activatedBlockNumber: 0n,
+					active: false,
+					publicKeyX: keyA.publicKey[0],
+					publicKeyY: keyA.publicKey[1],
+					retiredBlockNumber: 20n,
+					sealedKey: sealString(config.appMasterKey, keyA.privateKey),
+				},
+				{
+					activatedBlockNumber: 20n,
+					active: true,
+					publicKeyX: keyB.publicKey[0],
+					publicKeyY: keyB.publicKey[1],
+					rotationTxHash: txHash(902),
+					sealedKey: sealString(config.appMasterKey, keyB.privateKey),
+				},
+			]);
+			const keyRows = await db
+				.select()
+				.from(auditorKeys)
+				.orderBy(auditorKeys.activatedBlockNumber);
+			const [keyARow, keyBRow] = keyRows;
+
+			if (!keyARow || !keyBRow) {
+				throw new Error("auditor packet test keys missing");
+			}
+
+			await insertAuditorEvent(db, {
+				amount: 12n,
+				blockNumber: 10n,
+				from: subject,
+				logIndex: 1,
+				publicKey: keyA.publicKey,
+				to: counterparty,
+				txHash: txHash(901),
+			});
+			await insertAuditorEvent(db, {
+				amount: 34n,
+				blockNumber: 21n,
+				from: counterparty,
+				logIndex: 2,
+				publicKey: keyB.publicKey,
+				to: subject,
+				txHash: txHash(902),
+			});
+
+			const auditorCookie = await createTestSession(db, config, auditor, [
+				"auditor",
+			]);
+			const packetResponse = await app.inject({
+				headers: { cookie: auditorCookie },
+				method: "POST",
+				payload: {
+					address: subject,
+					fromBlock: "10",
+					toBlock: "21",
+				},
+				url: "/auditor/packet",
+			});
+
+			expect(packetResponse.statusCode).toBe(200);
+			expect(packetResponse.headers["content-disposition"]).toContain(
+				"auditor-packet",
+			);
+
+			const packet = packetResponse.json() as AuditorPacket;
+			expect(packet).toMatchObject({
+				address: subject,
+				fromBlock: "10",
+				inflow: "34",
+				outflow: "12",
+				toBlock: "21",
+			});
+			expect(packet.rows).toMatchObject([
+				{
+					amount: "12",
+					auditorKeyId: keyARow.id,
+					blockNumber: "10",
+					fromAddr: subject,
+					toAddr: counterparty,
+				},
+				{
+					amount: "34",
+					auditorKeyId: keyBRow.id,
+					blockNumber: "21",
+					fromAddr: counterparty,
+					toAddr: subject,
+				},
+			]);
+			expect(packet.auditorKeys).toMatchObject([
+				{
+					active: false,
+					id: keyARow.id,
+					publicKey: keyA.publicKey,
+					retiredBlockNumber: "20",
+				},
+				{
+					active: true,
+					activatedBlockNumber: "20",
+					id: keyBRow.id,
+					publicKey: keyB.publicKey,
+				},
+			]);
+			expect(packet.manifestHash).toBe(hashAuditorPacketRows(packet.rows));
+			expect(
+				verifyAuditorManifestSignature(packet.manifestHash, packet.signature),
+			).toBe(true);
+			expect(packet.signature.signerKeyId).toBe(keyBRow.id);
+
+			const tamperedRows = packet.rows.map((row, index) =>
+				index === 0 ? { ...row, amount: "13" } : row,
+			);
+			expect(
+				verifyAuditorManifestSignature(
+					hashAuditorPacketRows(tamperedRows),
+					packet.signature,
+				),
+			).toBe(false);
+
+			const csvResponse = await app.inject({
+				headers: { cookie: auditorCookie },
+				method: "GET",
+				url: `/auditor/report/${subject}/export?from=10&to=21`,
+			});
+			expect(csvResponse.statusCode).toBe(200);
+			expect(csvResponse.headers["content-type"]).toContain("text/csv");
+
+			const csvRows = parseAuditorCsv(csvResponse.body);
+			expect(csvRows).toMatchObject([
+				{
+					amount: "12",
+					auditorKeyId: keyARow.id,
+					blockNumber: "10",
+					fromAddr: subject,
+					toAddr: counterparty,
+				},
+				{
+					amount: "34",
+					auditorKeyId: keyBRow.id,
+					blockNumber: "21",
+					fromAddr: counterparty,
+					toAddr: subject,
+				},
+			]);
+			expect(auditorCsvTotals(csvRows, subject)).toEqual({
+				inflow: packet.inflow,
+				outflow: packet.outflow,
+			});
+			expect(
+				await countAuditRowsByActor(db, "auditor_packet_export", auditor),
+			).toBe(1);
+			expect(
+				await countAuditRowsByActor(db, "auditor_report_csv_export", auditor),
+			).toBe(1);
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
 	it("audit-logs decrypted auditor rows before a later batch failure", async () => {
 		const pool = createPool(config);
 		const db = createDb(pool);
@@ -2179,12 +2369,29 @@ describe("@benzo/api", () => {
 				method: "GET",
 				url: "/auditor/events",
 			});
+			const csvResponse = await app.inject({
+				headers: { cookie },
+				method: "GET",
+				url: "/auditor/report/0x7777777777777777777777777777777777777775/export",
+			});
+			const packetResponse = await app.inject({
+				headers: { cookie },
+				method: "POST",
+				payload: {
+					address: "0x7777777777777777777777777777777777777775",
+				},
+				url: "/auditor/packet",
+			});
 
 			expect(response.statusCode).toBe(403);
 			expect(response.json()).toEqual({ error: "forbidden" });
+			expect(csvResponse.statusCode).toBe(403);
+			expect(csvResponse.json()).toEqual({ error: "forbidden" });
+			expect(packetResponse.statusCode).toBe(403);
+			expect(packetResponse.json()).toEqual({ error: "forbidden" });
 			expect(
 				await countAuditRowsByActor(db, "auditor_access_denied", nonAuditor),
-			).toBe(1);
+			).toBe(3);
 		} finally {
 			await app.close();
 			await pool.end();
@@ -2617,6 +2824,83 @@ async function countAuditRowsByActor(
 		.where(and(eq(auditLog.action, action), eq(auditLog.actor, actor)));
 
 	return row?.count ?? 0;
+}
+
+function parseAuditorCsv(csv: string): Record<string, string>[] {
+	const [headerLine, ...rowLines] = csv.trimEnd().split("\n");
+
+	if (!headerLine) {
+		return [];
+	}
+
+	const headers = parseCsvLine(headerLine);
+
+	return rowLines.map((line) => {
+		const values = parseCsvLine(line);
+
+		return Object.fromEntries(
+			headers.map((header, index) => [header, values[index] ?? ""]),
+		);
+	});
+}
+
+function parseCsvLine(line: string): string[] {
+	const values: string[] = [];
+	let current = "";
+	let quoted = false;
+
+	for (let index = 0; index < line.length; index++) {
+		const char = line[index];
+		const next = line[index + 1];
+
+		if (quoted && char === "\"" && next === "\"") {
+			current += "\"";
+			index += 1;
+			continue;
+		}
+
+		if (char === "\"") {
+			quoted = !quoted;
+			continue;
+		}
+
+		if (!quoted && char === ",") {
+			values.push(current);
+			current = "";
+			continue;
+		}
+
+		current += char;
+	}
+
+	values.push(current);
+
+	return values;
+}
+
+function auditorCsvTotals(
+	rows: Record<string, string>[],
+	address: string,
+): { inflow: string; outflow: string } {
+	let inflow = 0n;
+	let outflow = 0n;
+
+	for (const row of rows) {
+		const amount = BigInt(row.amount ?? "0");
+
+		if (row.toAddr === address) {
+			inflow += amount;
+		}
+
+		if (row.fromAddr === address) {
+			outflow += amount;
+		}
+	}
+
+	return {
+		inflow: inflow.toString(),
+		outflow: outflow.toString(),
+	};
 }
 
 async function createAuthenticatedSession(
