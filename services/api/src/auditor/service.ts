@@ -162,9 +162,19 @@ export async function buildAuditorPacket(
 ): Promise<AuditorPacket> {
 	const dataset = await buildAuditorReportDataset(db, config, input);
 	const keys = await loadAuditorKeys(db);
+	const signerKey = selectAuditorPacketSigner(keys);
+
+	if (!signerKey) {
+		throw new Error("auditor_key_missing_for_packet_signer");
+	}
+
+	// Always include the signer's key alongside the active + range-intersecting
+	// keys so a consumer can verify the signature from the packet alone, even if
+	// the signer's activation range does not overlap the requested block range.
 	const packetKeys = keys
 		.filter(
 			(key) =>
+				key.id === signerKey.id ||
 				key.active ||
 				auditorKeyRangeIntersects(
 					key,
@@ -173,11 +183,6 @@ export async function buildAuditorPacket(
 				),
 		)
 		.map(serializeAuditorPacketKey);
-	const signerKey = selectAuditorPacketSigner(keys);
-
-	if (!signerKey) {
-		throw new Error("auditor_key_missing_for_packet_signer");
-	}
 
 	const signerPrivateKey = unsealString(config.appMasterKey, signerKey.sealedKey);
 	const generatedAt = new Date().toISOString();
