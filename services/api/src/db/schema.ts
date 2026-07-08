@@ -406,6 +406,10 @@ export const orgRole = pgEnum("org_role", [
 	"operator",
 	"viewer",
 ]);
+export const orgMemberAllowlistStatus = pgEnum(
+	"org_member_allowlist_status",
+	["pending", "enabled", "revoked"],
+);
 
 export const payrollRunStatus = pgEnum("payroll_run_status", [
 	"draft",
@@ -456,6 +460,32 @@ export const orgMembers = pgTable(
 	(table) => [
 		uniqueIndex("org_members_org_user_uidx").on(table.orgId, table.userId),
 		index("org_members_user_id_idx").on(table.userId),
+	],
+);
+
+export const orgMemberAllowlist = pgTable(
+	"org_member_allowlist",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		orgId: uuid("org_id")
+			.notNull()
+			.references(() => orgs.id, { onDelete: "cascade" }),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		status: orgMemberAllowlistStatus("status").notNull(),
+		txHash: text("tx_hash"),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("org_member_allowlist_org_user_uidx").on(
+			table.orgId,
+			table.userId,
+		),
+		index("org_member_allowlist_user_id_idx").on(table.userId),
+		index("org_member_allowlist_status_idx").on(table.status),
 	],
 );
 
@@ -660,6 +690,8 @@ export type InviteKind = (typeof inviteKind.enumValues)[number];
 export type InviteEscrowKind = (typeof inviteEscrowKind.enumValues)[number];
 export type InviteStatus = (typeof inviteStatus.enumValues)[number];
 export type OrgRole = (typeof orgRole.enumValues)[number];
+export type OrgMemberAllowlistStatus =
+	(typeof orgMemberAllowlistStatus.enumValues)[number];
 export type PayrollRunStatus = (typeof payrollRunStatus.enumValues)[number];
 export type PayrollItemStatus = (typeof payrollItemStatus.enumValues)[number];
 export type TreasuryDepositSource =

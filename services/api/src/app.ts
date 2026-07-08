@@ -181,6 +181,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		await fastify.register(auditorRoutes, { config, db });
 		await fastify.register(adminRoutes, { adminChain, chain, config, db });
 		await fastify.register(orgsRoutes, {
+			adminChain,
 			config,
 			db,
 			onboardingChain,
