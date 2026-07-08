@@ -126,10 +126,16 @@ async function processIntent(
 	intent: OnrampIntentRow,
 ): Promise<PollOutcome> {
 	if (intent.status === "minted" && intent.settleTxHash) {
-		const credited = await transitionIntent(db, intent.id, "credited", {
-			error: null,
+		// Atomic: the credit transition and its treasury_deposits mirror commit or
+		// roll back together. If the mirror insert throws, the intent stays `minted`
+		// (non-terminal) so the next poll retries this fast path rather than leaving
+		// a credited intent with no ledger row.
+		await db.transaction(async (tx) => {
+			const credited = await transitionIntent(tx, intent.id, "credited", {
+				error: null,
+			});
+			await finalizeTreasuryFunding(tx, options.config, credited);
 		});
-		await finalizeTreasuryFunding(db, options.config, credited);
 		return "credited";
 	}
 
@@ -216,8 +222,15 @@ async function processIntent(
 		throw error;
 	}
 
-	const credited = await markCredited(db, attested, settle);
-	await finalizeTreasuryFunding(db, options.config, credited);
+	// Atomic: the mint→credited transition and its treasury_deposits mirror commit
+	// or roll back together. A failing mirror insert rolls the intent back to
+	// `attested` (non-terminal), so the poller revisits it instead of stranding a
+	// credited intent without a ledger row. The relayer settleDeposit above already
+	// ran and is idempotent on the CCTP nonce, so the retry is safe.
+	await db.transaction(async (tx) => {
+		const credited = await markCredited(tx, attested, settle);
+		await finalizeTreasuryFunding(tx, options.config, credited);
+	});
 	return "credited";
 }
 

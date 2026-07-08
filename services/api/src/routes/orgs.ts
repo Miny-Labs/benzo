@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import { getAddress, isAddress, pad, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -105,6 +105,15 @@ const fundIntentSchema = z.object({
 		.trim()
 		.regex(/^0x[0-9a-fA-F]{64}$/)
 		.optional(),
+});
+
+// Unified deposits view is paginated so a large org can't pull every row into
+// memory (CCTP intents accumulate even on failed/parked transfers). `before` is
+// the createdAt ISO cursor returned as `nextCursor` on the previous page.
+const DEPOSITS_PAGE_MAX = 200;
+const depositsQuerySchema = z.object({
+	before: z.string().datetime().optional(),
+	limit: z.coerce.number().int().min(1).max(DEPOSITS_PAGE_MAX).default(50),
 });
 
 // CCTP V2 fast-transfer tuning for the treasury-funding burn — mirrors the user
@@ -941,6 +950,16 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 		async (request, reply) => {
 			const orgId = (request.params as { id: string }).id;
 
+			const query = depositsQuerySchema.safeParse(request.query);
+			if (!query.success) {
+				return reply.code(400).send({ error: "invalid_deposits_query" });
+			}
+			const { before, limit } = query.data;
+			const beforeCursor = before ? new Date(before) : null;
+
+			// Bound both source queries: fetch one past the page size (newest first)
+			// so the merge below can both fill a full page and detect whether another
+			// page exists, while peak memory stays O(limit) regardless of org size.
 			const directRows = await db
 				.select()
 				.from(treasuryDeposits)
@@ -948,14 +967,28 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					and(
 						eq(treasuryDeposits.orgId, orgId),
 						eq(treasuryDeposits.source, "direct"),
+						beforeCursor
+							? lt(treasuryDeposits.createdAt, beforeCursor)
+							: undefined,
 					),
-				);
+				)
+				.orderBy(desc(treasuryDeposits.createdAt))
+				.limit(limit + 1);
 			const cctpRows = await db
 				.select()
 				.from(onrampIntents)
-				.where(eq(onrampIntents.orgId, orgId));
+				.where(
+					and(
+						eq(onrampIntents.orgId, orgId),
+						beforeCursor
+							? lt(onrampIntents.createdAt, beforeCursor)
+							: undefined,
+					),
+				)
+				.orderBy(desc(onrampIntents.createdAt))
+				.limit(limit + 1);
 
-			const deposits = [
+			const merged = [
 				...directRows.map((row) => ({
 					amount: row.amount,
 					createdAt: row.createdAt.toISOString(),
@@ -984,7 +1017,15 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				})),
 			].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
-			return reply.send({ deposits });
+			// Each source is capped at limit+1, so the merged top `limit` is the true
+			// global newest page; a leftover row means there's a next page to fetch.
+			const deposits = merged.slice(0, limit);
+			const nextCursor =
+				merged.length > limit
+					? (deposits[deposits.length - 1]?.createdAt ?? null)
+					: null;
+
+			return reply.send({ deposits, nextCursor });
 		},
 	);
 };

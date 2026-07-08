@@ -5,7 +5,7 @@ import {
 	PostgreSqlContainer,
 	type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { decodeAbiParameters, getAddress, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -642,6 +642,250 @@ describe("@benzo/api cross-chain treasury funding", () => {
 				status: "credited",
 				token: "usdc",
 			});
+		} finally {
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("keeps a cctp funding retryable (not credited) when the ledger mirror insert fails", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({ config, db, logger: false, startBoss: false });
+		try {
+			const owner = await session(db, config, `0x${"e1".repeat(20)}`);
+			const orgId = await createOrg(app, owner.cookie);
+			const eercAccount = createManagedEercAccount(13_579n);
+			const treasuryAddress = await provisionTreasury(
+				db,
+				config,
+				orgId,
+				owner.userId,
+				eercAccount,
+			);
+			const pubKey: [bigint, bigint] = [
+				eercAccount.publicKey[0],
+				eercAccount.publicKey[1],
+			];
+			const sourceTxHash = `0x${"eb".repeat(32)}`;
+
+			await app.inject({
+				headers: { cookie: owner.cookie },
+				method: "POST",
+				url: `/orgs/${orgId}/treasury/fund-intent`,
+				payload: {
+					sourceChain: "ethereum",
+					token: "usdc",
+					amount: "3000000",
+					sourceTxHash,
+				},
+			});
+			await db
+				.update(onrampIntents)
+				.set({ status: "attested" })
+				.where(eq(onrampIntents.sourceTxHash, sourceTxHash));
+
+			const message = buildCctpMessage({
+				amount: 3_000_000n,
+				hookData: encodeOnrampHookData({
+					pkX: pubKey[0],
+					pkY: pubKey[1],
+					user: treasuryAddress,
+				}),
+				nonce: 11n,
+				sourceDomain: 0,
+			});
+			const settlements: Parameters<OnrampRelayer["settleDeposit"]>[0][] = [];
+			const poll = () =>
+				pollOnrampIntents(db, {
+					chain: chainFor(treasuryAddress, pubKey),
+					config,
+					iris: irisFor(sourceTxHash, message),
+					limit: 200,
+					relayer: {
+						relayerAddress: RELAYER_ADDRESS,
+						async settleDeposit(input) {
+							settlements.push(input);
+							return { alreadySettled: false, txHash: `0x${"12".repeat(32)}` };
+						},
+					},
+				});
+
+			// Force ONLY the treasury_deposits mirror insert to fail (NOT VALID so the
+			// existing rows from earlier tests are untouched), simulating a transient
+			// ledger-write error after the intent would otherwise be credited.
+			await db.execute(
+				sql`ALTER TABLE treasury_deposits ADD CONSTRAINT test_reject_cctp_mirror CHECK (source <> 'cctp') NOT VALID`,
+			);
+
+			// The failing mirror rolls the whole credit back rather than half-committing.
+			await expect(poll()).rejects.toThrow();
+
+			// Intent is NOT terminally credited — it rolled back to a non-terminal,
+			// retryable status, and no orphan ledger row was written.
+			const [afterFail] = await db
+				.select()
+				.from(onrampIntents)
+				.where(eq(onrampIntents.sourceTxHash, sourceTxHash))
+				.limit(1);
+			expect(afterFail?.status).toBe("attested");
+			expect(afterFail?.status).not.toBe("credited");
+			const orphanRows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId));
+			expect(orphanRows).toHaveLength(0);
+
+			// Recover: once the ledger write works again, the retry credits atomically
+			// and writes exactly one mirror row (idempotency key prevents a double).
+			await db.execute(
+				sql`ALTER TABLE treasury_deposits DROP CONSTRAINT test_reject_cctp_mirror`,
+			);
+			const result = await poll();
+			expect(result.credited).toBe(1);
+
+			const [afterRetry] = await db
+				.select()
+				.from(onrampIntents)
+				.where(eq(onrampIntents.sourceTxHash, sourceTxHash))
+				.limit(1);
+			expect(afterRetry?.status).toBe("credited");
+			const mirrorRows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(eq(treasuryDeposits.orgId, orgId));
+			expect(mirrorRows).toHaveLength(1);
+			expect(mirrorRows[0]).toMatchObject({
+				amount: "3000000",
+				source: "cctp",
+				status: "confirmed",
+				token: "usdc",
+			});
+		} finally {
+			await db.execute(
+				sql`ALTER TABLE treasury_deposits DROP CONSTRAINT IF EXISTS test_reject_cctp_mirror`,
+			);
+			await app.close();
+			await pool.end();
+		}
+	});
+
+	it("bounds the unified deposits view by limit and pages with the before cursor", async () => {
+		const pool = createPool(config);
+		const db = createDb(pool);
+		const app = await buildApp({ config, db, logger: false, startBoss: false });
+		try {
+			const owner = await session(db, config, `0x${"e2".repeat(20)}`);
+			const orgId = await createOrg(app, owner.cookie);
+
+			// Six deposits with distinct, strictly increasing createdAt so ordering is
+			// deterministic: three direct rows interleaved with three cctp intents,
+			// exercising the bound + cursor on BOTH source queries. amount encodes the
+			// chronological index (0 = oldest, 5 = newest).
+			const base = Date.now() - 60_000;
+			const at = (i: number) => new Date(base + i * 1000);
+			await db.insert(treasuryDeposits).values([
+				{
+					amount: "0",
+					createdAt: at(0),
+					orgId,
+					source: "direct",
+					status: "confirmed",
+					token: "usdc",
+					tokenId: 1n,
+					txHash: `0x${"a0".repeat(32)}`,
+				},
+				{
+					amount: "2",
+					createdAt: at(2),
+					orgId,
+					source: "direct",
+					status: "confirmed",
+					token: "usdc",
+					tokenId: 1n,
+					txHash: `0x${"a2".repeat(32)}`,
+				},
+				{
+					amount: "4",
+					createdAt: at(4),
+					orgId,
+					source: "direct",
+					status: "confirmed",
+					token: "usdc",
+					tokenId: 1n,
+					txHash: `0x${"a4".repeat(32)}`,
+				},
+			]);
+			await db.insert(onrampIntents).values(
+				[1, 3, 5].map((i) => ({
+					amount: String(i),
+					createdAt: at(i),
+					destToken: "usdc" as const,
+					orgId,
+					sourceChainId: 1,
+					sourceDomain: 0,
+					sourceTxHash: `0x${i.toString(16).padStart(2, "0").repeat(32)}`,
+					status: "credited" as const,
+					updatedAt: at(i),
+					userAddress: `0x${"e2".repeat(20)}`,
+					userId: owner.userId,
+					userPubKeyX: "1",
+					userPubKeyY: "2",
+				})),
+			);
+
+			// Page 1: the two newest across BOTH sources, and a cursor for the next page.
+			const page1 = await app.inject({
+				headers: { cookie: owner.cookie },
+				method: "GET",
+				url: `/orgs/${orgId}/treasury/deposits?limit=2`,
+			});
+			expect(page1.statusCode).toBe(200);
+			const body1 = page1.json() as {
+				deposits: Array<{ amount: string }>;
+				nextCursor: string | null;
+			};
+			expect(body1.deposits).toHaveLength(2);
+			expect(body1.deposits.map((d) => d.amount)).toEqual(["5", "4"]);
+			expect(body1.nextCursor).toBeTruthy();
+
+			// Page 2: strictly older than the cursor, next two newest.
+			const page2 = await app.inject({
+				headers: { cookie: owner.cookie },
+				method: "GET",
+				url: `/orgs/${orgId}/treasury/deposits?limit=2&before=${encodeURIComponent(
+					body1.nextCursor as string,
+				)}`,
+			});
+			const body2 = page2.json() as {
+				deposits: Array<{ amount: string }>;
+				nextCursor: string | null;
+			};
+			expect(body2.deposits.map((d) => d.amount)).toEqual(["3", "2"]);
+			expect(body2.nextCursor).toBeTruthy();
+
+			// Page 3: the final two, no further pages.
+			const page3 = await app.inject({
+				headers: { cookie: owner.cookie },
+				method: "GET",
+				url: `/orgs/${orgId}/treasury/deposits?limit=2&before=${encodeURIComponent(
+					body2.nextCursor as string,
+				)}`,
+			});
+			const body3 = page3.json() as {
+				deposits: Array<{ amount: string }>;
+				nextCursor: string | null;
+			};
+			expect(body3.deposits.map((d) => d.amount)).toEqual(["1", "0"]);
+			expect(body3.nextCursor).toBeNull();
+
+			// A bad limit is rejected rather than silently unbounded.
+			const bad = await app.inject({
+				headers: { cookie: owner.cookie },
+				method: "GET",
+				url: `/orgs/${orgId}/treasury/deposits?limit=0`,
+			});
+			expect(bad.statusCode).toBe(400);
 		} finally {
 			await app.close();
 			await pool.end();
