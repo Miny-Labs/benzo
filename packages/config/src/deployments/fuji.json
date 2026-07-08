@@ -11,8 +11,21 @@
       "burn": "0x1BDfD6cB772D5F882622BaFD7B19898Da9F61d34"
     },
     "Registrar": "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0",
-    "EncryptedERC": "0x46688f1704a69a6c276cCCB823E36C80787B0FA2",
-    "tUSDC": "0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f",
+    "EncryptedERC": "0x9E16eD3B799541B4929f7E2014904C65E81035b1",
+    "tokens": {
+      "USDC": {
+        "address": "0x5425890298aed601595a70AB815c96711a31Bc65",
+        "decimals": 6,
+        "tokenId": 1,
+        "symbol": "USDC"
+      },
+      "EURC": {
+        "address": "0x5E44db7996c682E92a960b65AC713a54AD815c6B",
+        "decimals": 6,
+        "tokenId": 2,
+        "symbol": "EURC"
+      }
+    },
     "HandleRegistry": "0xC74EcCDE4D9A1F48D560de9A96521D28D58B474b",
     "cctp": {
       "domain": 1,
