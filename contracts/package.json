@@ -48,6 +48,7 @@
     "pg": "^8.22.0",
     "poseidon-lite": "^0.3.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "viem": "^2.54.4"
   }
 }
