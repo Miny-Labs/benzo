@@ -507,7 +507,11 @@ export function createViemPayrollSubmitter(
 				// A resume re-sends the same signed tx; an already-known / nonce error
 				// means it is already in the mempool or chain — safe to continue.
 				if (!isIdempotentRawTransactionError(error)) {
-					throw error;
+					// The node rejected the tx: it was never accepted, so the
+					// pre-persisted hash is for an unsent tx. Signal this distinctly so
+					// the caller clears the hash and keeps the funding resumable instead
+					// of stranding a `submitted` row with a dead hash.
+					throw new Error("treasury_deposit_send_rejected", { cause: error });
 				}
 			}
 			await waitForReceipt(

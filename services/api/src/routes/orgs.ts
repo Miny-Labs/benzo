@@ -479,6 +479,24 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 				});
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "";
+				if (message === "treasury_deposit_send_rejected") {
+					// The signed tx was rejected by the node and never entered the mempool.
+					// Clear the pre-persisted hash so the row is resumable (a keyed retry
+					// re-signs and re-sends) rather than stranded `submitted` with a dead hash.
+					await db
+						.update(treasuryDeposits)
+						.set({ status: "submitted", txHash: null, updatedAt: new Date() })
+						.where(eq(treasuryDeposits.id, pendingId));
+					request.log.warn({ err: error, orgId }, "treasury_deposit_send_rejected");
+					return reply.code(202).send({
+						amount: amount.toString(),
+						source: "direct",
+						status: "submitted",
+						token: token.token,
+						tokenId: token.tokenId.toString(),
+						txHash: null,
+					});
+				}
 				const reverted =
 					message === "treasury_deposit_reverted" ||
 					message === "treasury_deposit_approval_reverted";
