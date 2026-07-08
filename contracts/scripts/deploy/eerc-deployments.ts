@@ -784,12 +784,21 @@ export const registerConverterTokens = async (context: DeployContext) => {
 	const bootstrapAccount = createEercAccount(BOOTSTRAP_EERC_SEED);
 	// The bootstrap signer only needs to be a registered account so deposits credit
 	// a valid pubkey. If it is already registered (e.g. the deployer on a reused
-	// Registrar), keep its existing key — deposits still credit the registered pubkey
-	// via _convertFrom, and amountPCT is throwaway history for this seed-only account.
-	// Only register with the fixed seed when it is not registered yet.
+	// Registrar), keep its existing key; only register with the fixed seed when it is
+	// not registered yet.
 	if (!(await registrar.isUserRegistered(bootstrapSigner.address))) {
 		await registerEercAccount(registrar, bootstrapSigner, bootstrapAccount);
 	}
+
+	// Build amountPCT from the depositor's ON-CHAIN registered public key (not the
+	// fixed-seed account's key) so the deposit's history entry decrypts consistently
+	// with the balance _convertFrom credits — even when the deployer was already
+	// registered with a different key. Only the public key is needed for amountPCT.
+	const registeredPubKey = await registrar.getUserPublicKey(bootstrapSigner.address);
+	const depositorPublicKey: [bigint, bigint] = [
+		BigInt(registeredPubKey[0]),
+		BigInt(registeredPubKey[1]),
+	];
 
 	const tokenIdOf = async (address: string): Promise<number> => {
 		const tokens: string[] = await encryptedERC.getTokens();
@@ -840,7 +849,7 @@ export const registerConverterTokens = async (context: DeployContext) => {
 				scaleDown > 0
 					? BOOTSTRAP_DEPOSIT_UNITS / 10n ** BigInt(scaleDown)
 					: BOOTSTRAP_DEPOSIT_UNITS * 10n ** BigInt(-scaleDown);
-			const amountPCT = encryptAmountPCT(creditedValue, bootstrapAccount.publicKey);
+			const amountPCT = encryptAmountPCT(creditedValue, depositorPublicKey);
 
 			const depositTx = await encryptedERC
 				.connect(bootstrapSigner)
