@@ -18,7 +18,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {CreateEncryptedERCParams, Point, EGCT, EncryptedBalance, AmountPCT, MintProof, TransferProof, WithdrawProof, BurnProof, TransferInputs} from "./types/Types.sol";
 
 // errors
-import {UserNotRegistered, InvalidProof, TransferFailed, UnknownToken, InvalidChainId, InvalidNullifier, ZeroAddress} from "./errors/Errors.sol";
+import {UserNotRegistered, InvalidProof, TransferFailed, UnknownToken, InvalidChainId, InvalidNullifier, ZeroAddress, NotAuthorizedDepositor} from "./errors/Errors.sol";
 
 // interfaces
 import {IRegistrar} from "./interfaces/IRegistrar.sol";
@@ -81,6 +81,12 @@ contract EncryptedERC is
 
     /// @notice Mapping to track used mint nullifiers to prevent double-minting
     mapping(uint256 mintNullifier => bool isUsed) public alreadyMinted;
+
+    /// @notice BENZO PATCH (upstream v0.0.4): addresses the owner has authorized to deposit
+    ///         into another registered user's encrypted balance via {depositFor} (e.g. the
+    ///         CCTP onramp router and the private gift escrow). Empty by default, so stock
+    ///         self-deposit behavior via {deposit} is unchanged.
+    mapping(address depositor => bool isAuthorized) public authorizedDepositors;
 
     ///////////////////////////////////////////////////
     ///                    Events                   ///
@@ -159,6 +165,14 @@ contract EncryptedERC is
         address indexed auditorAddress
     );
 
+    /**
+     * @notice BENZO PATCH (upstream v0.0.4): Emitted when the owner authorizes or
+     *         deauthorizes an address for deposit-on-behalf via {depositFor}.
+     * @param depositor Address whose authorization changed
+     * @param authorized New authorization state
+     */
+    event AuthorizedDepositorSet(address indexed depositor, bool authorized);
+
     ///////////////////////////////////////////////////
     ///                   Modifiers                 ///
     ///////////////////////////////////////////////////
@@ -166,6 +180,15 @@ contract EncryptedERC is
         bool isRegistered = registrar.isUserRegistered(user);
         if (!isRegistered) {
             revert UserNotRegistered();
+        }
+        _;
+    }
+
+    /// @notice BENZO PATCH (upstream v0.0.4): Restricts {depositFor} to addresses the owner
+    ///         has authorized as deposit-on-behalf callers.
+    modifier onlyAuthorizedDepositor() {
+        if (!authorizedDepositors[msg.sender]) {
+            revert NotAuthorizedDepositor();
         }
         _;
     }
@@ -461,6 +484,67 @@ contract EncryptedERC is
         onlyIfUserRegistered(msg.sender)
     {
         _executeDeposit(amount, tokenAddress, amountPCT, message);
+    }
+
+    ///////////////////////////////////////////////////
+    ///        BENZO PATCH — deposit-on-behalf       ///
+    ///////////////////////////////////////////////////
+
+    /**
+     * @notice BENZO PATCH (upstream v0.0.4): Owner authorizes or revokes an address that may
+     *         deposit into another registered user's encrypted balance via {depositFor}.
+     * @param depositor The deposit-on-behalf caller (e.g. the CCTP router or gift escrow)
+     * @param authorized Whether the address is authorized
+     */
+    function setAuthorizedDepositor(
+        address depositor,
+        bool authorized
+    ) external onlyOwner {
+        if (depositor == address(0)) {
+            revert ZeroAddress();
+        }
+        authorizedDepositors[depositor] = authorized;
+        emit AuthorizedDepositorSet(depositor, authorized);
+    }
+
+    /**
+     * @notice BENZO PATCH (upstream v0.0.4): Deposits an ERC20 into `to`'s encrypted balance
+     *         on behalf of `to`, pulling the token from msg.sender (an authorized depositor).
+     * @param to The registered recipient whose encrypted balance is credited
+     * @param amount Amount of the ERC20 to deposit (pulled from msg.sender, the caller)
+     * @param tokenAddress Address of the ERC20 to deposit
+     * @param amountPCT Recipient-encrypted amount PCT for the transaction-history entry
+     * @param message Optional encrypted metadata emitted with the deposit
+     * @dev Enables the CCTP onramp router and PrivateGiftEscrow to credit a user's private
+     *      balance. No ZK proof is required: deposit is proofless upstream and the eGCT is
+     *      derived on-chain from `to`'s registered public key. `amountPCT` is ONLY the
+     *      recipient-encrypted transaction-history entry supplied off-chain by the caller and
+     *      is NOT verified against the eGCT, so a CCTP-fee amount mismatch is cosmetic
+     *      transaction-history drift only — the on-chain encrypted balance is always correct
+     *      for `amount`. Dust (sub-unit remainder) is returned to the payer (msg.sender).
+     */
+    function depositFor(
+        address to,
+        uint256 amount,
+        address tokenAddress,
+        uint256[7] memory amountPCT,
+        bytes calldata message
+    )
+        external
+        onlyIfAuditorSet
+        onlyForConverter
+        revertIfBlacklisted(tokenAddress)
+        onlyIfUserRegistered(to)
+        onlyAuthorizedDepositor
+    {
+        _executeDepositFrom(
+            msg.sender,
+            to,
+            amount,
+            tokenAddress,
+            amountPCT,
+            message
+        );
     }
 
     /**
@@ -1012,16 +1096,47 @@ contract EncryptedERC is
         uint256[7] memory amountPCT,
         bytes memory message
     ) internal {
+        // BENZO PATCH (upstream v0.0.4): the stock self-deposit path is exactly
+        // payer == to == msg.sender, so the observable behavior is unchanged.
+        _executeDepositFrom(
+            msg.sender,
+            msg.sender,
+            amount,
+            tokenAddress,
+            amountPCT,
+            message
+        );
+    }
+
+    /**
+     * @notice BENZO PATCH (upstream v0.0.4): Executes a deposit that pulls the ERC20 from
+     *         `payer` and credits `to`'s encrypted balance. With `payer == to == msg.sender`
+     *         this reproduces the stock self-deposit byte-for-byte; {depositFor} sets
+     *         `payer` = the authorized caller and `to` = the recipient.
+     * @param payer Address the ERC20 is pulled from and that receives any dust
+     * @param to Registered recipient whose encrypted balance is credited
+     * @param amount The amount of tokens to deposit
+     * @param tokenAddress The address of the token to deposit
+     * @param amountPCT The amount PCT for the deposit
+     * @param message Additional metadata message to be emitted with the deposit event
+     */
+    function _executeDepositFrom(
+        address payer,
+        address to,
+        uint256 amount,
+        address tokenAddress,
+        uint256[7] memory amountPCT,
+        bytes memory message
+    ) internal {
         IERC20 token = IERC20(tokenAddress);
         uint256 dust;
         uint256 tokenId;
-        address to = msg.sender;
 
         // Get the contract's balance before the transfer
         uint256 balanceBefore = token.balanceOf(address(this));
 
-        // Transfer tokens from user to contract
-        SafeERC20.safeTransferFrom(token, to, address(this), amount);
+        // Transfer tokens from the payer to the contract
+        SafeERC20.safeTransferFrom(token, payer, address(this), amount);
 
         // Get the contract's balance after the transfer
         uint256 balanceAfter = token.balanceOf(address(this));
@@ -1032,19 +1147,19 @@ contract EncryptedERC is
             revert TransferFailed();
         }
 
-        // Convert tokens to encrypted tokens
+        // Convert tokens to encrypted tokens, crediting `to`
         (dust, tokenId) = _convertFrom(to, amount, tokenAddress, amountPCT);
 
-        // Return dust to user
+        // Return dust to the payer
         if (dust > 0) {
-            SafeERC20.safeTransfer(token, to, dust);
+            SafeERC20.safeTransfer(token, payer, dust);
         }
 
-        // Emit deposit event
+        // Emit deposit event (credits `to`, unchanged for the self-deposit path)
         emit Deposit(to, amount, dust, tokenId);
 
-        // emit metadata if message is provided
-        _emitMetadata(msg.sender, to, "DEPOSIT", message);
+        // emit metadata if a message is provided (from payer to `to`)
+        _emitMetadata(payer, to, "DEPOSIT", message);
     }
 
     function _executeWithdraw(
