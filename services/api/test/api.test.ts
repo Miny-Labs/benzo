@@ -60,6 +60,7 @@ import {
 	createBoss,
 	enqueueDemoAuditJob,
 	ensureQueues,
+	JOB_QUEUES,
 	registerJobs,
 } from "../src/jobs/index.js";
 import type {
@@ -123,6 +124,8 @@ describe("@benzo/api", () => {
 			logLevel: "silent",
 			nodeEnv: "test",
 			onboardingRegistrationPollSeconds: 1,
+			onrampPollCron: "*/15 * * * * *",
+			onrampPollerEnabled: true,
 			opsPrivateKey: testOpsPrivateKey,
 			payrollEercDecimals: 6,
 			payrollTokenId: 1n,
@@ -448,6 +451,86 @@ describe("@benzo/api", () => {
 			await secondBoss?.stop().catch(() => undefined);
 			await pool.end();
 		}
+	});
+
+	it("registers the onramp poller with its own enable flag and cron", async () => {
+		const enabledBoss = new RecordingBoss();
+		await registerJobs(
+			enabledBoss as unknown as PgBoss,
+			{} as Database,
+			pino({ enabled: false }),
+			undefined,
+			undefined,
+			undefined,
+			{
+				chain: {
+					async resolveUserKey() {
+						return { publicKey: null, registered: false };
+					},
+				},
+				config: {
+					...config,
+					indexerEnabled: false,
+					onrampPollCron: "*/42 * * * * *",
+					onrampPollerEnabled: true,
+				},
+				iris: {
+					async getMessages() {
+						return [];
+					},
+				},
+				relayer: {
+					relayerAddress: null,
+					async settleDeposit() {
+						throw new Error("settle_not_expected");
+					},
+				},
+			},
+		);
+
+		expect(enabledBoss.schedules).toContainEqual({
+			cron: "*/42 * * * * *",
+			queue: JOB_QUEUES.onrampPoll,
+		});
+		expect(enabledBoss.works).toContain(JOB_QUEUES.onrampPoll);
+
+		const disabledBoss = new RecordingBoss();
+		await registerJobs(
+			disabledBoss as unknown as PgBoss,
+			{} as Database,
+			pino({ enabled: false }),
+			undefined,
+			undefined,
+			undefined,
+			{
+				chain: {
+					async resolveUserKey() {
+						return { publicKey: null, registered: false };
+					},
+				},
+				config: {
+					...config,
+					indexerEnabled: true,
+					onrampPollerEnabled: false,
+				},
+				iris: {
+					async getMessages() {
+						return [];
+					},
+				},
+				relayer: {
+					relayerAddress: null,
+					async settleDeposit() {
+						throw new Error("settle_not_expected");
+					},
+				},
+			},
+		);
+
+		expect(disabledBoss.schedules).not.toContainEqual(
+			expect.objectContaining({ queue: JOB_QUEUES.onrampPoll }),
+		);
+		expect(disabledBoss.works).not.toContain(JOB_QUEUES.onrampPoll);
 	});
 
 	it("runs Fuji onboarding with allowlist no-op, plain gas transfer, and registration polling", async () => {
@@ -2450,6 +2533,23 @@ class RecordingOnboardingOrchestrator implements OnboardingOrchestrator {
 class ThrowingOnboardingOrchestrator implements OnboardingOrchestrator {
 	async startForInviteClaim(): Promise<void> {
 		throw new Error("onboarding enrichment failed");
+	}
+}
+
+class RecordingBoss {
+	readonly schedules: { cron: string; queue: string }[] = [];
+	readonly works: string[] = [];
+
+	async createQueue(): Promise<void> {
+		return;
+	}
+
+	async schedule(queue: string, cron: string): Promise<void> {
+		this.schedules.push({ cron, queue });
+	}
+
+	async work(queue: string): Promise<void> {
+		this.works.push(queue);
 	}
 }
 

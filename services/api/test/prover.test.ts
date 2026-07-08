@@ -49,6 +49,8 @@ function config(): ApiConfig {
 		logLevel: "silent",
 		nodeEnv: "test",
 		onboardingRegistrationPollSeconds: 1,
+		onrampPollCron: "*/15 * * * * *",
+		onrampPollerEnabled: true,
 		opsPrivateKey:
 			"0x0000000000000000000000000000000000000000000000000000000000000001",
 		payrollEercDecimals: 6,

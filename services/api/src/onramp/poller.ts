@@ -15,6 +15,7 @@ import {
 } from "./message.js";
 import {
 	OnrampRecipientNotRegisteredError,
+	OnrampRelayerUnavailableError,
 	type OnrampRelayer,
 	type SettleDepositResult,
 } from "./relayer.js";
@@ -37,6 +38,9 @@ export type OnrampPollerOptions = {
 	config: ApiConfig;
 	iris: IrisClient;
 	limit?: number;
+	logger?: {
+		info: (bindings: Record<string, unknown>, message: string) => void;
+	};
 	relayer: OnrampRelayer;
 };
 
@@ -46,6 +50,7 @@ export type OnrampPollResult = {
 	parked: number;
 	pending: number;
 	polled: number;
+	relayerConfigured: boolean;
 	routerConfigured: boolean;
 	skipped: number;
 };
@@ -59,6 +64,7 @@ const NON_TERMINAL_STATUSES: OnrampStatus[] = [
 ];
 
 const DEFAULT_POLL_LIMIT = 50;
+const loggedDisabledReasons = new Set<string>();
 
 export async function handleOnrampPollJob(
 	db: Database,
@@ -77,11 +83,18 @@ export async function pollOnrampIntents(
 		parked: 0,
 		pending: 0,
 		polled: 0,
+		relayerConfigured: options.config.relayerPrivateKey !== undefined,
 		routerConfigured: options.config.autoDepositRouterAddress !== null,
 		skipped: 0,
 	};
 
 	if (!options.config.autoDepositRouterAddress) {
+		logDisabledOnce(options, "onramp_router_unconfigured");
+		return result;
+	}
+
+	if (!options.config.relayerPrivateKey) {
+		logDisabledOnce(options, "onramp_relayer_unconfigured");
 		return result;
 	}
 
@@ -192,6 +205,10 @@ async function processIntent(
 			return "parked";
 		}
 
+		if (error instanceof OnrampRelayerUnavailableError) {
+			return "skipped";
+		}
+
 		throw error;
 	}
 
@@ -209,23 +226,36 @@ function selectIrisMessage(
 
 	if (intent.cctpNonce) {
 		const expected = intent.cctpNonce.toLowerCase();
-		const byNonce = messages.find((message) => {
-			if (message.eventNonce?.toLowerCase() === expected) {
-				return true;
-			}
+		return (
+			messages.find((message) => {
+				if (message.eventNonce?.toLowerCase() === expected) {
+					return true;
+				}
 
-			return safeDecodedNonce(message.message) === expected;
-		});
-
-		if (byNonce) {
-			return byNonce;
-		}
+				return safeDecodedNonce(message.message) === expected;
+			}) ?? null
+		);
 	}
 
 	return (
 		messages.find((message) => isCompleteIrisMessage(message)) ??
 		messages[0] ??
 		null
+	);
+}
+
+function logDisabledOnce(
+	options: OnrampPollerOptions,
+	reason: string,
+): void {
+	if (!options.logger || loggedDisabledReasons.has(reason)) {
+		return;
+	}
+
+	loggedDisabledReasons.add(reason);
+	options.logger.info(
+		{ reason },
+		"onramp poller skipped because required relayer config is missing",
 	);
 }
 

@@ -285,19 +285,21 @@ export async function registerJobs(
 		return;
 	}
 
-	if (onramp.config.indexerEnabled) {
-		await boss.schedule(
-			JOB_QUEUES.onrampPoll,
-			onramp.config.indexerPollCron,
-			{
-				requestedAt: new Date().toISOString(),
-			},
-			{
-				singletonKey: "onramp-poll",
-				singletonSeconds: 4,
-			},
-		);
+	if (!onramp.config.onrampPollerEnabled) {
+		return;
 	}
+
+	await boss.schedule(
+		JOB_QUEUES.onrampPoll,
+		onramp.config.onrampPollCron,
+		{
+			requestedAt: new Date().toISOString(),
+		},
+		{
+			singletonKey: "onramp-poll",
+			singletonSeconds: 4,
+		},
+	);
 
 	await boss.work<OnrampPollJobData>(
 		JOB_QUEUES.onrampPoll,
@@ -317,6 +319,7 @@ export async function registerJobs(
 					pending: result.pending,
 					polled: result.polled,
 					queue: JOB_QUEUES.onrampPoll,
+					relayerConfigured: result.relayerConfigured,
 					requestedAt: job.data.requestedAt,
 					routerConfigured: result.routerConfigured,
 				},

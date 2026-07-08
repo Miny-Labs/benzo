@@ -222,6 +222,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 					chain: onrampChain,
 					config,
 					iris: onrampIris,
+					logger: fastify.log as FastifyBaseLogger,
 					relayer: onrampRelayer,
 				},
 			);

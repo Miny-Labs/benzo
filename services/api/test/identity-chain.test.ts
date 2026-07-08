@@ -38,6 +38,8 @@ const config: ApiConfig = {
 	logLevel: "silent",
 	nodeEnv: "test",
 	onboardingRegistrationPollSeconds: 1,
+	onrampPollCron: "*/15 * * * * *",
+	onrampPollerEnabled: true,
 	opsPrivateKey: testOpsPrivateKey,
 	payrollEercDecimals: 6,
 	payrollTokenId: 1n,

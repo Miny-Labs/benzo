@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
 import {
 	ATTESTATION_API_BASE_BY_TIER,
@@ -23,6 +24,23 @@ const defaultPayrollZkArtifactDir = path.resolve(
 	"../zk-artifacts",
 );
 const defaultDripWei = "500000000000000000";
+const relayerPrivateKeySchema = z
+	.string()
+	.regex(
+		privateKeyPattern,
+		"RELAYER_PRIVATE_KEY must be a 0x-prefixed private key",
+	)
+	.superRefine((value, ctx) => {
+		try {
+			privateKeyToAccount(value as `0x${string}`);
+		} catch {
+			ctx.addIssue({
+				code: "custom",
+				message: "RELAYER_PRIVATE_KEY must be a valid secp256k1 private key",
+			});
+		}
+	})
+	.optional();
 export const DEFAULT_CORS_ORIGINS = [
 	"https://wallet.benzo.space",
 	"https://console.benzo.space",
@@ -37,6 +55,10 @@ const envSchema = z
 			.regex(hex32BytesPattern, "APP_MASTER_KEY must be a 32-byte hex string")
 			.transform((value) => value.replace(/^0x/i, "").toLowerCase()),
 		API_DOMAIN: z.string().trim().min(1).optional(),
+		BENZO_CCTP_ROUTER_ADDRESS: z
+			.string()
+			.regex(evmAddressPattern, "BENZO_CCTP_ROUTER_ADDRESS must be an EVM address")
+			.optional(),
 		BENZONET_CHAIN_ID: z.coerce.number().int().positive().default(43_113),
 		// Optional: resolves to a per-network default (fuji/avalanche) or is
 		// required explicitly (benzonet). Never silently defaults to Fuji.
@@ -107,6 +129,7 @@ const envSchema = z
 		INDEXER_MAX_WINDOW_BLOCKS: z.coerce.number().int().positive().default(2_000),
 		INDEXER_POLL_CRON: z.string().trim().min(1).default("*/5 * * * * *"),
 		INDEXER_START_BLOCK: z.coerce.number().int().nonnegative().default(0),
+		IRIS_API_BASE: z.url().optional(),
 		KYC_PROVIDER: z.enum(["mock"]).default("mock"),
 		LOG_LEVEL: z.string().default("info"),
 		NODE_ENV: z
@@ -123,6 +146,11 @@ const envSchema = z
 			.int()
 			.positive()
 			.default(15),
+		ONRAMP_POLLER_ENABLED: z
+			.enum(["true", "false"])
+			.default("true")
+			.transform((value) => value === "true"),
+		ONRAMP_POLL_CRON: z.string().trim().min(1).default("*/15 * * * * *"),
 		PAYROLL_EERC_DECIMALS: z.coerce.number().int().min(0).max(18).default(6),
 		// Optional ENV OVERRIDE only — resolves from the manifest USDC tokenId
 		// when unset, falling back to 1n only if neither is available.
@@ -133,12 +161,7 @@ const envSchema = z
 			.min(1)
 			.default(defaultPayrollZkArtifactDir),
 		PORT: z.coerce.number().int().positive().default(3000),
-		RELAYER_PRIVATE_KEY: z
-			.string()
-			.regex(
-				privateKeyPattern,
-				"RELAYER_PRIVATE_KEY must be a 0x-prefixed private key",
-			),
+		RELAYER_PRIVATE_KEY: relayerPrivateKeySchema,
 		SESSION_COOKIE_NAME: z.string().min(1).default("benzo_session"),
 		SESSION_TTL_DAYS: z.coerce.number().int().positive().default(7),
 		SIWE_NONCE_TTL_MINUTES: z.coerce.number().int().positive().default(10),
@@ -268,10 +291,14 @@ const envSchema = z
 		return {
 			appMasterKey: env.APP_MASTER_KEY,
 			apiDomain: env.API_DOMAIN ?? `localhost:${env.PORT}`,
-			autoDepositRouterAddress: cctp?.autoDepositRouter ?? null,
+			autoDepositRouterAddress:
+				env.BENZO_CCTP_ROUTER_ADDRESS?.toLowerCase() ??
+				cctp?.autoDepositRouter ??
+				null,
 			benzonetChainId: env.BENZONET_CHAIN_ID,
 			benzonetRpcUrl,
-			cctpAttestationApiBase: ATTESTATION_API_BASE_BY_TIER[tier],
+			cctpAttestationApiBase:
+				env.IRIS_API_BASE ?? ATTESTATION_API_BASE_BY_TIER[tier],
 			cctpDestDomain: env.CCTP_DEST_DOMAIN,
 			cctpDomain: cctp?.domain ?? null,
 			cctpMessageTransmitter: cctp?.messageTransmitter ?? null,
@@ -299,6 +326,8 @@ const envSchema = z
 			nodeEnv: env.NODE_ENV,
 			onboardingRegistrationPollSeconds:
 				env.ONBOARDING_REGISTRATION_POLL_SECONDS,
+			onrampPollCron: env.ONRAMP_POLL_CRON,
+			onrampPollerEnabled: env.ONRAMP_POLLER_ENABLED,
 			opsPrivateKey: env.OPS_PRIVATE_KEY,
 			payrollEercDecimals: env.PAYROLL_EERC_DECIMALS,
 			payrollTokenId:

@@ -11,8 +11,6 @@ const baseEnv = {
 	NODE_ENV: "test",
 	OPS_PRIVATE_KEY:
 		"0x0000000000000000000000000000000000000000000000000000000000000001",
-	RELAYER_PRIVATE_KEY:
-		"0x0000000000000000000000000000000000000000000000000000000000000002",
 } satisfies NodeJS.ProcessEnv;
 
 const deploymentsDir = path.resolve(
@@ -24,6 +22,10 @@ const benzonetManifestPath = path.join(deploymentsDir, "benzonet.json");
 describe("loadConfig", () => {
 	it("uses the default CORS origins when CORS_ORIGINS is unset", () => {
 		expect(loadConfig(baseEnv).corsOrigins).toEqual(DEFAULT_CORS_ORIGINS);
+	});
+
+	it("allows RELAYER_PRIVATE_KEY to be omitted", () => {
+		expect(loadConfig(baseEnv).relayerPrivateKey).toBeUndefined();
 	});
 
 	it("parses comma-separated CORS origins", () => {
@@ -107,6 +109,43 @@ describe("loadConfig", () => {
 		);
 		// fuji manifest has no auto-deposit router yet.
 		expect(config.autoDepositRouterAddress).toBeNull();
+	});
+
+	it("prefers CCTP env overrides over resolved defaults", () => {
+		const config = loadConfig({
+			...baseEnv,
+			BENZO_CCTP_ROUTER_ADDRESS:
+				"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			IRIS_API_BASE: "https://iris.example.test",
+		});
+
+		expect(config.autoDepositRouterAddress).toBe(
+			"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		);
+		expect(config.cctpAttestationApiBase).toBe("https://iris.example.test");
+	});
+
+	it("parses dedicated onramp poller controls", () => {
+		const config = loadConfig({
+			...baseEnv,
+			ONRAMP_POLLER_ENABLED: "false",
+			ONRAMP_POLL_CRON: "*/30 * * * * *",
+		});
+
+		expect(config.onrampPollerEnabled).toBe(false);
+		expect(config.onrampPollCron).toBe("*/30 * * * * *");
+	});
+
+	it.each([
+		"0x0000000000000000000000000000000000000000000000000000000000000000",
+		`0x${"ff".repeat(32)}`,
+	])("rejects invalid relayer private key %s", (key) => {
+		expect(() =>
+			loadConfig({
+				...baseEnv,
+				RELAYER_PRIVATE_KEY: key,
+			}),
+		).toThrow("RELAYER_PRIVATE_KEY must be a valid secp256k1 private key");
 	});
 
 	it("rejects a CCTP destination domain other than Avalanche", () => {

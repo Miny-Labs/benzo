@@ -8,8 +8,10 @@ import {
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import {
+	ContractFunctionRevertedError,
 	decodeAbiParameters,
 	encodeAbiParameters,
+	encodeErrorResult,
 	getAddress,
 	type Hex,
 } from "viem";
@@ -27,7 +29,10 @@ import type { OnrampChainClient } from "../src/onramp/chain.js";
 import type { IrisClient } from "../src/onramp/cctp.js";
 import { encodeOnrampHookData } from "../src/onramp/hookdata.js";
 import { pollOnrampIntents } from "../src/onramp/poller.js";
-import type { OnrampRelayer } from "../src/onramp/relayer.js";
+import {
+	isCctpMessageReplayError,
+	type OnrampRelayer,
+} from "../src/onramp/relayer.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const REGISTERED = getAddress("0x1111111111111111111111111111111111111111");
@@ -40,6 +45,13 @@ const RELAYER_ADDRESS = getAddress("0x984E075152391C018Df97161D51C6BfE52631508")
 const PK_X = 123n;
 const PK_Y = 456n;
 const ATTESTATION = "0x1234" as Hex;
+const cctpReplayAbi = [
+	{
+		inputs: [{ name: "nonce", type: "bytes32" }],
+		name: "CctpNonceAlreadyUsed",
+		type: "error",
+	},
+] as const;
 
 function testConfig(databaseUrl: string): ApiConfig {
 	return {
@@ -73,6 +85,8 @@ function testConfig(databaseUrl: string): ApiConfig {
 		logLevel: "silent",
 		nodeEnv: "test",
 		onboardingRegistrationPollSeconds: 1,
+		onrampPollCron: "*/15 * * * * *",
+		onrampPollerEnabled: true,
 		opsPrivateKey:
 			"0x0000000000000000000000000000000000000000000000000000000000000001",
 		payrollEercDecimals: 6,
@@ -455,6 +469,15 @@ describe("onramp intents", () => {
 				relayer,
 			}),
 		).rejects.toThrow("rpc_timeout");
+		const [retryableRow] = await db
+			.select()
+			.from(onrampIntents)
+			.where(eq(onrampIntents.sourceTxHash, sourceTxHash))
+			.limit(1);
+		expect(retryableRow).toMatchObject({
+			settleTxHash: null,
+			status: "attested",
+		});
 
 		const second = await pollOnrampIntents(db, {
 			chain: chainFor(REGISTERED, publicKey),
@@ -476,6 +499,22 @@ describe("onramp intents", () => {
 			settleTxHash: `0x${"34".repeat(32)}`,
 			status: "credited",
 		});
+	});
+
+	it("relayer replay detection ignores ambiguous RPC error text", () => {
+		const ambiguous = new Error("rpc timeout: nonce already used");
+		const replay = new ContractFunctionRevertedError({
+			abi: cctpReplayAbi,
+			data: encodeErrorResult({
+				abi: cctpReplayAbi,
+				args: [uintHex(1n, 32)],
+				errorName: "CctpNonceAlreadyUsed",
+			}),
+			functionName: "settleDeposit",
+		});
+
+		expect(isCctpMessageReplayError(ambiguous)).toBe(false);
+		expect(isCctpMessageReplayError(replay)).toBe(true);
 	});
 
 	it("onramp poller treats relayer replay as an idempotent credit", async () => {
@@ -597,6 +636,67 @@ describe("onramp intents", () => {
 		});
 	});
 
+	it("onramp poller does not settle a different Iris message after a nonce mismatch", async () => {
+		const sourceTxHash = `0x${"ce".repeat(32)}`;
+		const userId = await userIdFor(db, REGISTERED);
+		const key = createAuditorKeypair(555_666n);
+		const publicKey = [
+			BigInt(key.publicKey[0]),
+			BigInt(key.publicKey[1]),
+		] as [bigint, bigint];
+		const message = buildCctpMessage({
+			amount: 650_000n,
+			hookData: encodeOnrampHookData({
+				pkX: publicKey[0],
+				pkY: publicKey[1],
+				user: REGISTERED,
+			}),
+			nonce: 22n,
+		});
+		let settleCalls = 0;
+
+		await db.insert(onrampIntents).values({
+			cctpNonce: uintHex(99n, 32),
+			destToken: "usdc",
+			sourceChainId: 11_155_111,
+			sourceDomain: 0,
+			sourceTxHash,
+			status: "burned",
+			userAddress: REGISTERED.toLowerCase(),
+			userId,
+			userPubKeyX: publicKey[0].toString(),
+			userPubKeyY: publicKey[1].toString(),
+		});
+
+		const result = await pollOnrampIntents(db, {
+			chain: chainFor(REGISTERED, publicKey),
+			config,
+			iris: irisFor(sourceTxHash, message),
+			limit: 200,
+			relayer: {
+				relayerAddress: RELAYER_ADDRESS,
+				async settleDeposit() {
+					settleCalls += 1;
+					throw new Error("settle_not_expected");
+				},
+			},
+		});
+		const [row] = await db
+			.select()
+			.from(onrampIntents)
+			.where(eq(onrampIntents.sourceTxHash, sourceTxHash))
+			.limit(1);
+
+		expect(result.credited).toBe(0);
+		expect(settleCalls).toBe(0);
+		expect(row).toMatchObject({
+			amount: null,
+			cctpNonce: uintHex(99n, 32),
+			settleTxHash: null,
+			status: "burned",
+		});
+	});
+
 	it("onramp poller no-ops cleanly until the router address is configured", async () => {
 		let irisCalls = 0;
 		const result = await pollOnrampIntents(db, {
@@ -624,6 +724,45 @@ describe("onramp intents", () => {
 			routerConfigured: false,
 		});
 		expect(irisCalls).toBe(0);
+	});
+
+	it("onramp poller no-ops cleanly until the relayer key is configured", async () => {
+		let irisCalls = 0;
+		const logs: string[] = [];
+		const result = await pollOnrampIntents(db, {
+			chain: chainFor(REGISTERED, [PK_X, PK_Y]),
+			config: {
+				...config,
+				relayerPrivateKey: undefined,
+			},
+			iris: {
+				async getMessages() {
+					irisCalls += 1;
+					return [];
+				},
+			},
+			logger: {
+				info(_bindings, message) {
+					logs.push(message);
+				},
+			},
+			relayer: {
+				relayerAddress: null,
+				async settleDeposit() {
+					throw new Error("settle_not_expected");
+				},
+			},
+		});
+
+		expect(result).toMatchObject({
+			polled: 0,
+			relayerConfigured: false,
+			routerConfigured: true,
+		});
+		expect(irisCalls).toBe(0);
+		expect(logs).toEqual([
+			"onramp poller skipped because required relayer config is missing",
+		]);
 	});
 });
 
