@@ -34,6 +34,13 @@ export type Deployments = {
 	network: DeploymentNetwork;
 	chainId: DeploymentChainId;
 	tier: DeploymentTier;
+	/**
+	 * True for a manifest that is wired (tier + chainId) but not yet deployed —
+	 * its contract addresses are zero-address placeholders (e.g. avalanche mainnet
+	 * before the cutover). Guard with {@link assertLiveDeployment} before using any
+	 * address from it so a not-yet-deployed network never resolves to address(0).
+	 */
+	placeholder?: boolean;
 	contracts: DeploymentContracts;
 };
 
@@ -46,3 +53,28 @@ export const deploymentsByNetwork = {
 	benzonet: benzonetDeployments,
 	avalanche: avalancheDeployments,
 } as const satisfies Record<DeploymentNetwork, Deployments>;
+
+/**
+ * A placeholder deployment is wired (tier + chainId) but has no deployed
+ * contracts yet — its addresses are zero-address stand-ins.
+ */
+export function isPlaceholderDeployment(deployment: Deployments): boolean {
+	return deployment.placeholder === true;
+}
+
+/**
+ * Returns the deployment for `network`, throwing if it is a placeholder. Use
+ * this instead of reading `deploymentsByNetwork[network]` directly whenever you
+ * will actually instantiate or call a contract, so a not-yet-deployed network
+ * (e.g. avalanche mainnet before the cutover) fails loudly instead of pointing
+ * callers at address(0).
+ */
+export function assertLiveDeployment(network: DeploymentNetwork): Deployments {
+	const deployment = deploymentsByNetwork[network];
+	if (isPlaceholderDeployment(deployment)) {
+		throw new Error(
+			`${network} deployment is a placeholder (contracts not deployed yet) — not a live target`,
+		);
+	}
+	return deployment;
+}

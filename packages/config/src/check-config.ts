@@ -105,6 +105,18 @@ function validateDeploymentTier(
 		);
 	}
 
+	// NETWORK_TIER is the single source of truth and source manifests do not
+	// normally carry a tier, but if one is ever added it must agree — catch drift
+	// rather than let a stale source tier pass silently.
+	const sourceTier = readJsonObject(
+		join(repoRoot, "contracts", "deployments", `${network}.json`),
+	).tier;
+	if (sourceTier !== undefined && sourceTier !== tier) {
+		failures.push(
+			`${network}: source manifest tier "${String(sourceTier)}" does not match NETWORK_TIER "${tier}"`,
+		);
+	}
+
 	const { chainId } = deployment;
 
 	if (tier === "staging" && chainId !== 43_113 && chainId !== 68_420) {
@@ -401,19 +413,38 @@ function readOptionalTokens(
 
 	for (const [key, entry] of Object.entries(value)) {
 		if (!isJsonObject(entry)) {
+			failures.push(`${path.join(".")}.${key} must be a token metadata object`);
 			continue;
 		}
 
 		const { address, decimals, tokenId, symbol } = entry;
 
 		if (
-			typeof address === "string" &&
-			typeof decimals === "number" &&
-			typeof tokenId === "number" &&
-			typeof symbol === "string"
+			typeof address !== "string" ||
+			typeof decimals !== "number" ||
+			typeof tokenId !== "number" ||
+			typeof symbol !== "string"
 		) {
-			tokens[key] = { address: address as Address, decimals, tokenId, symbol };
+			failures.push(`${path.join(".")}.${key} has an invalid token metadata shape`);
+			continue;
 		}
+
+		// Manifest token maps must satisfy the same address + 6-decimal contract
+		// as the STABLECOINS registry, so a malformed entry fails loudly instead of
+		// being silently dropped or projected into the compact output.
+		if (!isAddress(address)) {
+			failures.push(
+				`${path.join(".")}.${key}.address is not a valid EVM address: ${address}`,
+			);
+			continue;
+		}
+
+		if (decimals !== 6) {
+			failures.push(`${path.join(".")}.${key}.decimals must be 6, got ${decimals}`);
+			continue;
+		}
+
+		tokens[key] = { address: address as Address, decimals, tokenId, symbol };
 	}
 
 	return Object.keys(tokens).length > 0 ? tokens : undefined;

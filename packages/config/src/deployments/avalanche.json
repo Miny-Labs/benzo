@@ -2,6 +2,7 @@
   "network": "avalanche",
   "chainId": 43114,
   "tier": "production",
+  "placeholder": true,
   "contracts": {
     "verifiers": {
       "registration": "0x0000000000000000000000000000000000000000",
