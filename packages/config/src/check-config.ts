@@ -560,10 +560,13 @@ function readOptionalCctp(
 		domain: domain as number,
 		tokenMessenger: tokenMessenger as Address,
 		messageTransmitter: messageTransmitter as Address,
+		// Only an explicit null/undefined means "unset". A malformed value passes
+		// through so the address validation fails the manifest instead of silently
+		// collapsing to null (which would disable auto-deposit routing).
 		autoDepositRouter:
-			typeof autoDepositRouter === "string"
-				? (autoDepositRouter as Address)
-				: null,
+			autoDepositRouter === null || autoDepositRouter === undefined
+				? null
+				: (autoDepositRouter as Address),
 	};
 }
 
