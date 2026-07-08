@@ -8,8 +8,11 @@
     "node": ">=22"
   },
   "scripts": {
+    "prebuild": "pnpm --filter @benzo/config build",
     "build": "hardhat compile",
+    "precompile": "pnpm --filter @benzo/config build",
     "compile": "hardhat compile",
+    "pretest": "pnpm --filter @benzo/config build",
     "test": "hardhat test",
     "artifacts:stage": "ts-node scripts/stage-circuit-artifacts.ts",
     "artifacts:export": "ts-node scripts/export-circuit-artifacts.ts",
@@ -29,6 +32,9 @@
     "seed:localhost": "BENZO_SEED_TARGET=local hardhat run scripts/seed.ts --network localhost",
     "seed:fuji": "BENZO_SEED_TARGET=fuji hardhat run scripts/seed.ts --network fuji",
     "seed:benzonet": "BENZO_SEED_TARGET=benzonet hardhat run scripts/seed.ts --network benzonet"
+  },
+  "dependencies": {
+    "@benzo/config": "workspace:*"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

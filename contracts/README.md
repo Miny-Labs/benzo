@@ -197,6 +197,27 @@ manifest, the seed still writes the local fixture output and API mirror, but the
 corresponding on-chain handle/invoice/gift operation is skipped for the deploy
 step.
 
+## CCTP Onramp Helper
+
+`contracts/onramp/BenzoOnrampHelper.sol` is the source-chain helper for Circle
+CCTP V2 one-tap onramps into the Avalanche auto-deposit router. Deploy one
+helper per source chain/router pair with that source chain's TokenMessengerV2,
+Avalanche's CCTP destination domain, and the deployed Benzo CCTP router address.
+
+For permit-capable USDC, the quote path builds `depositForBurnWithHook` fields
+with `buildDepositForBurnWithHookArgs(...)`, the user signs an exact-amount
+EIP-2612 permit for the helper, and a submitter calls `onrampWithPermit(...)`.
+The helper pulls the token, approves TokenMessengerV2, and calls
+`depositForBurnWithHook` with `mintRecipient == destinationCaller == bytes32(router)`.
+The helper only labels this as a workflow shortcut: privacy starts when the
+Avalanche router credits eERC, not on the public source-chain burn.
+
+When a source token does not support permit, use the plain two-transaction
+fallback: transaction 1 calls `burnToken.approve(TokenMessengerV2, amount)`;
+transaction 2 calls `TokenMessengerV2.depositForBurnWithHook(...)` directly with
+the builder output. The same `destinationCaller == bytes32(router)` lock and
+hook-data codec apply.
+
 ### Also deployed on BenzoNet (the permissioned L1)
 
 The identical converter stack is deployed on **BenzoNet**, Benzo's sovereign

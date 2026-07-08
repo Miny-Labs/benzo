@@ -13,6 +13,10 @@ importers:
         version: 2.5.0
 
   contracts:
+    dependencies:
+      '@benzo/config':
+        specifier: workspace:*
+        version: link:../packages/config
     devDependencies:
       '@nomicfoundation/hardhat-toolbox':
         specifier: ^5.0.0
