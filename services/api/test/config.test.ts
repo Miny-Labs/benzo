@@ -24,6 +24,10 @@ describe("loadConfig", () => {
 		expect(loadConfig(baseEnv).corsOrigins).toEqual(DEFAULT_CORS_ORIGINS);
 	});
 
+	it("allows RELAYER_PRIVATE_KEY to be omitted", () => {
+		expect(loadConfig(baseEnv).relayerPrivateKey).toBeUndefined();
+	});
+
 	it("parses comma-separated CORS origins", () => {
 		expect(
 			loadConfig({
@@ -92,6 +96,7 @@ describe("loadConfig", () => {
 		const config = loadConfig(baseEnv);
 
 		expect(config.cctpDomain).toBe(1);
+		expect(config.cctpDestDomain).toBe(1);
 		expect(config.cctpTokenMessenger).toBe(
 			"0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa",
 		);
@@ -104,6 +109,52 @@ describe("loadConfig", () => {
 		);
 		// fuji manifest has no auto-deposit router yet.
 		expect(config.autoDepositRouterAddress).toBeNull();
+	});
+
+	it("prefers CCTP env overrides over resolved defaults", () => {
+		const config = loadConfig({
+			...baseEnv,
+			BENZO_CCTP_ROUTER_ADDRESS:
+				"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			IRIS_API_BASE: "https://iris.example.test",
+		});
+
+		expect(config.autoDepositRouterAddress).toBe(
+			"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		);
+		expect(config.cctpAttestationApiBase).toBe("https://iris.example.test");
+	});
+
+	it("parses dedicated onramp poller controls", () => {
+		const config = loadConfig({
+			...baseEnv,
+			ONRAMP_POLLER_ENABLED: "false",
+			ONRAMP_POLL_CRON: "*/30 * * * * *",
+		});
+
+		expect(config.onrampPollerEnabled).toBe(false);
+		expect(config.onrampPollCron).toBe("*/30 * * * * *");
+	});
+
+	it.each([
+		"0x0000000000000000000000000000000000000000000000000000000000000000",
+		`0x${"ff".repeat(32)}`,
+	])("rejects invalid relayer private key %s", (key) => {
+		expect(() =>
+			loadConfig({
+				...baseEnv,
+				RELAYER_PRIVATE_KEY: key,
+			}),
+		).toThrow("RELAYER_PRIVATE_KEY must be a valid secp256k1 private key");
+	});
+
+	it("rejects a CCTP destination domain other than Avalanche", () => {
+		expect(() =>
+			loadConfig({
+				...baseEnv,
+				CCTP_DEST_DOMAIN: "0",
+			}),
+		).toThrow("CCTP_DEST_DOMAIN must be 1");
 	});
 
 	it("throws (no Fuji fallback) when neither the manifest nor an env override resolves an address", () => {

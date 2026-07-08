@@ -23,11 +23,18 @@ import {
 	type PayrollItemJobData,
 	type PayrollWorkerOptions,
 } from "../payroll/runner.js";
+import {
+	handleOnrampPollJob,
+	ONRAMP_POLL_QUEUE,
+	type OnrampPollerOptions,
+	type OnrampPollJobData,
+} from "../onramp/poller.js";
 
 export const JOB_QUEUES = {
 	demoAudit: "demo.audit",
 	eercIndexer: "eerc.indexer.poll",
 	invitesExpire: "invites.expire",
+	onrampPoll: ONRAMP_POLL_QUEUE,
 	onboardingAdvance: ONBOARDING_ADVANCE_QUEUE,
 	onboardingFailed: ONBOARDING_FAILED_QUEUE,
 	payrollItem: PAYROLL_ITEM_QUEUE,
@@ -104,6 +111,13 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
 		retryBackoff: true,
 		retryLimit: 5,
 	});
+	await boss.createQueue(JOB_QUEUES.onrampPoll, {
+		deleteAfterSeconds: 604_800,
+		expireInSeconds: 300,
+		retentionSeconds: 2_592_000,
+		retryBackoff: true,
+		retryLimit: 5,
+	});
 }
 
 export async function registerJobs(
@@ -116,6 +130,7 @@ export async function registerJobs(
 		config?: ApiConfig;
 	},
 	payroll?: PayrollWorkerOptions,
+	onramp?: OnrampPollerOptions,
 ): Promise<void> {
 	await ensureQueues(boss);
 	await boss.work<DemoAuditJobData>(
@@ -192,7 +207,7 @@ export async function registerJobs(
 	}
 
 	if (!onboarding) {
-		if (!payroll) {
+		if (!payroll && !onramp) {
 			return;
 		}
 	} else {
@@ -240,29 +255,78 @@ export async function registerJobs(
 	}
 
 	if (!payroll) {
+		if (!onramp) {
+			return;
+		}
+	} else {
+		await boss.work<PayrollItemJobData>(
+			JOB_QUEUES.payrollItem,
+			{ batchSize: 1, localConcurrency: 3 },
+			async ([job]) => {
+				if (!job) {
+					return;
+				}
+
+				await handlePayrollItemJob(db, payroll, job);
+				logger.info(
+					{ jobId: job.id, queue: JOB_QUEUES.payrollItem },
+					"payroll item job processed",
+				);
+			},
+		);
+
+		const resumedPayrollItems = await enqueueOutstandingPayrollItems(db, boss);
+		if (resumedPayrollItems > 0) {
+			logger.info({ count: resumedPayrollItems }, "resumed payroll item jobs");
+		}
+	}
+
+	if (!onramp) {
 		return;
 	}
 
-	await boss.work<PayrollItemJobData>(
-		JOB_QUEUES.payrollItem,
-		{ batchSize: 1, localConcurrency: 3 },
+	if (!onramp.config.onrampPollerEnabled) {
+		return;
+	}
+
+	await boss.schedule(
+		JOB_QUEUES.onrampPoll,
+		onramp.config.onrampPollCron,
+		{
+			requestedAt: new Date().toISOString(),
+		},
+		{
+			singletonKey: "onramp-poll",
+			singletonSeconds: 4,
+		},
+	);
+
+	await boss.work<OnrampPollJobData>(
+		JOB_QUEUES.onrampPoll,
+		{ batchSize: 1, localConcurrency: 1 },
 		async ([job]) => {
 			if (!job) {
 				return;
 			}
 
-			await handlePayrollItemJob(db, payroll, job);
+			const result = await handleOnrampPollJob(db, onramp);
 			logger.info(
-				{ jobId: job.id, queue: JOB_QUEUES.payrollItem },
-				"payroll item job processed",
+				{
+					credited: result.credited,
+					failed: result.failed,
+					jobId: job.id,
+					parked: result.parked,
+					pending: result.pending,
+					polled: result.polled,
+					queue: JOB_QUEUES.onrampPoll,
+					relayerConfigured: result.relayerConfigured,
+					requestedAt: job.data.requestedAt,
+					routerConfigured: result.routerConfigured,
+				},
+				"onramp poll job processed",
 			);
 		},
 	);
-
-	const resumedPayrollItems = await enqueueOutstandingPayrollItems(db, boss);
-	if (resumedPayrollItems > 0) {
-		logger.info({ count: resumedPayrollItems }, "resumed payroll item jobs");
-	}
 }
 
 export async function enqueueDemoAuditJob(

@@ -35,6 +35,11 @@ import {
 	createOnrampChainClient,
 	type OnrampChainClient,
 } from "./onramp/chain.js";
+import { createIrisClient, type IrisClient } from "./onramp/cctp.js";
+import {
+	createViemOnrampRelayer,
+	type OnrampRelayer,
+} from "./onramp/relayer.js";
 import { createKycProvider, type KycProvider } from "./onboarding/kyc.js";
 import authPlugin from "./plugins/auth.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -71,7 +76,9 @@ export type BuildAppOptions = {
 	logger?: FastifyServerOptions["logger"];
 	onboarding?: OnboardingOrchestrator;
 	onboardingChain?: OnboardingChainClient;
+	onrampIris?: IrisClient;
 	onrampChain?: OnrampChainClient;
+	onrampRelayer?: OnrampRelayer;
 	payrollProver?: PayrollProver;
 	payrollSubmitter?: PayrollSubmitter;
 	pool?: Pool;
@@ -184,6 +191,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		if (options.startBoss !== false) {
 			await boss.start();
 			bossStarted = true;
+			const onrampIris =
+				options.onrampIris ??
+				createIrisClient({
+					attestationApiBase: config.cctpAttestationApiBase,
+				});
+			const onrampRelayer =
+				options.onrampRelayer ??
+				createViemOnrampRelayer(config, publicClient);
 			await registerJobs(
 				boss,
 				db,
@@ -202,6 +217,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
 					pool,
 					prover: payrollProver,
 					submitter: payrollSubmitter,
+				},
+				{
+					chain: onrampChain,
+					config,
+					iris: onrampIris,
+					logger: fastify.log as FastifyBaseLogger,
+					relayer: onrampRelayer,
 				},
 			);
 		}
