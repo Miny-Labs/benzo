@@ -83,3 +83,27 @@ balance is re-randomized after any private transfer.
   proving an unregistered caller cannot pass a different registered `user` to
   satisfy the metadata burn overload's registration guard. Review source:
   post-merge CodeRabbit/Greptile follow-up on PR #66.
+- `contracts/contracts/eerc/EncryptedERC.sol` + `errors/Errors.sol`: added an
+  owner-authorized **deposit-on-behalf** path (`depositFor`). Stock upstream
+  `_executeDeposit` hardcodes `to = msg.sender`, so a caller can only fund its
+  OWN encrypted balance. Benzo adds `mapping authorizedDepositors` +
+  `setAuthorizedDepositor(address,bool)` (onlyOwner) + `onlyAuthorizedDepositor`
+  modifier + `NotAuthorizedDepositor` error + `AuthorizedDepositorSet` event, and
+  refactors `_executeDeposit` into `_executeDepositFrom(payer, to, ...)` so the
+  self-deposit path (`payer == to == msg.sender`) is byte-for-byte unchanged.
+  `depositFor(to, amount, token, amountPCT, message)` pulls the ERC20 from
+  msg.sender (an authorized depositor), credits `to` via the unchanged
+  `_convertFrom`, returns dust to the payer, and emits the existing `Deposit(to,
+  ...)` event (indexer-compatible). Guards: `onlyIfAuditorSet`,
+  `onlyForConverter`, `revertIfBlacklisted`, `onlyIfUserRegistered(to)`,
+  `onlyAuthorizedDepositor`. No ZK proof (deposit is proofless upstream; the eGCT
+  is derived on-chain from `to`'s registered public key). `amountPCT` is the
+  recipient-supplied transaction-history entry and is NOT verified against the
+  eGCT — a CCTP-fee amount mismatch is cosmetic history drift only, never a
+  balance error. Enables the CCTP onramp router (#108) and PrivateGiftEscrow
+  (#117). Review source: issue #105.
+- `contracts/test/deposit-for.test.ts`: exhaustive coverage of the deposit-on-
+  behalf path — credits `to` (verified by decrypting to the exact amount) while
+  pulling from the caller, dust returns to the payer, and every revert path
+  (non-authorized caller, unregistered `to`, unset auditor, blacklisted token,
+  standalone mode). Review source: issue #105.

@@ -19,3 +19,6 @@ error InvalidSender();
 error InvalidRegistrationHash();
 error ZeroAddress();
 error TokenBlacklisted(address token);
+// BENZO PATCH (upstream v0.0.4): raised when an address that is not owner-authorized
+// calls depositFor (deposit-on-behalf). See EncryptedERC.authorizedDepositors.
+error NotAuthorizedDepositor();
