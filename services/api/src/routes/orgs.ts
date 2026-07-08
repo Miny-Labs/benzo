@@ -460,12 +460,30 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 					tokenAddress: token.address,
 				});
 			} catch (error) {
+				const message = error instanceof Error ? error.message : "";
+				const reverted =
+					message === "treasury_deposit_reverted" ||
+					message === "treasury_deposit_approval_reverted";
+
+				if (reverted) {
+					// A confirmed on-chain revert is terminal — the funding did not happen,
+					// so mark the row `failed` instead of leaving it `submitted` as if it
+					// might still settle.
+					await db
+						.update(treasuryDeposits)
+						.set({ status: "failed", updatedAt: new Date() })
+						.where(eq(treasuryDeposits.id, pendingId));
+					request.log.error(
+						{ err: error, orgId, txHash: broadcastTxHash },
+						"treasury_deposit_reverted",
+					);
+					return reply.code(502).send({ error: "treasury_deposit_reverted" });
+				}
+
 				if (broadcastTxHash) {
-					// The deposit was signed, its hash persisted, and it was sent, but
-					// (RPC timeout / transient error); it may still settle on-chain.
-					// Leave the row `submitted` with the persisted hash — never
-					// `failed` — so a follow-up reconciler/poller (out of scope) can
-					// settle it and no moved money is lost.
+					// Deposit signed, hash persisted, and sent, but the confirmation wait
+					// failed transiently; it may still settle. Leave `submitted` with the
+					// hash so a reconciler can settle it and no money is lost.
 					request.log.warn(
 						{ err: error, orgId, txHash: broadcastTxHash },
 						"treasury_deposit_broadcast_unconfirmed",
@@ -479,15 +497,22 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 						txHash: broadcastTxHash,
 					});
 				}
-				await db
-					.update(treasuryDeposits)
-					.set({ status: "failed", updatedAt: new Date() })
-					.where(eq(treasuryDeposits.id, pendingId));
-				request.log.error(
+
+				// No deposit hash and not a revert: a transient failure before the deposit
+				// was broadcast (e.g. an approve-receipt timeout). Leave the row `submitted`
+				// (null hash) so a keyed retry resumes rather than being stranded `failed`.
+				request.log.warn(
 					{ err: error, orgId },
-					"treasury_deposit_submit_failed",
+					"treasury_deposit_prebroadcast_unconfirmed",
 				);
-				return reply.code(502).send({ error: "treasury_deposit_failed" });
+				return reply.code(202).send({
+					amount: amount.toString(),
+					source: "direct",
+					status: "submitted",
+					token: token.token,
+					tokenId: token.tokenId.toString(),
+					txHash: null,
+				});
 			}
 
 			await db
