@@ -20,7 +20,9 @@ const TRANSITIONS: Record<OnrampStatus, readonly OnrampStatus[]> = {
 	initiated: ["burned", "needs_onboarding", "failed"],
 	burned: ["attested", "needs_onboarding", "failed"],
 	attested: ["minted", "needs_onboarding", "failed"],
-	minted: ["credited", "failed"],
+	// A recipient not eERC-registered by settle time (after the CCTP mint) parks in
+	// needs_onboarding and resumes once registered — see the "settle time" note above.
+	minted: ["needs_onboarding", "credited", "failed"],
 	needs_onboarding: ["attested", "minted", "credited", "failed"],
 	credited: [],
 	failed: [],
