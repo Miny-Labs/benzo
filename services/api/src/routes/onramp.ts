@@ -168,12 +168,13 @@ export const onrampRoutes: FastifyPluginAsync<OnrampRoutesOptions> = async (
 				userPubKeyY: key.publicKey[1].toString(),
 			});
 
-			// A burn tx maps to at most one intent. If it already exists under a
-			// different user, don't leak or overwrite it.
-			if (!created && intent.userId !== request.user.id) {
-				return reply.code(409).send({ error: "source_tx_hash_taken" });
-			}
-
+			// A burn tx maps to at most one intent (unique sourceTxHash). We do NOT
+			// block a different-user "preclaim" with an error: the recipient is
+			// authoritative on-chain (the attested burn's hookData, validated by the
+			// router against the registrar), and the relayer (#111) re-associates this
+			// intent's owner to that on-chain recipient at settle time. So a public-hash
+			// preclaim can neither block the real recipient nor misdirect funds; the row
+			// only exposes public-burn-derived data. Idempotent on re-submit.
 			return reply
 				.code(created ? 201 : 200)
 				.send({ intent: serializeIntent(intent) });
