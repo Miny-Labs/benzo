@@ -6,7 +6,7 @@
       "domain": 1,
       "tokenMessenger": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
       "messageTransmitter": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
-      "autoDepositRouter": "0xbADeF08FE085928c36cF1301CfAa4d8061DA2469"
+      "autoDepositRouter": "0x4b4f0dc760115DB356Cdfa89b4950E3418a3d98d"
     },
     "eercConverter": {
       "verifiers": {
@@ -149,11 +149,11 @@
       "verified": false
     },
     "benzoCctpRouter": {
-      "address": "0xbADeF08FE085928c36cF1301CfAa4d8061DA2469",
+      "address": "0x4b4f0dc760115DB356Cdfa89b4950E3418a3d98d",
       "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
-      "transactionHash": "0x94847a37dc5a811b5f2961d0df769383bac4e39519744889b02dc8aa1ef9e963",
-      "blockNumber": 56894878,
-      "snowtraceUrl": "https://testnet.snowtrace.io/address/0xbADeF08FE085928c36cF1301CfAa4d8061DA2469",
+      "transactionHash": "0x82f51119995b3c9ec80b12c6e6d1de8af219e29b0429c18bec913095b8b45ba2",
+      "blockNumber": 56897892,
+      "snowtraceUrl": "https://testnet.snowtrace.io/address/0x4b4f0dc760115DB356Cdfa89b4950E3418a3d98d",
       "constructorArguments": [
         "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
         "0x9E16eD3B799541B4929f7E2014904C65E81035b1",

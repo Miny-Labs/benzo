@@ -32,8 +32,8 @@
       "domain": 1,
       "tokenMessenger": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
       "messageTransmitter": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
-      "autoDepositRouter": "0xbADeF08FE085928c36cF1301CfAa4d8061DA2469"
+      "autoDepositRouter": "0x4b4f0dc760115DB356Cdfa89b4950E3418a3d98d"
     },
-    "benzoCctpRouter": "0xbADeF08FE085928c36cF1301CfAa4d8061DA2469"
+    "benzoCctpRouter": "0x4b4f0dc760115DB356Cdfa89b4950E3418a3d98d"
   }
 }
