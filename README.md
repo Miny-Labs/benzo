@@ -221,6 +221,55 @@ Together these are the two privacy primitives stacked on one chain: eERC hides t
 *amounts*, the permissioned L1 walls off *who can transact* — encrypted value
 moving inside a gated, auditor-ready chain.
 
+## Mainnet Readiness
+
+Benzo is **mainnet-ready, not mainnet-deployed** — a deliberate, paused gate. The
+codebase is wired for the Avalanche C-Chain (`43114`) and the whole path is proven
+on Fuji, but **nothing broadcasts to mainnet**. Going live is mostly a config flip;
+the one genuinely hard, unstarted step is the production trusted setup. Mainnet is
+**C-Chain converter only** — BenzoNet stays testnet-only and is excluded from
+mainnet. Full checklist: [`docs/MAINNET_GO_NO_GO.md`](docs/MAINNET_GO_NO_GO.md).
+
+**The split: what is config vs. what is new work.**
+
+| Category | What changes | Status |
+| --- | --- | --- |
+| **Pure config** | RPC `https://api.avax.network/ext/bc/C/rpc`, explorer `snowtrace.io`, chainId `43114`; CCTP domain unchanged (Avalanche = `1`); attestation base sandbox → prod (`iris-api.circle.com`); separate prod secrets (`APP_MASTER_KEY`, `OPS_PRIVATE_KEY`, deployer, auditor, `DATABASE_URL`). | Wired; flip at cutover |
+| **New code (already shipped on testnet)** | Token-agnostic per-network deploy, the `avalanche` network wiring, and the guard-railed `deploy:mainnet` command. | Done — this milestone |
+| **New crypto (the hard part)** | A real multi-operator Groth16 phase-2 ceremony to replace the dev (`contributions:0`) verifiers. | **Not done — required before any mainnet deploy** |
+
+**Exact mainnet addresses (Circle / CCTP V2, verified on-chain).**
+
+| Thing | Address (Avalanche C-Chain `43114`) |
+| --- | --- |
+| USDC | `0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E` |
+| EURC | `0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD` |
+| CCTP `TokenMessengerV2` | `0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d` |
+| CCTP `MessageTransmitterV2` | `0x81D40F21F12A8F0E3252Bccb954D722d4c464B64` |
+
+The mainnet converter wraps **real Circle USDC** (never a `TestUSDC`), pinned to
+`tokenId 1`. `pnpm --filter @benzo/contracts deploy:mainnet` refuses to send a
+single transaction unless every guardrail passes (confirm flag, chainId `43114`,
+existing-USDC wrapping, a **ceremony** verifier build, distinct deployer/auditor
+keys, a funded deployer, and an operator-provided auditor key).
+
+**The honest hard parts.**
+
+- **Production trusted setup.** Today's verifiers come from a dev setup
+  (`hardhat.config.ts` → `contributionSettings.contributions: 0`) and back Fuji
+  only. A real ceremony (`scripts/ceremony/run-ceremony.ts` + a public beacon +
+  published transcript) must regenerate them; the committed ceremony marker keeps
+  `deploy:mainnet` from ever accepting the dev build. Multi-operator coordination
+  is real work that has not been done.
+- **eERC deposit-on-behalf behind CCTP one-tap.** The one-tap cross-chain deposit
+  relies on the router depositing into the converter on the user's behalf; that
+  patch is proven on testnet and carries forward unchanged, but it is a real code
+  path, not a config value.
+- **W3 is reveal-and-verify, not a ZK disclosure circuit.** Selective disclosure /
+  proof-of-payment reveals the underlying values and verifies them; it is **not** a
+  zero-knowledge disclosure proof. That limitation is intentional and stated
+  plainly rather than dressed up.
+
 ## Repository Layout
 
 This repository holds the Benzo backend and infrastructure. The end-user apps

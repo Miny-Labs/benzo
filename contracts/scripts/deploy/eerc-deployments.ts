@@ -10,11 +10,20 @@ import {
 	registerEercAccount,
 	serializeEercAccount,
 } from "./eerc-crypto";
+import {
+	AVALANCHE_CHAIN_ID,
+	AVALANCHE_EURC,
+	AVALANCHE_USDC,
+} from "./mainnet-guardrails";
 
 const FUJI_CHAIN_ID = 43113;
 // Fixed by the BenzoNet genesis; kept a hardcoded constant like FUJI_CHAIN_ID
 // so the deploy guard can't be loosened by a stray env var.
 const BENZONET_CHAIN_ID = 68420;
+// Networks whose contracts are source-verified through Routescan's Etherscan-
+// compatible API (Fuji testnet + Avalanche mainnet). BenzoNet is intentionally
+// absent — it verifies via its own self-hosted Blockscout, an unchanged path.
+const ROUTESCAN_VERIFIABLE = new Set(["fuji", "avalanche"]);
 const CONTRACTS_WORKSPACE = path.join(__dirname, "..", "..");
 const DEPLOYMENTS_DIR = path.join(CONTRACTS_WORKSPACE, "deployments");
 const AUDITOR_KEY_PATH = path.join(CONTRACTS_WORKSPACE, ".auditor-key.local.json");
@@ -64,12 +73,24 @@ const NETWORK_DEPLOY_CONFIG: Record<string, NetworkDeployConfig> = {
 			{ mode: "existing", symbol: "EURC", decimals: 6, address: FUJI_EURC },
 		],
 	},
+	// Mainnet C-Chain wraps REAL Circle USDC + EURC (never a TestUSDC). USDC MUST
+	// stay first so it becomes tokenId 1, matching the fuji ordering. The mainnet
+	// deploy is gated by deploy-mainnet.ts / mainnet-guardrails.ts.
+	avalanche: {
+		eercName: "Benzo Private USDC",
+		eercSymbol: "bUSDC",
+		eercDecimals: 6,
+		wrappedTokens: [
+			{ mode: "existing", symbol: "USDC", decimals: 6, address: AVALANCHE_USDC },
+			{ mode: "existing", symbol: "EURC", decimals: 6, address: AVALANCHE_EURC },
+		],
+	},
 	benzonet: TEST_NETWORK_CONFIG,
 	hardhat: TEST_NETWORK_CONFIG,
 	localhost: TEST_NETWORK_CONFIG,
 };
 
-const resolveNetworkConfig = (name: string): NetworkDeployConfig => {
+export const resolveNetworkConfig = (name: string): NetworkDeployConfig => {
 	const config = NETWORK_DEPLOY_CONFIG[name];
 	if (config === undefined) {
 		throw new Error(`No NetworkDeployConfig for network "${name}"`);
@@ -132,8 +153,13 @@ type AuditorKeyFile = {
 	warning: string;
 };
 
-const snowtraceAddressUrl = (address: string) =>
-	`https://testnet.snowtrace.io/address/${address}`;
+// Snowtrace host by chainId: mainnet C-Chain -> snowtrace.io, everything else
+// (Fuji) -> testnet.snowtrace.io.
+const snowtraceAddressUrl = (address: string, chainId: number) => {
+	const host =
+		chainId === AVALANCHE_CHAIN_ID ? "snowtrace.io" : "testnet.snowtrace.io";
+	return `https://${host}/address/${address}`;
+};
 
 const deploymentPathForNetwork = () =>
 	path.join(DEPLOYMENTS_DIR, `${network.name}.json`);
@@ -315,6 +341,7 @@ export const getDeploymentContext = async (): Promise<DeployContext> => {
 	const expectedChainId: Record<string, number> = {
 		fuji: FUJI_CHAIN_ID,
 		benzonet: BENZONET_CHAIN_ID,
+		avalanche: AVALANCHE_CHAIN_ID,
 	};
 	const expected = expectedChainId[network.name];
 	if (expected !== undefined && chainId !== expected) {
@@ -353,7 +380,9 @@ const verifyRecord = async ({
 	recordVerificationInputs(record, constructorArguments, libraries);
 	setPath(getEercDeployment(context.deployments), pathSegments, record);
 
-	if (network.name !== "fuji") {
+	// Fuji + Avalanche mainnet verify through Routescan's Etherscan-compatible
+	// API; every other network (BenzoNet Blockscout) uses its own path.
+	if (!ROUTESCAN_VERIFIABLE.has(network.name)) {
 		await writeDeployments(context);
 		return;
 	}
@@ -445,8 +474,9 @@ const deployContract = async ({
 		transactionHash: deploymentTransaction?.hash,
 		blockNumber: receipt?.blockNumber,
 		verified: false,
-		...(context.chainId === FUJI_CHAIN_ID
-			? { snowtraceUrl: snowtraceAddressUrl(address) }
+		...(context.chainId === FUJI_CHAIN_ID ||
+		context.chainId === AVALANCHE_CHAIN_ID
+			? { snowtraceUrl: snowtraceAddressUrl(address, context.chainId) }
 			: {}),
 	};
 	recordVerificationInputs(record, constructorArguments, libraries);
@@ -631,6 +661,7 @@ const getAuditorSigner = async () => {
 const getOrCreateAuditorAccount = async (
 	context: DeployContext,
 	auditorAddress: string,
+	allowGenerate = true,
 ) => {
 	const keyFile = await readAuditorKeyFile();
 	keyFile.auditors = keyFile.auditors ?? {};
@@ -639,6 +670,15 @@ const getOrCreateAuditorAccount = async (
 
 	if (stored !== undefined) {
 		return deserializeEercAccount(stored);
+	}
+
+	// Mainnet MUST NOT auto-generate the auditor key: it has to be operator-
+	// provided and its private half sealed into the prod store (never left in
+	// contracts/.auditor-key.local.json). Fail loudly instead.
+	if (!allowGenerate) {
+		throw new Error(
+			`mainnet_auditor_key_not_provided:${key} — provide the operator-custodied auditor key; deploy will not auto-generate it`,
+		);
 	}
 
 	const account = createEercAccount();
@@ -656,7 +696,10 @@ const getOrCreateAuditorAccount = async (
 	return account;
 };
 
-export const configureAuditor = async (context: DeployContext) => {
+export const configureAuditor = async (
+	context: DeployContext,
+	options: { autoGenerateAuditor?: boolean } = {},
+) => {
 	const eercDeployment = getEercDeployment(context.deployments);
 	const encryptedERCRecord = getPath(eercDeployment, ["encryptedERC"]);
 	const registrarRecord = getPath(eercDeployment, ["registrar"]);
@@ -691,6 +734,7 @@ export const configureAuditor = async (context: DeployContext) => {
 	const auditorAccount: EercAccount = await getOrCreateAuditorAccount(
 		context,
 		auditorSigner.address,
+		options.autoGenerateAuditor !== false,
 	);
 
 	const registration = await registerEercAccount(
@@ -886,15 +930,19 @@ export const registerConverterTokens = async (context: DeployContext) => {
 };
 
 export const deployEercConverterStack = async (
-	options: { configureAuditor?: boolean; registerTokens?: boolean } = {},
+	options: {
+		configureAuditor?: boolean;
+		registerTokens?: boolean;
+		autoGenerateAuditor?: boolean;
+	} = {},
 ) => {
 	const context = await getDeploymentContext();
 	const netConfig = resolveNetworkConfig(network.name);
 	await deployVerifiers(context);
 	await deployRegistrar(context);
 
-	// Only mint a TestUSDC where the network wraps one (benzonet/local); fuji wraps
-	// real Circle tokens that already exist on-chain.
+	// Only mint a TestUSDC where the network wraps one (benzonet/local); fuji +
+	// avalanche wrap real Circle tokens that already exist on-chain.
 	if (netConfig.wrappedTokens.some((token) => token.mode === "deploy-test")) {
 		await deployTestUSDC(context);
 	}
@@ -902,7 +950,9 @@ export const deployEercConverterStack = async (
 	await deployEncryptedERC(context);
 
 	if (options.configureAuditor !== false) {
-		await configureAuditor(context);
+		await configureAuditor(context, {
+			autoGenerateAuditor: options.autoGenerateAuditor,
+		});
 	}
 
 	if (options.registerTokens !== false) {

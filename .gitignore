@@ -52,6 +52,8 @@ reference/
 
 # retired Stellar-era local material (untracked leftovers; tracked code lives at fbb4d4e)
 ceremony/
+# ...but the mainnet trusted-setup ceremony tooling (#121) IS committed code.
+!contracts/scripts/ceremony/
 test-results/
 target/
 
@@ -64,7 +66,10 @@ AGENTS.md
 .neon
 
 # --- internal planning / marketing / demo docs (kept locally for context) ---
-docs/
+# The mainnet go/no-go checklist is a committed deliverable (#122); everything
+# else under docs/ stays local.
+docs/*
+!docs/MAINNET_GO_NO_GO.md
 
 # --- heavy binary doc artifacts (regenerable) ---
 *.pptx

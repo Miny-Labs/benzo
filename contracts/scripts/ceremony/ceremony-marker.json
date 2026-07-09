@@ -1,0 +1,31 @@
+{
+  "build": "dev",
+  "provingSystem": "groth16",
+  "contributions": 0,
+  "beacon": null,
+  "ptau": null,
+  "transcriptUrl": null,
+  "note": "DEV trusted setup: hardhat.config.ts setupSettings.contributionSettings.contributions is 0, so these verifiers are NOT from a real ceremony. They back Fuji/BenzoNet ONLY. deploy:mainnet refuses this build (guardrail #4). To make it mainnet-eligible, an operator runs scripts/ceremony/run-ceremony.ts (real phase-2 ceremony + public beacon), commits the regenerated verifiers, and this marker is rewritten to build:\"ceremony\" with contributions>0, a beacon, and fresh sha256 hashes. See docs/MAINNET_GO_NO_GO.md.",
+  "verifiers": {
+    "registration": {
+      "source": "contracts/contracts/verifiers/RegistrationCircuitGroth16Verifier.sol",
+      "sha256": "ee59ca8c0b6cb9ebca5ad98ac3fcdad72e85877fd50b20d1435ddd9fa2f1f96a"
+    },
+    "transfer": {
+      "source": "contracts/contracts/verifiers/TransferCircuitGroth16Verifier.sol",
+      "sha256": "7f2d38006117905058d7068f5048270fcbc8e096c2bb449909c3bdd7cc9bce83"
+    },
+    "mint": {
+      "source": "contracts/contracts/verifiers/MintCircuitGroth16Verifier.sol",
+      "sha256": "224adcf030d51c11c52c371a372238fb78000de5aac9a02080b72e6219517377"
+    },
+    "withdraw": {
+      "source": "contracts/contracts/verifiers/WithdrawCircuitGroth16Verifier.sol",
+      "sha256": "4c99119392c9b95156506851cf84a562d7227ac9d7703ac699ad87eafbebff6c"
+    },
+    "burn": {
+      "source": "contracts/contracts/verifiers/BurnCircuitGroth16Verifier.sol",
+      "sha256": "634ecdf80f014c0bc8eb8ff43f2bd9237659b7f8128a662ddaf992d046123172"
+    }
+  }
+}

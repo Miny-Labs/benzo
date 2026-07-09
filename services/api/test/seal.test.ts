@@ -47,6 +47,18 @@ describe("seal", () => {
 		expect(() => unseal(otherKey, sealed)).toThrow();
 	});
 
+	it("a blob sealed with the staging master key fails to unseal with the prod key", () => {
+		// Staging and prod MUST use distinct APP_MASTER_KEYs, so a secret sealed in
+		// staging can never be unsealed by the mainnet process (and vice versa).
+		const stagingMasterKey = `${"aa".repeat(32)}`;
+		const prodMasterKey = `${"bb".repeat(32)}`;
+		const opsKey = `0x${randomBytes(32).toString("hex")}`;
+		const sealed = sealString(stagingMasterKey, opsKey);
+		expect(() => unsealString(prodMasterKey, sealed)).toThrow();
+		// The staging key still round-trips its own blob.
+		expect(unsealString(stagingMasterKey, sealed)).toBe(opsKey);
+	});
+
 	it("fails to unseal a tampered blob", () => {
 		const sealed = seal(masterKey, randomBytes(32));
 		// Flip a bit in the ciphertext region (past nonce+tag).
