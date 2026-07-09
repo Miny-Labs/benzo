@@ -67,7 +67,17 @@ function rpcUrlFor(target: E2ETarget, chain: Chain): string {
 			target === "fuji" ? "BENZO_E2E_FUJI_RPC_URL" : "BENZO_E2E_BENZONET_RPC_URL",
 			"",
 		) || envOr(target === "fuji" ? "FUJI_RPC_URL" : "BENZONET_RPC_URL", "");
-	return override !== "" ? override : chain.rpcUrls.default.http[0];
+	if (override !== "") {
+		return override;
+	}
+	// BenzoNet has no public RPC — surface an actionable error rather than a
+	// confusing downstream failure against a nonexistent default endpoint.
+	if (target === "benzonet") {
+		throw new Error(
+			"BenzoNet has no public RPC; set BENZO_E2E_BENZONET_RPC_URL (or BENZONET_RPC_URL) to run benzonet suites.",
+		);
+	}
+	return chain.rpcUrls.default.http[0];
 }
 
 /**

@@ -59,6 +59,7 @@ describeFork("CCTP hookData / message decode (Fuji fork)", () => {
 
 	it("decodes a full burn message body with an embedded hookData tuple", async () => {
 		const amount = 2_500_000n;
+		const maxFee = 40_000n;
 		const feeExecuted = 12_500n;
 		const hookData: Hex = encodeHookData({
 			user: owner.address as Address,
@@ -72,7 +73,7 @@ describeFork("CCTP hookData / message decode (Fuji fork)", () => {
 			addressToBytes32(owner.address),
 			u256(amount),
 			addressToBytes32(owner.address),
-			u256(feeExecuted),
+			u256(maxFee),
 			u256(feeExecuted),
 			u256(0n),
 			hookData,
@@ -84,8 +85,10 @@ describeFork("CCTP hookData / message decode (Fuji fork)", () => {
 		expect(ethers.getAddress(mintRecipient)).to.equal(owner.address);
 		expect(coreAmount).to.equal(amount);
 
-		const [, feeOnChain, , mintedAmount] =
+		const [maxFeeOnChain, feeOnChain, , mintedAmount] =
 			await messageHarness.decodeBurnFees(body);
+		// Distinct maxFee/feeExecuted so a decoder that swaps the two fields fails.
+		expect(maxFeeOnChain).to.equal(maxFee);
 		expect(feeOnChain).to.equal(feeExecuted);
 		// mintedAmount is the post-fee amount the router must credit.
 		expect(mintedAmount).to.equal(amount - feeExecuted);

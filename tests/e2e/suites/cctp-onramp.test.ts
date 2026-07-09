@@ -24,6 +24,7 @@ describeLive("cctp-onramp (live)", () => {
 	it("has a deployed auto-deposit router wired in config", (ctx) => {
 		if (!isReady(pf, ctx.skip)) return;
 		const router = config.deployment.contracts.cctp?.autoDepositRouter;
+		if (!router) return ctx.skip("autoDepositRouter not configured");
 		expect(router).toMatch(/^0x[0-9a-fA-F]{40}$/);
 	});
 

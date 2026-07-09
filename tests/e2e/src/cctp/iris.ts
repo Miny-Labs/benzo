@@ -111,13 +111,19 @@ function parseIrisResponse(payload: unknown): Attestation | undefined {
 	};
 }
 
+// Bound each Iris request so a hung connection can't stall past the poll's own
+// deadline; the caller's try/catch retries the aborted request.
+const IRIS_REQUEST_TIMEOUT_MS = 15_000;
+
 async function queryIris(
 	attestationApiBase: string,
 	sourceDomain: number,
 	transactionHash: string,
 ): Promise<Attestation | undefined> {
 	const url = `${attestationApiBase.replace(/\/$/, "")}/v2/messages/${sourceDomain}?transactionHash=${transactionHash}`;
-	const response = await fetch(url);
+	const response = await fetch(url, {
+		signal: AbortSignal.timeout(IRIS_REQUEST_TIMEOUT_MS),
+	});
 	if (response.status === 404) {
 		return undefined;
 	}
@@ -159,16 +165,25 @@ export async function fetchAttestation(
 
 	const deadline = now() + timeoutMs;
 	for (;;) {
-		const attestation = await queryIris(
-			attestationApiBase,
-			sourceDomain,
-			transactionHash,
-		);
-		if (attestation !== undefined) {
-			if (dir !== undefined && isRecording()) {
-				await writeCassette(dir, sourceDomain, transactionHash, attestation);
+		try {
+			const attestation = await queryIris(
+				attestationApiBase,
+				sourceDomain,
+				transactionHash,
+			);
+			if (attestation !== undefined) {
+				if (dir !== undefined && isRecording()) {
+					await writeCassette(dir, sourceDomain, transactionHash, attestation);
+				}
+				return attestation;
 			}
-			return attestation;
+		} catch (error) {
+			// A transient Iris blip (5xx / rate-limit / network / per-request
+			// timeout) must not fail the whole bounded wait — keep polling until
+			// the deadline, then surface the last error.
+			if (now() >= deadline) {
+				throw error;
+			}
 		}
 		if (now() >= deadline) {
 			throw new Error(
