@@ -150,7 +150,7 @@ flowchart LR
 
 | Area | Real today | Boundary to keep honest |
 | --- | --- | --- |
-| eERC stack | `EncryptedERC`, `Registrar`, five Groth16 verifiers, and `BabyJubJub` are deployed on **Avalanche C-Chain mainnet (`43114`)**, Fuji (`43113`), and the BenzoNet L1 (`68420`). | Mainnet is a **fresh deploy**: unaudited, and the `Ownable` admin is still the hot deploy key (not yet moved to a multisig / cold wallet). Source-verification on snowtrace is complete for some contracts and still being finalized for the rest — see the mainnet table below. |
+| eERC stack | `EncryptedERC`, `Registrar`, five Groth16 verifiers, and `BabyJubJub` are deployed on **Avalanche C-Chain mainnet (`43114`)**, Fuji (`43113`), and the BenzoNet L1 (`68420`). | Mainnet is a **fresh deploy**: unaudited, and the `Ownable` admin is still the hot deploy key (not yet moved to a multisig / cold wallet). All ten mainnet contracts are source-verified on Snowtrace — see the mainnet table below. |
 | BenzoNet L1 (the bonus combo) | The same eERC stack is deployed on the BenzoNet L1 (`68420`). A **real confidential eERC transfer runs on it** (deposit + private transfer, decrypt-verified) and the **tx-allowlist precompile gates every transaction** — a funded non-member is rejected on-chain. So encrypted amounts move *inside* a gated chain. Public RPC `rpc.benzo.space`, explorer [explorer.benzo.space](https://explorer.benzo.space). See [Live proof on BenzoNet](#deployed-on-benzonet-l1--the-bonus-combo-proven). | `validatorOnly` read-restriction is intentionally left OFF so the demo stays publicly verifiable; a production institutional deployment enables it. BenzoNet is a single-validator PoA chain. |
 | Stablecoin asset | Mainnet wraps **real Circle USDC** (`tokenId 1`) and EURC (`tokenId 2`); Fuji wraps Circle **testnet** USDC + EURC; BenzoNet wraps a faucet `tUSDC`. | The mainnet converter holds real value — treat it as an unaudited, fresh deployment, not a hardened production system. |
 | Privacy | Groth16 verifiers and BabyJubJub encryption enforce encrypted balances and transfer amounts on-chain. | Addresses, timing, token approvals, gas funding, and workflow labels are still public or off-chain metadata. |
@@ -173,22 +173,21 @@ A per-network breakdown for all three chains lives in [`docs/DEPLOYMENTS.md`](do
 
 This is a **fresh deployment**: it is unaudited and the `Ownable` admin is still
 the hot deploy key (`0x09b6…9846`), not yet transferred to a multisig / cold
-wallet. The "Verified" column reflects the deployment manifest — Routescan
-source-verification is complete for the checked contracts and being finalized for
-the rest.
+wallet. The "Verified" column reflects the deployment manifest — all ten mainnet
+contracts are source-verified on Snowtrace.
 
 | Contract | Address (C-Chain `43114`) | Verified |
 | --- | --- | --- |
-| `EncryptedERC` converter | [`0x708d0b83461973F46041a36f588b8760dbC0Db0e`](https://snowtrace.io/address/0x708d0b83461973F46041a36f588b8760dbC0Db0e) | finalizing |
-| `Registrar` | [`0x902B8D5585A5124C9B9c001A95b7f520C07a79F2`](https://snowtrace.io/address/0x902B8D5585A5124C9B9c001A95b7f520C07a79F2) | finalizing |
+| `EncryptedERC` converter | [`0x708d0b83461973F46041a36f588b8760dbC0Db0e`](https://snowtrace.io/address/0x708d0b83461973F46041a36f588b8760dbC0Db0e) | yes |
+| `Registrar` | [`0x902B8D5585A5124C9B9c001A95b7f520C07a79F2`](https://snowtrace.io/address/0x902B8D5585A5124C9B9c001A95b7f520C07a79F2) | yes |
 | `BabyJubJub` library | [`0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4`](https://snowtrace.io/address/0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4) | yes |
 | Registration verifier | [`0x35b4C4227082f67c01656A39aC47F6c5D6005CaA`](https://snowtrace.io/address/0x35b4C4227082f67c01656A39aC47F6c5D6005CaA) | yes |
-| Mint verifier | [`0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972`](https://snowtrace.io/address/0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972) | finalizing |
+| Mint verifier | [`0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972`](https://snowtrace.io/address/0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972) | yes |
 | Transfer verifier | [`0x4A716026a0C1F7158165520B6DF2009fFeB79f01`](https://snowtrace.io/address/0x4A716026a0C1F7158165520B6DF2009fFeB79f01) | yes |
-| Withdraw verifier | [`0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7`](https://snowtrace.io/address/0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7) | finalizing |
+| Withdraw verifier | [`0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7`](https://snowtrace.io/address/0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7) | yes |
 | Burn verifier | [`0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d`](https://snowtrace.io/address/0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d) | yes |
-| `PrivateGiftEscrow` | [`0xb22c366e000165683A51C2630F6Ab818e5227C94`](https://snowtrace.io/address/0xb22c366e000165683A51C2630F6Ab818e5227C94) | finalizing |
-| `BenzoCCTPRouter` | [`0x83F26C562082e3c455938fd48162e990494a4caE`](https://snowtrace.io/address/0x83F26C562082e3c455938fd48162e990494a4caE) | finalizing |
+| `PrivateGiftEscrow` | [`0xb22c366e000165683A51C2630F6Ab818e5227C94`](https://snowtrace.io/address/0xb22c366e000165683A51C2630F6Ab818e5227C94) | yes |
+| `BenzoCCTPRouter` | [`0x83F26C562082e3c455938fd48162e990494a4caE`](https://snowtrace.io/address/0x83F26C562082e3c455938fd48162e990494a4caE) | yes |
 
 Wrapped assets: **USDC** [`0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E`](https://snowtrace.io/address/0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E)
 (`tokenId 1`) · **EURC** [`0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD`](https://snowtrace.io/address/0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD)
@@ -306,9 +305,9 @@ deployer/auditor keys, a funded deployer, and an operator-provided auditor key).
 - **Onramp is single-test-proven.** The CCTP onramp is proven by **one** 0.1 USDC
   Base→Avalanche burn (settle tx `0xc479b7c8…f8a3`). It is not load-tested,
   fuzzed, or adversarially hardened, and it is not audited.
-- **Source-verification is being finalized.** Per the deployment manifest, some
-  mainnet contracts are Routescan-verified and the rest are still being verified
-  (see the Verified column in the mainnet table).
+- **Source-verified on Snowtrace.** Per the deployment manifest, all ten mainnet
+  contracts are source-verified on Snowtrace (see the Verified column in the
+  mainnet table).
 - **Ceremony trust model.** The phase-2 ceremony was a single-coordinator, 3-machine
   run — not an open multi-party ceremony. Its soundness rests on the published,
   re-verifiable transcript plus the unbiasable drand beacon, not on a large set of

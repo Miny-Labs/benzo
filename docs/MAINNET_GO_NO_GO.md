@@ -149,19 +149,18 @@ Outcomes are annotated inline; unchecked boxes are the remaining post-deploy wor
       local operator secret, never committed. *(#120)*
 - [x] **All `deploy:mainnet` guardrails pass in a fork dry-run** — on a C-Chain fork,
       all seven guardrails were green; the deploy then ran against mainnet. *(#120)*
-- [~] **Contracts source-verified on `snowtrace.io` post-deploy** — **partial.** Per
-      the manifest, the registration/transfer/burn verifiers and `BabyJubJub` carry a
-      Routescan `verifiedAt`; the converter, `Registrar`, mint/withdraw verifiers,
-      `PrivateGiftEscrow`, and `BenzoCCTPRouter` are recorded `verified: false` and are
-      still being finalized. *(#120)*
+- [x] **Contracts source-verified on `snowtrace.io` post-deploy** — **complete.** All
+      ten mainnet contracts (the converter, `Registrar`, all five verifiers, `BabyJubJub`,
+      `PrivateGiftEscrow`, and `BenzoCCTPRouter`) are source-verified on Snowtrace and
+      carry a `verifiedAt` in the manifest. *(#120)*
 
 ### Remaining post-deploy items
 
 - [ ] **Transfer `Ownable` admin off the hot deploy key.** Admin is still the deployer
       (`0x09b67991141146e2A43651C72CF6786eeb579846`); move it to a multisig / cold
       wallet. **Top priority.**
-- [ ] **Finish Routescan source-verification** of the six contracts the manifest still
-      records as unverified, and update the `verified` flags.
+- [x] **Finish Routescan source-verification** — all ten mainnet contracts are now
+      source-verified on Snowtrace and the manifest `verified` flags are updated.
 - [ ] **Harden the CCTP onramp beyond the single test burn** — load, failure-injection,
       and adversarial testing before treating the onramp as production-grade.
 
