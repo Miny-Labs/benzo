@@ -130,10 +130,21 @@ export function validateCeremonyMarker(
 			reason: `ceremony marker has ${marker.contributions} contributions; a mainnet ceremony needs >= 1`,
 		};
 	}
-	if (typeof marker.beacon !== "string" || marker.beacon.length === 0) {
+	// A real public random beacon, not a placeholder — require >=32 bytes of hex.
+	if (typeof marker.beacon !== "string" || !/^0x[0-9a-fA-F]{64,}$/.test(marker.beacon)) {
 		return {
 			ok: false,
-			reason: "ceremony marker has no public random beacon",
+			reason:
+				"ceremony marker beacon must be a >=32-byte hex public random beacon (a placeholder is not accepted)",
+		};
+	}
+	// The published transcript/attestations must be pointed to, so the ceremony is
+	// auditable — a build:"ceremony" marker with no transcript is not trusted.
+	if (typeof marker.transcriptUrl !== "string" || !/^https:\/\/\S+$/.test(marker.transcriptUrl)) {
+		return {
+			ok: false,
+			reason:
+				"ceremony marker must point to a published transcript (an https transcriptUrl)",
 		};
 	}
 	for (const circuit of CEREMONY_CIRCUITS) {

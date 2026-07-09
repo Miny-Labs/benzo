@@ -28,7 +28,7 @@ import {
 //   2. per circuit: newZKey → >=1 independent phase-2 contribution → public
 //      random beacon → final .zkey,
 //   3. regenerate the *CircuitGroth16Verifier.sol under contracts/verifiers,
-//   4. rewrite scripts/ceremony/marker.json to build:"ceremony" so deploy:mainnet
+//   4. rewrite scripts/ceremony/ceremony-marker.json to build:"ceremony" so deploy:mainnet
 //      accepts the setup.
 //
 // A GENUINE ceremony needs SEVERAL INDEPENDENT operators each contributing from
@@ -154,12 +154,23 @@ const runCeremony = async (): Promise<void> => {
 
 	const ptau = requireEnv("CEREMONY_PTAU");
 	const beacon = requireEnv("CEREMONY_BEACON");
+	if (!/^0x[0-9a-fA-F]{64,}$/.test(beacon)) {
+		throw new Error("CEREMONY_BEACON must be a >=32-byte hex public random beacon");
+	}
 	const contributions = Number(process.env.CEREMONY_CONTRIBUTIONS ?? "1");
 	if (!Number.isInteger(contributions) || contributions < 1) {
 		throw new Error("CEREMONY_CONTRIBUTIONS must be a positive integer");
 	}
 	const beaconIters = Number(process.env.CEREMONY_BEACON_ITERS ?? "10");
-	const transcriptUrl = process.env.CEREMONY_TRANSCRIPT_URL ?? null;
+	if (!Number.isInteger(beaconIters) || beaconIters < 1) {
+		throw new Error("CEREMONY_BEACON_ITERS must be a positive integer");
+	}
+	// The marker (and thus deploy:mainnet) requires a published transcript, so a
+	// ceremony run without one is refused up front.
+	const transcriptUrl = requireEnv("CEREMONY_TRANSCRIPT_URL");
+	if (!/^https:\/\/\S+$/.test(transcriptUrl)) {
+		throw new Error("CEREMONY_TRANSCRIPT_URL must be a published https transcript URL");
+	}
 	const artifactsDir = path.resolve(
 		process.env.BENZO_ZKIT_ARTIFACTS_DIR ??
 			path.join(CONTRACTS_ROOT, "zkit", "artifacts"),
@@ -233,6 +244,19 @@ const runCeremony = async (): Promise<void> => {
 		console.log(`[${circuit}] wrote ${path.relative(CONTRACTS_ROOT, verifierPath)}`);
 	}
 
+	// Flipping the marker to build:"ceremony" is what opens the deploy:mainnet
+	// gate — refuse to do it until the operator confirms the browser .wasm/.zkey
+	// and packages/config/public/circuits/manifest.json were regenerated from
+	// these final zkeys, so the gate can never open on stale proving artifacts.
+	if (process.env.CEREMONY_ARTIFACTS_CONFIRMED !== "1") {
+		throw new Error(
+			"Verifiers regenerated, but the mainnet gate stays CLOSED: regenerate the browser " +
+				".wasm/.zkey + packages/config/public/circuits/manifest.json from these final zkeys " +
+				"(pnpm artifacts:stage), then re-run with CEREMONY_ARTIFACTS_CONFIRMED=1 to write the " +
+				"ceremony marker.",
+		);
+	}
+
 	// Rewrite the marker so deploy:mainnet accepts the setup. The verifier hashes
 	// are recomputed from what we just wrote.
 	const marker: CeremonyMarker = {
@@ -265,7 +289,7 @@ const runCeremony = async (): Promise<void> => {
 			"  - regenerate the browser .wasm/.zkey from the final zkeys and refresh",
 			"    packages/config/public/circuits/manifest.json (pnpm artifacts:stage),",
 			"  - publish the transcript/attestations at CEREMONY_TRANSCRIPT_URL,",
-			"  - commit the regenerated verifiers + marker.json,",
+			"  - commit the regenerated verifiers + ceremony-marker.json,",
 			"  - re-run the deploy:mainnet guardrails in a C-Chain fork dry-run.",
 		].join("\n"),
 	);

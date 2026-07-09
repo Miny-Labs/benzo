@@ -75,7 +75,10 @@ export type MainnetGuardrailInput = {
 	auditorProvided: boolean;
 };
 
-const normalizeKey = (key: string): string => key.trim().toLowerCase();
+// Strip an optional 0x prefix so "0xabc…" and "abc…" (the same key) compare
+// equal — otherwise the deployer≠auditor separation-of-duties check is bypassed.
+const normalizeKey = (key: string): string =>
+	key.trim().toLowerCase().replace(/^0x/, "");
 
 // Throws on the FIRST failed guardrail. Order matters: the confirm flag is
 // checked before anything else so an accidental invocation aborts before any RPC
@@ -122,6 +125,40 @@ export function assertMainnetGuardrails(input: MainnetGuardrailInput): void {
 			"wrapped_token_not_existing",
 			`mainnet USDC must be wrapped as an existing token at ${AVALANCHE_USDC}.`,
 		);
+	}
+
+	const eurc = input.wrappedTokens.find(
+		(token) => token.symbol.toUpperCase() === "EURC",
+	);
+	if (
+		eurc !== undefined &&
+		(eurc.mode !== "existing" ||
+			eurc.address === undefined ||
+			eurc.address.toLowerCase() !== AVALANCHE_EURC.toLowerCase())
+	) {
+		throw new MainnetGuardrailError(
+			"wrapped_token_not_existing",
+			`mainnet EURC must be wrapped as an existing token at ${AVALANCHE_EURC}.`,
+		);
+	}
+
+	// Defense in depth: every wrapped token must be a known real Circle mainnet
+	// token, so a tampered "existing" entry with an arbitrary address can't slip
+	// past the per-symbol checks above.
+	const knownMainnetTokens = new Set([
+		AVALANCHE_USDC.toLowerCase(),
+		AVALANCHE_EURC.toLowerCase(),
+	]);
+	for (const token of input.wrappedTokens) {
+		if (
+			token.address === undefined ||
+			!knownMainnetTokens.has(token.address.toLowerCase())
+		) {
+			throw new MainnetGuardrailError(
+				"wrapped_token_not_existing",
+				`mainnet wrapped token ${token.symbol} has an unrecognized address ${String(token.address)}; only real Circle USDC/EURC are allowed.`,
+			);
+		}
 	}
 
 	if (!input.ceremony.ok) {
