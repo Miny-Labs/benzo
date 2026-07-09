@@ -118,6 +118,7 @@ describe("BenzoCCTPRouter", () => {
 	let eercAddress: string;
 	let usdcAddress: string;
 	let blockedTokenAddress: string;
+	let remoteUsdcAddress: string;
 	let routerAddress: string;
 	let transmitterAddress: string;
 
@@ -127,6 +128,7 @@ describe("BenzoCCTPRouter", () => {
 		ownerUser = new User(owner);
 		recipient = new User(recipientSigner);
 		unregistered = new User(signers[4]);
+		remoteUsdcAddress = signers[5].address;
 
 		registrar = await new MockRegistrar__factory(owner).deploy();
 		await registrar.waitForDeployment();
@@ -187,13 +189,15 @@ describe("BenzoCCTPRouter", () => {
 		routerAddress = await router.getAddress();
 
 		await router.setAllowedToken(usdcAddress, true);
+		await router.setRemoteToken(remoteUsdcAddress, usdcAddress);
 		await router.setRelayer(relayer.address, true);
 		await eerc.setAuthorizedDepositor(routerAddress, true);
+		await transmitter.setRemoteToken(remoteUsdcAddress, usdcAddress);
 	};
 
 	const messageFor = ({
 		amount,
-		burnToken = usdcAddress,
+		burnToken = remoteUsdcAddress,
 		feeExecuted,
 		hookData = hookFor(recipient),
 		mintRecipient = routerAddress,
@@ -227,6 +231,8 @@ describe("BenzoCCTPRouter", () => {
 		const amount = 1_250_000n;
 		const nonce = 11n;
 		const message = messageFor({ amount, nonce });
+
+		expect(remoteUsdcAddress).to.not.equal(usdcAddress);
 
 		await expect(
 			router

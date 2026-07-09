@@ -1,4 +1,9 @@
-import { CCTP_PROTOCOL, STABLECOINS, deploymentsByNetwork } from "@benzo/config";
+import {
+	CCTP_PROTOCOL,
+	CCTP_SOURCE_CHAINS,
+	STABLECOINS,
+	deploymentsByNetwork,
+} from "@benzo/config";
 import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { expect } from "chai";
 import { ethers, network } from "hardhat";
@@ -28,7 +33,9 @@ const RUN_FORK = process.env.FORK === "fuji";
 const describeFork = RUN_FORK ? describe : describe.skip;
 
 // Config-driven addresses. No 0x literals in this test body (an M4 invariant).
-const USDC_ADDRESS = STABLECOINS.fuji.USDC?.address as Address;
+const LOCAL_USDC_ADDRESS = STABLECOINS.fuji.USDC?.address as Address;
+const REMOTE_USDC_ADDRESS = CCTP_SOURCE_CHAINS.staging.optimism?.tokens.USDC
+	?.address as Address;
 const FUJI_CCTP = deploymentsByNetwork.fuji.contracts.cctp;
 const REAL_MESSAGE_TRANSMITTER = FUJI_CCTP?.messageTransmitter as Address;
 const REAL_TOKEN_MESSENGER = CCTP_PROTOCOL.staging.tokenMessenger;
@@ -189,17 +196,23 @@ describeFork("BenzoCCTPRouter (Fuji fork, real USDC)", () => {
 		await router.waitForDeployment();
 		routerAddress = await router.getAddress();
 
-		await router.setAllowedToken(USDC_ADDRESS, true);
+		await router.setAllowedToken(LOCAL_USDC_ADDRESS, true);
+		await router.setRemoteToken(REMOTE_USDC_ADDRESS, LOCAL_USDC_ADDRESS);
 		await router.setRelayer(relayer.address, true);
 		await eerc.setAuthorizedDepositor(routerAddress, true);
+		await transmitter.setRemoteToken(REMOTE_USDC_ADDRESS, LOCAL_USDC_ADDRESS);
 
 		// Authorize the mock transmitter to mint real Circle USDC on the fork so
 		// receiveMessage credits the router exactly as a real CCTP mint would.
-		const usdcReader = new ethers.Contract(USDC_ADDRESS, FIAT_TOKEN_ABI, owner);
+		const usdcReader = new ethers.Contract(
+			LOCAL_USDC_ADDRESS,
+			FIAT_TOKEN_ABI,
+			owner,
+		);
 		const masterMinter: string = await usdcReader.masterMinter();
 		const masterMinterSigner = await impersonate(masterMinter);
 		const usdcAsMaster = new ethers.Contract(
-			USDC_ADDRESS,
+			LOCAL_USDC_ADDRESS,
 			FIAT_TOKEN_ABI,
 			masterMinterSigner,
 		);
@@ -208,7 +221,7 @@ describeFork("BenzoCCTPRouter (Fuji fork, real USDC)", () => {
 
 	const messageFor = ({
 		amount,
-		burnToken = USDC_ADDRESS,
+		burnToken = REMOTE_USDC_ADDRESS,
 		feeExecuted,
 		hookData = hookFor(recipient),
 		mintRecipient = routerAddress,
@@ -235,7 +248,7 @@ describeFork("BenzoCCTPRouter (Fuji fork, real USDC)", () => {
 		});
 
 	const usdcBalanceOf = async (address: string): Promise<bigint> => {
-		const usdc = new ethers.Contract(USDC_ADDRESS, FIAT_TOKEN_ABI, owner);
+		const usdc = new ethers.Contract(LOCAL_USDC_ADDRESS, FIAT_TOKEN_ABI, owner);
 		return usdc.balanceOf(address);
 	};
 
@@ -244,7 +257,8 @@ describeFork("BenzoCCTPRouter (Fuji fork, real USDC)", () => {
 	});
 
 	it("forks against real deployed bytecode for USDC and CCTP", async () => {
-		expect(await ethers.provider.getCode(USDC_ADDRESS)).to.not.equal("0x");
+		expect(REMOTE_USDC_ADDRESS).to.not.equal(LOCAL_USDC_ADDRESS);
+		expect(await ethers.provider.getCode(LOCAL_USDC_ADDRESS)).to.not.equal("0x");
 		expect(
 			await ethers.provider.getCode(REAL_MESSAGE_TRANSMITTER),
 		).to.not.equal("0x");
@@ -268,16 +282,21 @@ describeFork("BenzoCCTPRouter (Fuji fork, real USDC)", () => {
 				),
 		)
 			.to.emit(router, "OnrampSettled")
-			.withArgs(recipient.signer.address, USDC_ADDRESS, amount, b32(nonce));
+			.withArgs(
+				recipient.signer.address,
+				LOCAL_USDC_ADDRESS,
+				amount,
+				b32(nonce),
+			);
 
 		// Happy path: the user's encrypted balance goes UP by `amount` and the
-		// router holds nothing afterwards (funds forwarded into the converter).
+		// local Fuji token is forwarded into the converter.
 		expect(await usdcBalanceOf(routerAddress)).to.equal(0n);
 		expect(await usdcBalanceOf(eercAddress)).to.equal(amount);
 
 		const balance = await eerc.getBalanceFromTokenAddress(
 			recipient.signer.address,
-			USDC_ADDRESS,
+			LOCAL_USDC_ADDRESS,
 		);
 		const decrypted = await getDecryptedBalance(
 			recipient.privateKey,
@@ -318,14 +337,19 @@ describeFork("BenzoCCTPRouter (Fuji fork, real USDC)", () => {
 				),
 		)
 			.to.emit(router, "OnrampSettled")
-			.withArgs(recipient.signer.address, USDC_ADDRESS, mintedAmount, b32(12n));
+			.withArgs(
+				recipient.signer.address,
+				LOCAL_USDC_ADDRESS,
+				mintedAmount,
+				b32(12n),
+			);
 
 		expect(await usdcBalanceOf(routerAddress)).to.equal(0n);
 		expect(await usdcBalanceOf(eercAddress)).to.equal(mintedAmount);
 
 		const balance = await eerc.getBalanceFromTokenAddress(
 			recipient.signer.address,
-			USDC_ADDRESS,
+			LOCAL_USDC_ADDRESS,
 		);
 		const decryptedHistory = decryptPCT(
 			recipient.privateKey,
