@@ -70,9 +70,10 @@ export type CctpSourceChain = {
  * user can bridge USDC/EURC *from* into Benzo. EURC is only issued on Ethereum,
  * Base, and Avalanche — Arbitrum and Optimism carry USDC only.
  *
- * Only the `staging` (testnet) table is populated today; every address here was
- * confirmed on-chain by the team. The `production` (mainnet) source-chain table
- * is a deliberate follow-up, populated when Benzo flips to mainnet CCTP.
+ * Both tiers are populated. Every `staging` (testnet) address was confirmed
+ * on-chain by the team; every `production` (mainnet) address is a canonical
+ * Circle native-USDC / EURC token that bridges into Benzo's Avalanche C-Chain
+ * eERC converter (Avalanche USDC 0xB97EF9Ef…, EURC 0xC891EB4c…).
  */
 export const CCTP_SOURCE_CHAINS: Record<
 	DeploymentTier,
@@ -157,9 +158,71 @@ export const CCTP_SOURCE_CHAINS: Record<
 			},
 		},
 	},
-	// Mainnet source chains are a follow-up (see doc comment above); populated at
-	// mainnet-CCTP time with the production-tier USDC/EURC token addresses.
-	production: {},
+	// Mainnet source chains. USDC on every domain routes to Avalanche USDC; EURC is
+	// only issued on Ethereum + Base and routes to Avalanche EURC. Addresses are
+	// Circle's canonical native-token deployments (checksum-verified).
+	production: {
+		ethereum: {
+			chain: "ethereum",
+			domain: CCTP_DOMAINS.ethereum,
+			rpcUrl: "https://ethereum-rpc.publicnode.com",
+			tokens: {
+				USDC: {
+					symbol: "USDC",
+					address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+					decimals: 6,
+				},
+				EURC: {
+					symbol: "EURC",
+					address: "0x1aBaEA1f7C830bD89Acc67eC4af516284b1bC33c",
+					decimals: 6,
+				},
+			},
+		},
+		base: {
+			chain: "base",
+			domain: CCTP_DOMAINS.base,
+			rpcUrl: "https://mainnet.base.org",
+			tokens: {
+				USDC: {
+					symbol: "USDC",
+					address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+					decimals: 6,
+				},
+				EURC: {
+					symbol: "EURC",
+					address: "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+					decimals: 6,
+				},
+			},
+		},
+		arbitrum: {
+			chain: "arbitrum",
+			domain: CCTP_DOMAINS.arbitrum,
+			rpcUrl: "https://arb1.arbitrum.io/rpc",
+			tokens: {
+				// Arbitrum One carries native USDC only — no Circle EURC issuance.
+				USDC: {
+					symbol: "USDC",
+					address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+					decimals: 6,
+				},
+			},
+		},
+		optimism: {
+			chain: "optimism",
+			domain: CCTP_DOMAINS.optimism,
+			rpcUrl: "https://mainnet.optimism.io",
+			tokens: {
+				// OP Mainnet carries native USDC only — no Circle EURC issuance.
+				USDC: {
+					symbol: "USDC",
+					address: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+					decimals: 6,
+				},
+			},
+		},
+	},
 };
 
 /**

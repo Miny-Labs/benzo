@@ -1,5 +1,4 @@
 {
-  "placeholder": true,
   "network": "avalanche",
   "chainId": 43114,
   "contracts": {
@@ -7,7 +6,155 @@
       "domain": 1,
       "tokenMessenger": "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d",
       "messageTransmitter": "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64",
-      "autoDepositRouter": null
+      "autoDepositRouter": "0x83F26C562082e3c455938fd48162e990494a4caE"
+    },
+    "eercConverter": {
+      "verifiers": {
+        "registration": {
+          "address": "0x35b4C4227082f67c01656A39aC47F6c5D6005CaA",
+          "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+          "transactionHash": "0xbac219b22bcc2bccd4556f0175831ac43b82a944709db7833cb1ce52edaa8077",
+          "blockNumber": 89870797,
+          "verified": true,
+          "snowtraceUrl": "https://snowtrace.io/address/0x35b4C4227082f67c01656A39aC47F6c5D6005CaA",
+          "constructorArguments": [],
+          "verifiedAt": "2026-07-09T11:07:22.532Z"
+        },
+        "mint": {
+          "address": "0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972",
+          "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+          "transactionHash": "0x3cf63072c88545b275f440b9613570c00d7c27d4d0bb6a13c067e2b1055a6f6e",
+          "blockNumber": 89871052,
+          "verified": false,
+          "snowtraceUrl": "https://snowtrace.io/address/0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972",
+          "constructorArguments": []
+        },
+        "transfer": {
+          "address": "0x4A716026a0C1F7158165520B6DF2009fFeB79f01",
+          "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+          "transactionHash": "0xe933a0c58f29bd1b6c28fda9ba88067723c736955ec6a15b1504c10b18e0f0da",
+          "blockNumber": 89871059,
+          "verified": true,
+          "snowtraceUrl": "https://snowtrace.io/address/0x4A716026a0C1F7158165520B6DF2009fFeB79f01",
+          "constructorArguments": [],
+          "verifiedAt": "2026-07-09T11:08:55.643Z"
+        },
+        "withdraw": {
+          "address": "0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7",
+          "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+          "transactionHash": "0xeedb6421a5bbd41a246409af547b349eb261d78c06dc248169b10afb155e173e",
+          "blockNumber": 89871065,
+          "verified": false,
+          "snowtraceUrl": "https://snowtrace.io/address/0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7",
+          "constructorArguments": []
+        },
+        "burn": {
+          "address": "0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d",
+          "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+          "transactionHash": "0x12e0400747c0a47c577a2e69a6634654b9337b053f4ff25854aad3a86168e7ff",
+          "blockNumber": 89871075,
+          "verified": true,
+          "snowtraceUrl": "https://snowtrace.io/address/0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d",
+          "constructorArguments": [],
+          "verifiedAt": "2026-07-09T11:10:29.746Z"
+        }
+      },
+      "registrar": {
+        "address": "0x902B8D5585A5124C9B9c001A95b7f520C07a79F2",
+        "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+        "transactionHash": "0x79840f5daf263354d7231757f54226e99475e997fc6716c8c990167aa7cbee97",
+        "blockNumber": 89871081,
+        "verified": false,
+        "snowtraceUrl": "https://snowtrace.io/address/0x902B8D5585A5124C9B9c001A95b7f520C07a79F2",
+        "constructorArguments": [
+          "0x35b4C4227082f67c01656A39aC47F6c5D6005CaA"
+        ]
+      },
+      "libraries": {
+        "babyJubJub": {
+          "address": "0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4",
+          "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+          "transactionHash": "0xa709fba4b4cbb74d4e0117b6e5a2b2c25cda2d5929703d383efb28e6dcd0dd32",
+          "blockNumber": 89871091,
+          "verified": true,
+          "snowtraceUrl": "https://snowtrace.io/address/0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4",
+          "constructorArguments": [],
+          "verifiedAt": "2026-07-09T11:12:05.523Z"
+        }
+      },
+      "encryptedERC": {
+        "address": "0x708d0b83461973F46041a36f588b8760dbC0Db0e",
+        "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+        "transactionHash": "0xeedcd8dc23d65c26cae204c32356f19e772b61451fa12b7aa997a850b2a07e92",
+        "blockNumber": 89871102,
+        "verified": false,
+        "snowtraceUrl": "https://snowtrace.io/address/0x708d0b83461973F46041a36f588b8760dbC0Db0e",
+        "constructorArguments": [
+          {
+            "registrar": "0x902B8D5585A5124C9B9c001A95b7f520C07a79F2",
+            "isConverter": true,
+            "name": "Benzo Private USDC",
+            "symbol": "bUSDC",
+            "decimals": 6,
+            "mintVerifier": "0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972",
+            "withdrawVerifier": "0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7",
+            "transferVerifier": "0x4A716026a0C1F7158165520B6DF2009fFeB79f01",
+            "burnVerifier": "0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d"
+          }
+        ],
+        "libraries": {
+          "contracts/eerc/libraries/BabyJubJub.sol:BabyJubJub": "0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4"
+        }
+      },
+      "auditor": {
+        "address": "0x5ba6F05b245C06c3a4C05e7bC4486dE3661393ea",
+        "publicKey": [
+          "13270544846756984075485900279152840407740399035899720104744459560747361451176",
+          "12277457165824861899668590887934998997594994069510014602248848330564512138694"
+        ],
+        "keyFile": ".auditor-key.local.json",
+        "custodyNote": "Auditor key already set on-chain; keep the matching private half out of git."
+      },
+      "tokens": {
+        "USDC": {
+          "address": "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+          "decimals": 6,
+          "tokenId": 1,
+          "symbol": "USDC"
+        },
+        "EURC": {
+          "address": "0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD",
+          "decimals": 6,
+          "tokenId": 2,
+          "symbol": "EURC"
+        }
+      }
+    },
+    "PrivateGiftEscrow": {
+      "address": "0xb22c366e000165683A51C2630F6Ab818e5227C94",
+      "authorizeDepositorTxHash": "0xa8f15c4be7b3bc9f3e6f302841bda26ef8696c7b833f6a377d1df7b6f6151668",
+      "blockNumber": 89873620,
+      "constructorArguments": [
+        "0x708d0b83461973F46041a36f588b8760dbC0Db0e"
+      ],
+      "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+      "eercAddress": "0x708d0b83461973F46041a36f588b8760dbC0Db0e",
+      "snowtraceUrl": "https://snowtrace.io/address/0xb22c366e000165683A51C2630F6Ab818e5227C94",
+      "transactionHash": "0x8285bc926b02653f7805c5651f4850eced2cd7c2da6a69aa9991fef584ac2876",
+      "verified": false
+    },
+    "benzoCctpRouter": {
+      "address": "0x83F26C562082e3c455938fd48162e990494a4caE",
+      "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
+      "transactionHash": "0x849db439c39756ecd3c66220d23ef25c7c958a1f4b74a1c12405e2d6f4d8e6c8",
+      "blockNumber": 89873648,
+      "snowtraceUrl": "https://snowtrace.io/address/0x83F26C562082e3c455938fd48162e990494a4caE",
+      "constructorArguments": [
+        "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64",
+        "0x708d0b83461973F46041a36f588b8760dbC0Db0e",
+        "0x902B8D5585A5124C9B9c001A95b7f520C07a79F2"
+      ],
+      "verified": false
     }
   }
 }

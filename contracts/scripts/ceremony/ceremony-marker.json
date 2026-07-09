@@ -1,31 +1,31 @@
 {
-  "build": "dev",
+  "build": "ceremony",
   "provingSystem": "groth16",
-  "contributions": 0,
-  "beacon": null,
-  "ptau": null,
-  "transcriptUrl": null,
-  "note": "DEV trusted setup: hardhat.config.ts setupSettings.contributionSettings.contributions is 0, so these verifiers are NOT from a real ceremony. They back Fuji/BenzoNet ONLY. deploy:mainnet refuses this build (guardrail #4). To make it mainnet-eligible, an operator runs scripts/ceremony/run-ceremony.ts (real phase-2 ceremony + public beacon), commits the regenerated verifiers, and this marker is rewritten to build:\"ceremony\" with contributions>0, a beacon, and fresh sha256 hashes. See docs/MAINNET_GO_NO_GO.md.",
+  "contributions": 3,
+  "beacon": "0xaf5de6fc51cc6adf6b82231983873c4902ef20be2c054d8f823b3261aa6109f7",
+  "ptau": "powers-of-tau-15.ptau",
+  "transcriptUrl": "https://raw.githubusercontent.com/Miny-Labs/benzo/main/docs/ceremony/transcript.md",
+  "note": "Production Groth16 phase-2 ceremony. Publish the transcript/attestations at transcriptUrl and regenerate the browser .wasm/.zkey + packages/config/public/circuits/manifest.json from these final zkeys.",
   "verifiers": {
     "registration": {
       "source": "contracts/contracts/verifiers/RegistrationCircuitGroth16Verifier.sol",
-      "sha256": "ee59ca8c0b6cb9ebca5ad98ac3fcdad72e85877fd50b20d1435ddd9fa2f1f96a"
+      "sha256": "5ecb819804d7b7959e46a4140fc7aad8eb7a38f760762f4124d0fd1aa778486b"
     },
     "transfer": {
       "source": "contracts/contracts/verifiers/TransferCircuitGroth16Verifier.sol",
-      "sha256": "7f2d38006117905058d7068f5048270fcbc8e096c2bb449909c3bdd7cc9bce83"
+      "sha256": "13676fa7a3cdb2d11d3ba47ef5a681333fc870f1e7a084a5debe1622268104c4"
     },
     "mint": {
       "source": "contracts/contracts/verifiers/MintCircuitGroth16Verifier.sol",
-      "sha256": "224adcf030d51c11c52c371a372238fb78000de5aac9a02080b72e6219517377"
+      "sha256": "231883ffdbbf7ddc9aa2eead3167d79eafb84a13c3cf32812aa0275ac619412b"
     },
     "withdraw": {
       "source": "contracts/contracts/verifiers/WithdrawCircuitGroth16Verifier.sol",
-      "sha256": "4c99119392c9b95156506851cf84a562d7227ac9d7703ac699ad87eafbebff6c"
+      "sha256": "103e1eec95406279f69f4909ef4d1e3275f79160f9996c4e28042897df236e5d"
     },
     "burn": {
       "source": "contracts/contracts/verifiers/BurnCircuitGroth16Verifier.sol",
-      "sha256": "634ecdf80f014c0bc8eb8ff43f2bd9237659b7f8128a662ddaf992d046123172"
+      "sha256": "431130b8e6b62bd7a76fbfdb7ceb7b6afe979d8aff7da9b03326efe0e5306271"
     }
   }
 }

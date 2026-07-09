@@ -24,13 +24,6 @@ import {
 	TransferVerifier__factory,
 	WithdrawVerifier__factory,
 } from "../../typechain-types/factories/contracts/eerc/prod";
-import {
-	BurnCircuitGroth16Verifier__factory,
-	MintCircuitGroth16Verifier__factory,
-	RegistrationCircuitGroth16Verifier__factory,
-	TransferCircuitGroth16Verifier__factory,
-	WithdrawCircuitGroth16Verifier__factory,
-} from "../../typechain-types/factories/contracts/verifiers";
 import type { User } from "./user";
 
 /**
@@ -79,39 +72,37 @@ export const deployVerifiers = async (
 		};
 	}
 
-	// if not provided, deploy generated verifiers
-	const registrationVerifierFactory =
-		new RegistrationCircuitGroth16Verifier__factory(signer);
-	const registrationVerifier = await registrationVerifierFactory.deploy();
-	await registrationVerifier.waitForDeployment();
-
-	const mintVerifierFactory = new MintCircuitGroth16Verifier__factory(signer);
-	const mintVerifier = await mintVerifierFactory.deploy();
-	await mintVerifier.waitForDeployment();
-
-	const withdrawVerifierFactory = new WithdrawCircuitGroth16Verifier__factory(
-		signer,
-	);
-	const withdrawVerifier = await withdrawVerifierFactory.deploy();
-	await withdrawVerifier.waitForDeployment();
-
-	const transferVerifierFactory = new TransferCircuitGroth16Verifier__factory(
-		signer,
-	);
-	const transferVerifier = await transferVerifierFactory.deploy();
-	await transferVerifier.waitForDeployment();
-
-	const burnVerifier = await new BurnCircuitGroth16Verifier__factory(
-		signer,
-	).deploy();
-	await burnVerifier.waitForDeployment();
+	// Default (non-prod) path: deploy the DEV verifiers generated from the SAME
+	// dev zkeys the proof helpers below prove with (scripts/gen-test-verifiers.ts,
+	// gitignored under contracts/verifiers-dev, regenerated on every `pretest`).
+	//
+	// The committed contracts/verifiers/*CircuitGroth16Verifier.sol are the REAL
+	// multi-party CEREMONY verifiers, whose non-reproducible proving zkeys CI never
+	// has — deploying THEM here would fail every proof with InvalidProof(). Their
+	// correctness is enforced separately by the ceremony-marker sha256 gate
+	// (scripts/ceremony/marker.ts, asserted in test/benzo/MainnetGuardrails.test.ts)
+	// and by the on-chain deploy that uses them verbatim. This keeps the proof
+	// round-trip fully covered against a self-consistent (proving key ↔ verifier)
+	// setup without needing the ceremony zkeys in CI.
+	const deployDevVerifier = async (name: string): Promise<string> => {
+		const factory = await ethers.getContractFactory(name, signer);
+		const verifier = await factory.deploy();
+		await verifier.waitForDeployment();
+		return verifier.target.toString();
+	};
 
 	return {
-		registrationVerifier: registrationVerifier.target.toString(),
-		mintVerifier: mintVerifier.target.toString(),
-		withdrawVerifier: withdrawVerifier.target.toString(),
-		transferVerifier: transferVerifier.target.toString(),
-		burnVerifier: burnVerifier.target.toString(),
+		registrationVerifier: await deployDevVerifier(
+			"RegistrationCircuitGroth16VerifierDev",
+		),
+		mintVerifier: await deployDevVerifier("MintCircuitGroth16VerifierDev"),
+		withdrawVerifier: await deployDevVerifier(
+			"WithdrawCircuitGroth16VerifierDev",
+		),
+		transferVerifier: await deployDevVerifier(
+			"TransferCircuitGroth16VerifierDev",
+		),
+		burnVerifier: await deployDevVerifier("BurnCircuitGroth16VerifierDev"),
 	};
 };
 

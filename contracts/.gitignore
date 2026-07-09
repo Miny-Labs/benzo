@@ -14,6 +14,11 @@
 *.r1cs
 *.ptau
 
+# DEV verifiers regenerated from the dev zkeys for the proof round-trip tests
+# (scripts/gen-test-verifiers.ts, run on pretest). Never committed: the committed
+# verifiers under contracts/verifiers are the real CEREMONY build.
+/contracts/verifiers-dev/
+
 # Local reports
 gas-report.txt
 

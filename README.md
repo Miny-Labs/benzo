@@ -223,12 +223,16 @@ moving inside a gated, auditor-ready chain.
 
 ## Mainnet Readiness
 
-Benzo is **mainnet-ready, not mainnet-deployed** — a deliberate, paused gate. The
-codebase is wired for the Avalanche C-Chain (`43114`) and the whole path is proven
-on Fuji, but **nothing broadcasts to mainnet**. Going live is mostly a config flip;
-the one genuinely hard, unstarted step is the production trusted setup. Mainnet is
-**C-Chain converter only** — BenzoNet stays testnet-only and is excluded from
-mainnet. Full checklist: [`docs/MAINNET_GO_NO_GO.md`](docs/MAINNET_GO_NO_GO.md).
+Benzo is **mainnet-ready, not yet mainnet-deployed** — a deliberate, paused gate. The
+codebase is wired for the Avalanche C-Chain (`43114`) and the whole path is proven on
+Fuji (17/17 real-funds flows), but **nothing broadcasts to mainnet** without an explicit
+human go. The production **Groth16 phase-2 trusted-setup ceremony is now complete**
+(multi-machine contribution chain + public drand beacon; transcript at
+[`docs/ceremony/transcript.md`](docs/ceremony/transcript.md)), so `deploy:mainnet`'s
+ceremony gate is satisfied — the remaining steps are the guarded deploy itself (after a
+C-Chain fork dry-run) plus the config cutover. Mainnet is **C-Chain converter only** —
+BenzoNet stays testnet-only and is excluded from mainnet. Full checklist:
+[`docs/MAINNET_GO_NO_GO.md`](docs/MAINNET_GO_NO_GO.md).
 
 **The split: what is config vs. what is new work.**
 
@@ -236,7 +240,7 @@ mainnet. Full checklist: [`docs/MAINNET_GO_NO_GO.md`](docs/MAINNET_GO_NO_GO.md).
 | --- | --- | --- |
 | **Pure config** | RPC `https://api.avax.network/ext/bc/C/rpc`, explorer `snowtrace.io`, chainId `43114`; CCTP domain unchanged (Avalanche = `1`); attestation base sandbox → prod (`iris-api.circle.com`); separate prod secrets (`APP_MASTER_KEY`, `OPS_PRIVATE_KEY`, deployer, auditor, `DATABASE_URL`). | Wired; flip at cutover |
 | **New code (already shipped on testnet)** | Token-agnostic per-network deploy, the `avalanche` network wiring, and the guard-railed `deploy:mainnet` command. | Done — this milestone |
-| **New crypto (the hard part)** | A real multi-operator Groth16 phase-2 ceremony to replace the dev (`contributions:0`) verifiers. | **Not done — required before any mainnet deploy** |
+| **New crypto (the hard part)** | A real multi-operator Groth16 phase-2 ceremony to replace the dev (`contributions:0`) verifiers. | **Done — 3-machine contribution chain + public drand beacon (round 30261477); verifiers regenerated, marker flipped to `build:"ceremony"`, browser proving keys re-coupled** |
 
 **Exact mainnet addresses (Circle / CCTP V2, verified on-chain).**
 

@@ -1,15 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { CCTP_SOURCE_CHAINS } from "@benzo/config";
+import {
+	CCTP_SOURCE_CHAINS,
+	type DeploymentTier,
+	tierForNetwork,
+} from "@benzo/config";
 import { ethers, network, run } from "hardhat";
 
-const FUJI_CHAIN_ID = 43113n;
+// Supported deploy targets. Fuji is the testnet (staging) target; avalanche is
+// the mainnet (production) C-Chain. Each entry pins the expected chainId and the
+// explorer host so the gate fails fast and Snowtrace links resolve correctly.
+const SUPPORTED_NETWORKS = {
+	fuji: { chainId: 43113n, explorerBase: "https://testnet.snowtrace.io" },
+	avalanche: { chainId: 43114n, explorerBase: "https://snowtrace.io" },
+} as const;
+
+type SupportedNetwork = keyof typeof SUPPORTED_NETWORKS;
+
+const isSupportedNetwork = (name: string): name is SupportedNetwork =>
+	Object.prototype.hasOwnProperty.call(SUPPORTED_NETWORKS, name);
+
 const CONTRACTS_MANIFEST_PATH = path.join(
 	__dirname,
 	"..",
 	"..",
 	"deployments",
-	"fuji.json",
+	`${network.name}.json`,
 );
 const CONFIG_MANIFEST_PATH = path.join(
 	__dirname,
@@ -20,7 +36,7 @@ const CONFIG_MANIFEST_PATH = path.join(
 	"config",
 	"src",
 	"deployments",
-	"fuji.json",
+	`${network.name}.json`,
 );
 
 type JsonValue =
@@ -55,8 +71,12 @@ type ConfigManifest = {
 	tier?: string;
 };
 
-const snowtraceAddressUrl = (address: string) =>
-	`https://testnet.snowtrace.io/address/${address}`;
+const snowtraceAddressUrl = (address: string) => {
+	const explorerBase = isSupportedNetwork(network.name)
+		? SUPPORTED_NETWORKS[network.name].explorerBase
+		: "https://testnet.snowtrace.io";
+	return `${explorerBase}/address/${address}`;
+};
 
 const SOURCE_USDC_CHAINS = [
 	"optimism",
@@ -108,12 +128,13 @@ const tokenAddress = (
 };
 
 const cctpSourceTokenAddress = (
+	tier: DeploymentTier,
 	chain: (typeof SOURCE_USDC_CHAINS)[number] | (typeof SOURCE_EURC_CHAINS)[number],
 	symbol: "USDC" | "EURC",
 ): string => {
-	const token = CCTP_SOURCE_CHAINS.staging[chain]?.tokens[symbol];
+	const token = CCTP_SOURCE_CHAINS[tier][chain]?.tokens[symbol];
 	if (token === undefined) {
-		throw new Error(`CCTP staging ${chain}.${symbol} source token is not set`);
+		throw new Error(`CCTP ${tier} ${chain}.${symbol} source token is not set`);
 	}
 
 	return ethers.getAddress(token.address);
@@ -145,11 +166,22 @@ const main = async () => {
 		.getNetwork()
 		.then((providerNetwork) => providerNetwork.chainId);
 
-	if (network.name !== "fuji" || chainId !== FUJI_CHAIN_ID) {
+	if (!isSupportedNetwork(network.name)) {
 		throw new Error(
-			`CCTP router deploy must target Fuji (43113); got ${network.name} (${chainId})`,
+			`CCTP router deploy must target one of: ${Object.keys(
+				SUPPORTED_NETWORKS,
+			).join(", ")}; got ${network.name}`,
 		);
 	}
+	const target = SUPPORTED_NETWORKS[network.name];
+	if (chainId !== target.chainId) {
+		throw new Error(
+			`CCTP router deploy expected chainId ${target.chainId} for ${network.name}; got ${chainId}`,
+		);
+	}
+	// staging (fuji) draws sources from the testnet CCTP table; production
+	// (avalanche) from the mainnet table — see CCTP_SOURCE_CHAINS in @benzo/config.
+	const tier = tierForNetwork(network.name);
 
 	const contractsManifest =
 		await readJson<ContractsManifest>(CONTRACTS_MANIFEST_PATH);
@@ -209,13 +241,13 @@ const main = async () => {
 		...SOURCE_USDC_CHAINS.map((chain) => ({
 			chain,
 			symbol: "USDC" as const,
-			remote: cctpSourceTokenAddress(chain, "USDC"),
+			remote: cctpSourceTokenAddress(tier, chain, "USDC"),
 			local: usdc,
 		})),
 		...SOURCE_EURC_CHAINS.map((chain) => ({
 			chain,
 			symbol: "EURC" as const,
-			remote: cctpSourceTokenAddress(chain, "EURC"),
+			remote: cctpSourceTokenAddress(tier, chain, "EURC"),
 			local: eurc,
 		})),
 	];
@@ -258,8 +290,8 @@ const main = async () => {
 			: { verifiedAt: verification.verifiedAt }),
 	};
 
-	contractsManifest.network = "fuji";
-	contractsManifest.chainId = Number(FUJI_CHAIN_ID);
+	contractsManifest.network = network.name;
+	contractsManifest.chainId = Number(target.chainId);
 	contracts.benzoCctpRouter = record;
 	cctp.autoDepositRouter = routerAddress;
 	await writeJson(CONTRACTS_MANIFEST_PATH, contractsManifest);

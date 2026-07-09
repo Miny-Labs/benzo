@@ -2,13 +2,26 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ethers, network, run } from "hardhat";
 
-const FUJI_CHAIN_ID = 43113n;
+// Supported deploy targets. Fuji is the testnet target; avalanche is the mainnet
+// C-Chain. Each entry pins the expected chainId and the explorer host so the
+// gate fails fast on a mismatched --network and Snowtrace links resolve to the
+// correct (testnet vs mainnet) explorer.
+const SUPPORTED_NETWORKS = {
+	fuji: { chainId: 43113n, explorerBase: "https://testnet.snowtrace.io" },
+	avalanche: { chainId: 43114n, explorerBase: "https://snowtrace.io" },
+} as const;
+
+type SupportedNetwork = keyof typeof SUPPORTED_NETWORKS;
+
+const isSupportedNetwork = (name: string): name is SupportedNetwork =>
+	Object.prototype.hasOwnProperty.call(SUPPORTED_NETWORKS, name);
+
 const DEPLOYMENTS_PATH = path.join(
 	__dirname,
 	"..",
 	"..",
 	"deployments",
-	"fuji.json",
+	`${network.name}.json`,
 );
 // Mirror 09-cctp-router.ts: propagate the deployed address into the shared
 // @benzo/config manifest as well, so app/service consumers resolve
@@ -22,7 +35,7 @@ const CONFIG_MANIFEST_PATH = path.join(
 	"config",
 	"src",
 	"deployments",
-	"fuji.json",
+	`${network.name}.json`,
 );
 
 type DeploymentEntry = string | { address?: unknown };
@@ -132,8 +145,12 @@ const resolveEercAddress = (deployments: Deployments): string => {
 	);
 };
 
-const snowtraceAddressUrl = (address: string) =>
-	`https://testnet.snowtrace.io/address/${address}`;
+const snowtraceAddressUrl = (address: string) => {
+	const explorerBase = isSupportedNetwork(network.name)
+		? SUPPORTED_NETWORKS[network.name].explorerBase
+		: "https://testnet.snowtrace.io";
+	return `${explorerBase}/address/${address}`;
+};
 
 const verifyPrivateGiftEscrow = async (
 	address: string,
@@ -161,9 +178,17 @@ const main = async () => {
 		.getNetwork()
 		.then((providerNetwork) => providerNetwork.chainId);
 
-	if (network.name !== "fuji" || chainId !== FUJI_CHAIN_ID) {
+	if (!isSupportedNetwork(network.name)) {
 		throw new Error(
-			`PrivateGiftEscrow deploy must target Fuji (43113); got ${network.name} (${chainId})`,
+			`PrivateGiftEscrow deploy must target one of: ${Object.keys(
+				SUPPORTED_NETWORKS,
+			).join(", ")}; got ${network.name}`,
+		);
+	}
+	const target = SUPPORTED_NETWORKS[network.name];
+	if (chainId !== target.chainId) {
+		throw new Error(
+			`PrivateGiftEscrow deploy expected chainId ${target.chainId} for ${network.name}; got ${chainId}`,
 		);
 	}
 
@@ -202,8 +227,8 @@ const main = async () => {
 	const constructorArguments = [eercAddress];
 	const verification = await verifyPrivateGiftEscrow(address, constructorArguments);
 
-	deployments.network = "fuji";
-	deployments.chainId = Number(FUJI_CHAIN_ID);
+	deployments.network = network.name;
+	deployments.chainId = Number(target.chainId);
 	deployments.contracts = {
 		...deployments.contracts,
 		PrivateGiftEscrow: {
