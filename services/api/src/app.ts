@@ -66,6 +66,7 @@ import {
 	createSnarkjsPayrollProver,
 	type PayrollProver,
 } from "./payroll/prover.js";
+import type { TreasuryReceiptClient } from "./treasury/reconciler.js";
 
 export type BuildAppOptions = {
 	adminChain?: AdminChainClient;
@@ -85,6 +86,7 @@ export type BuildAppOptions = {
 	payrollSubmitter?: PayrollSubmitter;
 	pool?: Pool;
 	startBoss?: boolean;
+	treasuryReceiptClient?: TreasuryReceiptClient;
 	treasuryRegistrar?: TreasuryRegistrar;
 };
 
@@ -136,6 +138,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
 	const treasuryRegistrar =
 		options.treasuryRegistrar ??
 		createViemTreasuryRegistrar(config, publicClient, payrollProver);
+	const treasuryReceiptClient: TreasuryReceiptClient =
+		options.treasuryReceiptClient ?? {
+			async getTransactionReceipt({ hash }) {
+				return publicClient.getTransactionReceipt({ hash });
+			},
+		};
 	const onrampChain =
 		options.onrampChain ?? createOnrampChainClient(config, publicClient);
 	let bossStarted = false;
@@ -235,6 +243,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
 					iris: onrampIris,
 					logger: fastify.log as FastifyBaseLogger,
 					relayer: onrampRelayer,
+				},
+				{
+					config,
+					receiptClient: treasuryReceiptClient,
 				},
 			);
 		}

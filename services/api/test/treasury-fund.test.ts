@@ -109,6 +109,8 @@ function testConfig(databaseUrl: string): ApiConfig {
 				tokenId: 2n,
 			},
 		],
+		treasuryReconcileCron: "*/30 * * * * *",
+		treasuryReconcilerEnabled: true,
 	};
 }
 

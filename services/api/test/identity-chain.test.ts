@@ -52,6 +52,8 @@ const config: ApiConfig = {
 	sessionTtlDays: 7,
 	siweNonceTtlMinutes: 10,
 	treasuryFundingTokens: [],
+	treasuryReconcileCron: "*/30 * * * * *",
+	treasuryReconcilerEnabled: true,
 };
 
 describe("OnChainIdentityChainClient", () => {
