@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -199,37 +200,64 @@ const runCeremony = async (): Promise<void> => {
 
 	for (const circuit of CEREMONY_CIRCUITS) {
 		const r1cs = findR1cs(artifactsDir, circuit);
-		const zkey0 = path.join(outDir, `${circuit}.0000.zkey`);
-		console.log(`[${circuit}] newZKey from ${path.basename(ptau)}`);
-		await zKey.newZKey(r1cs, ptau, zkey0);
-
-		let current = zkey0;
-		for (let i = 1; i <= contributions; i += 1) {
-			const next = path.join(
-				outDir,
-				`${circuit}.${String(i).padStart(4, "0")}.zkey`,
-			);
-			console.log(`[${circuit}] contribution ${i}/${contributions}`);
-			// A real ceremony collects entropy from an independent operator; the
-			// local randomBytes here stands in for the per-machine step.
-			await zKey.contribute(
-				current,
-				next,
-				`benzo-ceremony-${circuit}-${i}`,
-				randomBytes(32).toString("hex"),
-			);
-			current = next;
-		}
-
 		const finalZkey = path.join(outDir, `${circuit}.final.zkey`);
-		console.log(`[${circuit}] applying public beacon`);
-		await zKey.beacon(
-			current,
-			finalZkey,
-			`benzo-ceremony-${circuit}-beacon`,
-			beacon,
-			beaconIters,
-		);
+
+		// ── Path A: adopt a pre-computed MULTI-PARTY final zkey ────────────────
+		// When CEREMONY_FINAL_ZKEY_DIR is set, the final .zkey for each circuit was
+		// already produced OUT OF BAND by a real multi-operator phase-2 contribution
+		// chain (cer-1 -> cer-2 -> cer-3, per-machine entropy) + a public drand
+		// beacon; the chain-of-custody hashes are published in the transcript at
+		// CEREMONY_TRANSCRIPT_URL. We adopt that .zkey verbatim and SKIP the
+		// in-process newZKey / contribute / beacon so the exported verifier is
+		// coupled to the ACTUAL ceremony key, then fall through to the UNCHANGED
+		// verifier export below. CEREMONY_CONTRIBUTIONS / CEREMONY_BEACON still
+		// populate the marker to describe that out-of-band ceremony.
+		const finalZkeyDir = process.env.CEREMONY_FINAL_ZKEY_DIR;
+		if (finalZkeyDir) {
+			const src = path.join(finalZkeyDir, `${circuit}.final.zkey`);
+			if (!existsSync(src)) {
+				throw new Error(
+					`CEREMONY_FINAL_ZKEY_DIR is set but ${src} is missing`,
+				);
+			}
+			if (path.resolve(src) !== path.resolve(finalZkey)) {
+				copyFileSync(src, finalZkey);
+			}
+			console.log(
+				`[${circuit}] adopted multi-party final zkey from ${path.relative(CONTRACTS_ROOT, src)}`,
+			);
+		} else {
+			const zkey0 = path.join(outDir, `${circuit}.0000.zkey`);
+			console.log(`[${circuit}] newZKey from ${path.basename(ptau)}`);
+			await zKey.newZKey(r1cs, ptau, zkey0);
+
+			let current = zkey0;
+			for (let i = 1; i <= contributions; i += 1) {
+				const next = path.join(
+					outDir,
+					`${circuit}.${String(i).padStart(4, "0")}.zkey`,
+				);
+				console.log(`[${circuit}] contribution ${i}/${contributions}`);
+				// A real ceremony collects entropy from an independent operator; the
+				// local randomBytes here stands in for the per-machine step.
+				await zKey.contribute(
+					current,
+					next,
+					`benzo-ceremony-${circuit}-${i}`,
+					randomBytes(32).toString("hex"),
+				);
+				current = next;
+			}
+
+			console.log(`[${circuit}] applying public beacon`);
+			await zKey.beacon(
+				current,
+				finalZkey,
+				`benzo-ceremony-${circuit}-beacon`,
+				beacon,
+				beaconIters,
+			);
+		}
 
 		console.log(`[${circuit}] exporting verifier solidity`);
 		const solidity = renameVerifierContract(

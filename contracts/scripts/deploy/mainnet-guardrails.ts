@@ -24,7 +24,10 @@ export const AVALANCHE_CCTP_TOKEN_MESSENGER =
 	"0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d";
 
 // Minimum AVAX the deployer must hold before a mainnet deploy is allowed.
-export const MIN_DEPLOYER_BALANCE_WEI = 2n * 10n ** 18n; // 2 AVAX
+// Lowered 2026-07-09: the full eERC stack is ~16.6M gas — ~0.001 AVAX at normal
+// C-Chain gas, and the deploy is timed to a low-base-fee window. 0.1 AVAX keeps a
+// large sanity margin over the real cost without over-provisioning the hot key.
+export const MIN_DEPLOYER_BALANCE_WEI = 10n ** 17n; // 0.1 AVAX
 
 export type MainnetGuardrailCode =
 	| "confirm_flag_missing"

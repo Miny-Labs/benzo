@@ -236,10 +236,24 @@ function assertManifestMatches(
 	}
 }
 
+// The deployment manifest ships in two shapes. The canonical
+// contracts/deployments/*.json nests the converter under
+// `contracts.eercConverter` (addresses as `{ address }` objects); the
+// @benzo/config-bundled copy is flat (`contracts.EncryptedERC`,
+// `contracts.Registrar`, `contracts.tokens` as bare strings/objects). Read each
+// field from the nested path first, then fall back to the flat one, so the
+// backend resolves the token registry + on-chain addresses regardless of which
+// manifest EERC_DEPLOYMENT_MANIFEST points at. A schema mismatch here previously
+// yielded an EMPTY token registry, which silently disabled treasury funding /
+// payroll (deposit → 503 treasury_token_not_configured).
 function extractRegistry(manifest: unknown): DeploymentRegistry {
 	const converter = ["contracts", "eercConverter"];
 	const converterAddress = normalizeMaybeAddress(
-		readStringPath(manifest, [...converter, "encryptedERC", "address"]),
+		readFirstStringPath(manifest, [
+			[...converter, "encryptedERC", "address"],
+			["contracts", "EncryptedERC"],
+			["contracts", "encryptedERC"],
+		]),
 	);
 
 	return {
@@ -248,12 +262,24 @@ function extractRegistry(manifest: unknown): DeploymentRegistry {
 		converterAddress,
 		encryptedErcAddress: converterAddress,
 		registrarAddress: normalizeMaybeAddress(
-			readStringPath(manifest, [...converter, "registrar", "address"]),
+			readFirstStringPath(manifest, [
+				[...converter, "registrar", "address"],
+				["contracts", "Registrar"],
+				["contracts", "registrar"],
+			]),
 		),
 		handleRegistryAddress: normalizeMaybeAddress(
-			readStringPath(manifest, ["contracts", "handleRegistry"]),
+			readFirstStringPath(manifest, [
+				["contracts", "handleRegistry"],
+				["contracts", "HandleRegistry"],
+			]),
 		),
-		tokens: extractTokens(readValuePath(manifest, [...converter, "tokens"])),
+		tokens: extractTokens(
+			readFirstValuePath(manifest, [
+				[...converter, "tokens"],
+				["contracts", "tokens"],
+			]),
+		),
 		cctp: extractCctp(readValuePath(manifest, ["contracts", "cctp"])),
 	};
 }
@@ -327,6 +353,30 @@ function readValuePath(value: unknown, keys: string[]): unknown {
 function readStringPath(value: unknown, keys: string[]): string | null {
 	const resolved = readValuePath(value, keys);
 	return typeof resolved === "string" ? resolved : null;
+}
+
+// Return the first non-nullish value across candidate paths — lets a single
+// field be read from either the nested (eercConverter) or flat manifest shape.
+function readFirstValuePath(value: unknown, paths: string[][]): unknown {
+	for (const keys of paths) {
+		const resolved = readValuePath(value, keys);
+		if (resolved !== null && resolved !== undefined) {
+			return resolved;
+		}
+	}
+
+	return null;
+}
+
+function readFirstStringPath(value: unknown, paths: string[][]): string | null {
+	for (const keys of paths) {
+		const resolved = readStringPath(value, keys);
+		if (resolved !== null) {
+			return resolved;
+		}
+	}
+
+	return null;
 }
 
 function readNumberPath(value: unknown, keys: string[]): number | null {
