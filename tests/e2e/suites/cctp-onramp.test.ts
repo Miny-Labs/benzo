@@ -3,11 +3,13 @@ import { loadE2EConfig } from "../src/config.js";
 import { describeLive } from "../src/env.js";
 import { createPublicClientFor, isReady, type Preflight, preflightLive } from "../src/preflight.js";
 
-// CCTP onramp against the live BenzoCCTPRouter. The full cross-chain path
-// (burn on a source Sepolia chain -> Iris attestation -> receiveMessage on Fuji
-// -> eERC depositFor) is exercised nightly; a bounded Iris poll keeps it from
-// hanging. Here we always assert the on-chain wiring the flow depends on, and
-// only run the funded bridge when a source chain + funds are configured.
+// CCTP onramp against the live BenzoCCTPRouter. This suite asserts the on-chain
+// wiring the funded bridge depends on: the router is deployed, allows the onramp
+// token, and a CCTP source chain is configured. The full cross-chain money path
+// (burn on a source Sepolia chain -> bounded Iris attestation poll -> settleDeposit
+// on Fuji -> eERC depositFor -> decrypt-and-assert) is the next increment, built
+// on the primitives in ../src/cctp/{onramp,iris}.ts. Kept as an honest wiring
+// check rather than claiming to exercise a flow it does not yet run end-to-end.
 describeLive("cctp-onramp (live)", () => {
 	const config = loadE2EConfig();
 	let pf: Preflight | undefined;

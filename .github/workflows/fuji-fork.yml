@@ -27,6 +27,6 @@ jobs:
       - name: Fuji-fork integration tests (real USDC + CCTP bytecode)
         env:
           FORK: fuji
-        run: pnpm --filter @benzo/contracts test
+        run: pnpm --filter @benzo/contracts test:integration
       - name: Funded e2e self-skips with no funds
         run: pnpm --filter @benzo/e2e test

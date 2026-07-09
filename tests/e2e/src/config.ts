@@ -59,11 +59,14 @@ function resolveTarget(explicit?: E2ETarget): E2ETarget {
 
 function rpcUrlFor(target: E2ETarget, chain: Chain): string {
 	// Per-target override, else the viem chain's default endpoint. BenzoNet has
-	// no public RPC, so BENZONET_RPC_URL must be supplied for that target.
-	const override = envOr(
-		target === "fuji" ? "FUJI_RPC_URL" : "BENZONET_RPC_URL",
-		"",
-	);
+	// no public RPC, so a BenzoNet URL must be supplied for that target. Accept
+	// both the namespaced BENZO_E2E_* names documented in .env.example and the
+	// bare names for parity with the contracts deploy config.
+	const override =
+		envOr(
+			target === "fuji" ? "BENZO_E2E_FUJI_RPC_URL" : "BENZO_E2E_BENZONET_RPC_URL",
+			"",
+		) || envOr(target === "fuji" ? "FUJI_RPC_URL" : "BENZONET_RPC_URL", "");
 	return override !== "" ? override : chain.rpcUrls.default.http[0];
 }
 
