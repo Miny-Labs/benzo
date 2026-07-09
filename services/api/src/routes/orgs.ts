@@ -1,6 +1,6 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
-import { getAddress, isAddress, type Hex } from "viem";
+import { getAddress, isAddress, pad, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { z } from "zod";
 import type {
@@ -15,6 +15,7 @@ import {
 	auditLog,
 	kycRecords,
 	onboardings,
+	onrampIntents,
 	orgMemberAllowlist,
 	orgMembers,
 	orgTreasuries,
@@ -22,7 +23,9 @@ import {
 	treasuryDeposits,
 	users,
 	type OnboardingStatus,
+	type OnrampStatus,
 	type OrgMemberAllowlistStatus,
+	type TreasuryDepositStatus,
 } from "../db/schema.js";
 import {
 	ROLE_RANK,
@@ -30,6 +33,13 @@ import {
 	makeRequireOrgRole,
 } from "../orgs/access.js";
 import type { OnboardingChainClient } from "../onboarding/chain.js";
+import { resolveSourceDomain } from "../onramp/domains.js";
+import {
+	FUND_SOURCE_CHAINS,
+	resolveTreasuryFundSource,
+} from "../onramp/fundsource.js";
+import { encodeOnrampHookData } from "../onramp/hookdata.js";
+import { createIntent, serializeIntent } from "../onramp/service.js";
 import {
 	createManagedEercAccount,
 	deserializeManagedEercAccount,
@@ -82,6 +92,35 @@ const treasuryDepositSchema = z.object({
 	idempotencyKey: z.string().trim().min(1).max(255),
 	token: z.enum(["usdc", "eurc"]),
 });
+
+const fundIntentSchema = z.object({
+	// A CCTP source chain from @benzo/config (resolved authoritatively below).
+	sourceChain: z.enum(FUND_SOURCE_CHAINS),
+	token: z.enum(["usdc", "eurc"]),
+	amount: z.string().trim().regex(/^[1-9][0-9]*$/),
+	// The signed source-chain burn tx. Omitted on a preview (params only); when
+	// present, a pending CCTP transfer is recorded for the relayer to finalize.
+	sourceTxHash: z
+		.string()
+		.trim()
+		.regex(/^0x[0-9a-fA-F]{64}$/)
+		.optional(),
+});
+
+// Unified deposits view is paginated so a large org can't pull every row into
+// memory (CCTP intents accumulate even on failed/parked transfers). `before` is
+// the createdAt ISO cursor returned as `nextCursor` on the previous page.
+const DEPOSITS_PAGE_MAX = 200;
+const depositsQuerySchema = z.object({
+	before: z.string().datetime().optional(),
+	limit: z.coerce.number().int().min(1).max(DEPOSITS_PAGE_MAX).default(50),
+});
+
+// CCTP V2 fast-transfer tuning for the treasury-funding burn — mirrors the user
+// onramp quote: minFinalityThreshold 2000 = standard (hard-finality) transfer,
+// which needs no per-transfer fee. These are CCTP protocol params.
+const TREASURY_FUND_MAX_FEE = "0";
+const TREASURY_FUND_MIN_FINALITY_THRESHOLD = 2000;
 
 const evmAddress = /^0x[0-9a-fA-F]{40}$/;
 const approvedKycOnboardingStatuses = new Set<OnboardingStatus>([
@@ -775,7 +814,245 @@ export const orgsRoutes: FastifyPluginAsync<OrgsRoutesOptions> = async (
 			});
 		},
 	);
+
+	// POST /orgs/:id/treasury/fund-intent — cross-chain treasury funding (#114).
+	// Returns the exact depositForBurnWithHook params for the source chain so the
+	// org's funding wallet signs ONE burn whose CCTP mint hook auto-deposits into
+	// the TREASURY's encrypted eERC balance (hookData carries the treasury pubkey).
+	// With a sourceTxHash it also records a pending CCTP transfer that the existing
+	// onramp relayer finalizes into a `treasury_deposits` (source='cctp') row.
+	fastify.post(
+		"/orgs/:id/treasury/fund-intent",
+		{ preHandler: requireOrgRole("admin") },
+		async (request, reply) => {
+			const orgId = (request.params as { id: string }).id;
+			const body = fundIntentSchema.safeParse(request.body);
+			if (!body.success) {
+				return reply.code(400).send({ error: "invalid_fund_intent" });
+			}
+
+			// The router is the CCTP mintRecipient/destinationCaller; without its
+			// address the quote can't be built, so fail clearly (mirrors the onramp
+			// quote) rather than emitting an unusable burn.
+			const router = options.config.autoDepositRouterAddress;
+			if (!router) {
+				return reply.code(503).send({ error: "router_not_configured" });
+			}
+
+			// The destination treasury token must be configured so a credited funding
+			// can be mapped to an eERC tokenId and recorded as a deposit.
+			const destToken = resolveFundingToken(options.config, body.data.token);
+			if (!destToken) {
+				return reply
+					.code(503)
+					.send({ error: "treasury_token_not_configured" });
+			}
+
+			// Source chain + per-chain token availability + domain come from
+			// @benzo/config; reject unsupported chain/token combos (e.g. EURC on
+			// Arbitrum/Optimism, which carry USDC only).
+			const source = resolveTreasuryFundSource(
+				options.config.tier,
+				body.data.sourceChain,
+				body.data.token,
+			);
+			if (!source.ok) {
+				return reply.code(400).send({ error: source.error });
+			}
+
+			const treasury = await db.query.orgTreasuries.findFirst({
+				where: (table, { eq: eqOp }) => eqOp(table.orgId, orgId),
+			});
+			if (!treasury) {
+				return reply.code(404).send({ error: "treasury_not_found" });
+			}
+			if (!treasury.eercRegisteredAt || !treasury.sealedEercKey) {
+				return reply
+					.code(409)
+					.send({ error: "treasury_not_eerc_registered" });
+			}
+
+			const eercAccount = deserializeManagedEercAccount(
+				unsealString(options.config.appMasterKey, treasury.sealedEercKey),
+			);
+			const treasuryAddress = getAddress(treasury.address);
+			const [pubKeyX, pubKeyY] = eercAccount.publicKey;
+
+			// CCTP mintRecipient/destinationCaller are bytes32; a 20-byte EVM address
+			// is left-padded to 32 bytes.
+			const routerBytes32 = pad(getAddress(router) as Hex, { size: 32 });
+			const burn = {
+				amount: body.data.amount,
+				burnToken: source.source.burnToken,
+				destinationCaller: routerBytes32,
+				destinationDomain: options.config.cctpDestDomain,
+				hookData: encodeOnrampHookData({
+					pkX: pubKeyX,
+					pkY: pubKeyY,
+					user: treasuryAddress,
+				}),
+				maxFee: TREASURY_FUND_MAX_FEE,
+				minFinalityThreshold: TREASURY_FUND_MIN_FINALITY_THRESHOLD,
+				mintRecipient: routerBytes32,
+				recipient: {
+					eercPublicKey: [pubKeyX.toString(), pubKeyY.toString()],
+					treasuryAddress,
+				},
+				sourceChain: source.source.chain,
+				sourceChainId: source.source.chainId,
+				sourceDomain: source.source.domain,
+				token: body.data.token,
+				tokenMessenger: source.source.tokenMessenger,
+			};
+
+			// Preview: no burn tx yet, so there is nothing for the relayer to track —
+			// just return the params the funding wallet signs.
+			if (!body.data.sourceTxHash) {
+				return reply.send({ burn });
+			}
+
+			// Register the signed burn as a pending CCTP transfer bound to this org.
+			const { intent, created } = await createIntent(db, {
+				amount: body.data.amount,
+				destToken: body.data.token,
+				orgId,
+				sourceChainId: source.source.chainId,
+				sourceDomain: source.source.domain,
+				sourceTxHash: body.data.sourceTxHash,
+				userAddress: treasuryAddress,
+				userId: request.user!.id,
+				userPubKeyX: pubKeyX.toString(),
+				userPubKeyY: pubKeyY.toString(),
+			});
+
+			// A burn tx maps to at most one transfer (unique sourceTxHash). If an
+			// existing transfer belongs to a different org (or is a user onramp),
+			// reject rather than leak/rebind it; a same-org resubmit is idempotent.
+			if (!created && intent.orgId !== orgId) {
+				return reply.code(409).send({ error: "source_tx_hash_conflict" });
+			}
+
+			return reply
+				.code(created ? 201 : 200)
+				.send({ burn, fundIntent: serializeIntent(intent) });
+		},
+	);
+
+	// GET /orgs/:id/treasury/deposits — unified funding history (#114): direct
+	// deposits (treasury_deposits, source='direct') merged with cross-chain CCTP
+	// transfers, which carry the richer pending->credited lifecycle and the source
+	// chain. A credited CCTP transfer also mirrors into treasury_deposits
+	// (source='cctp'); the view reads CCTP entries from the transfers so the source
+	// chain and live status surface (and to avoid double-counting).
+	fastify.get(
+		"/orgs/:id/treasury/deposits",
+		{ preHandler: requireOrgRole("viewer") },
+		async (request, reply) => {
+			const orgId = (request.params as { id: string }).id;
+
+			const query = depositsQuerySchema.safeParse(request.query);
+			if (!query.success) {
+				return reply.code(400).send({ error: "invalid_deposits_query" });
+			}
+			const { before, limit } = query.data;
+			const beforeCursor = before ? new Date(before) : null;
+
+			// Bound both source queries: fetch one past the page size (newest first)
+			// so the merge below can both fill a full page and detect whether another
+			// page exists, while peak memory stays O(limit) regardless of org size.
+			const directRows = await db
+				.select()
+				.from(treasuryDeposits)
+				.where(
+					and(
+						eq(treasuryDeposits.orgId, orgId),
+						eq(treasuryDeposits.source, "direct"),
+						beforeCursor
+							? lt(treasuryDeposits.createdAt, beforeCursor)
+							: undefined,
+					),
+				)
+				.orderBy(desc(treasuryDeposits.createdAt))
+				.limit(limit + 1);
+			const cctpRows = await db
+				.select()
+				.from(onrampIntents)
+				.where(
+					and(
+						eq(onrampIntents.orgId, orgId),
+						beforeCursor
+							? lt(onrampIntents.createdAt, beforeCursor)
+							: undefined,
+					),
+				)
+				.orderBy(desc(onrampIntents.createdAt))
+				.limit(limit + 1);
+
+			const merged = [
+				...directRows.map((row) => ({
+					amount: row.amount,
+					createdAt: row.createdAt.toISOString(),
+					id: row.id,
+					kind: "direct" as const,
+					sourceChain: null,
+					sourceDomain: null,
+					status: directDepositStatus(row.status),
+					token: row.token,
+					txHash: row.txHash,
+					updatedAt: row.updatedAt.toISOString(),
+				})),
+				...cctpRows.map((row) => ({
+					amount: row.amount,
+					createdAt: row.createdAt.toISOString(),
+					id: row.id,
+					kind: "cctp" as const,
+					sourceChain:
+						resolveSourceDomain(options.config.tier, row.sourceDomain)?.chain ??
+						null,
+					sourceDomain: row.sourceDomain,
+					status: cctpDepositStatus(row.status),
+					token: row.destToken,
+					txHash: row.settleTxHash,
+					updatedAt: row.updatedAt.toISOString(),
+				})),
+			].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+			// Each source is capped at limit+1, so the merged top `limit` is the true
+			// global newest page; a leftover row means there's a next page to fetch.
+			const deposits = merged.slice(0, limit);
+			const nextCursor =
+				merged.length > limit
+					? (deposits[deposits.length - 1]?.createdAt ?? null)
+					: null;
+
+			return reply.send({ deposits, nextCursor });
+		},
+	);
 };
+
+type UnifiedDepositStatus = "pending" | "credited" | "failed";
+
+function directDepositStatus(
+	status: TreasuryDepositStatus,
+): UnifiedDepositStatus {
+	if (status === "confirmed") {
+		return "credited";
+	}
+	if (status === "failed") {
+		return "failed";
+	}
+	return "pending";
+}
+
+function cctpDepositStatus(status: OnrampStatus): UnifiedDepositStatus {
+	if (status === "credited") {
+		return "credited";
+	}
+	if (status === "failed") {
+		return "failed";
+	}
+	return "pending";
+}
 
 type OrgMemberAllowlistRecord = {
 	address: string;

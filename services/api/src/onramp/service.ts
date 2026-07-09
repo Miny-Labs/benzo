@@ -54,6 +54,9 @@ export type CreateIntentInput = {
 	userPubKeyX: string;
 	userPubKeyY: string;
 	amount?: string | null;
+	// Set only for a cross-chain org treasury funding (#114); NULL for a user
+	// onramp. Binds the intent (and its eventual credited deposit) to the org.
+	orgId?: string | null;
 };
 
 export type CreateIntentResult = {
@@ -76,6 +79,7 @@ export async function createIntent(
 		.values({
 			amount: input.amount ?? null,
 			destToken: input.destToken,
+			orgId: input.orgId ?? null,
 			sourceChainId: input.sourceChainId,
 			sourceDomain: input.sourceDomain,
 			sourceTxHash,
@@ -188,6 +192,7 @@ export async function transitionIntent(
 
 export type SerializedOnrampIntent = {
 	id: string;
+	orgId: string | null;
 	userAddress: string;
 	sourceDomain: number;
 	sourceChainId: number;
@@ -208,6 +213,7 @@ export type SerializedOnrampIntent = {
 export function serializeIntent(row: OnrampIntentRow): SerializedOnrampIntent {
 	return {
 		id: row.id,
+		orgId: row.orgId,
 		userAddress: row.userAddress,
 		sourceDomain: row.sourceDomain,
 		sourceChainId: row.sourceChainId,
