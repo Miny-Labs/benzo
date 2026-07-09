@@ -1,0 +1,6 @@
+# Canonicalize commit identities.
+#
+# Consolidate the stray "hitakshiA <hitakshi005@gmail.com>" identity — used by a
+# handful of early commits before the local git author was fixed — into the
+# single canonical account that matches the GitHub remote.
+Hitakshi Arora <hitakshiarora005@gmail.com> <hitakshi005@gmail.com>
