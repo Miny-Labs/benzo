@@ -29,6 +29,12 @@ import {
 	type OnrampPollerOptions,
 	type OnrampPollJobData,
 } from "../onramp/poller.js";
+import {
+	handleTreasuryReconcileJob,
+	TREASURY_RECONCILE_QUEUE,
+	type TreasuryReconcileJobData,
+	type TreasuryReconcilerOptions,
+} from "../treasury/reconciler.js";
 
 export const JOB_QUEUES = {
 	demoAudit: "demo.audit",
@@ -38,6 +44,7 @@ export const JOB_QUEUES = {
 	onboardingAdvance: ONBOARDING_ADVANCE_QUEUE,
 	onboardingFailed: ONBOARDING_FAILED_QUEUE,
 	payrollItem: PAYROLL_ITEM_QUEUE,
+	treasuryReconcile: TREASURY_RECONCILE_QUEUE,
 } as const;
 
 export type DemoAuditJobData = {
@@ -118,6 +125,13 @@ export async function ensureQueues(boss: PgBoss): Promise<void> {
 		retryBackoff: true,
 		retryLimit: 5,
 	});
+	await boss.createQueue(JOB_QUEUES.treasuryReconcile, {
+		deleteAfterSeconds: 604_800,
+		expireInSeconds: 300,
+		retentionSeconds: 2_592_000,
+		retryBackoff: true,
+		retryLimit: 5,
+	});
 }
 
 export async function registerJobs(
@@ -131,6 +145,7 @@ export async function registerJobs(
 	},
 	payroll?: PayrollWorkerOptions,
 	onramp?: OnrampPollerOptions,
+	treasury?: TreasuryReconcilerOptions,
 ): Promise<void> {
 	await ensureQueues(boss);
 	await boss.work<DemoAuditJobData>(
@@ -206,11 +221,7 @@ export async function registerJobs(
 		);
 	}
 
-	if (!onboarding) {
-		if (!payroll && !onramp) {
-			return;
-		}
-	} else {
+	if (onboarding) {
 		await boss.work<OnboardingJobData>(
 			JOB_QUEUES.onboardingAdvance,
 			{ batchSize: 1, includeMetadata: true, localConcurrency: 4 },
@@ -254,11 +265,7 @@ export async function registerJobs(
 		}
 	}
 
-	if (!payroll) {
-		if (!onramp) {
-			return;
-		}
-	} else {
+	if (payroll) {
 		await boss.work<PayrollItemJobData>(
 			JOB_QUEUES.payrollItem,
 			{ batchSize: 1, localConcurrency: 3 },
@@ -281,52 +288,85 @@ export async function registerJobs(
 		}
 	}
 
-	if (!onramp) {
-		return;
+	if (onramp?.config.onrampPollerEnabled) {
+		await boss.schedule(
+			JOB_QUEUES.onrampPoll,
+			onramp.config.onrampPollCron,
+			{
+				requestedAt: new Date().toISOString(),
+			},
+			{
+				singletonKey: "onramp-poll",
+				singletonSeconds: 4,
+			},
+		);
+
+		await boss.work<OnrampPollJobData>(
+			JOB_QUEUES.onrampPoll,
+			{ batchSize: 1, localConcurrency: 1 },
+			async ([job]) => {
+				if (!job) {
+					return;
+				}
+
+				const result = await handleOnrampPollJob(db, onramp);
+				logger.info(
+					{
+						credited: result.credited,
+						failed: result.failed,
+						jobId: job.id,
+						parked: result.parked,
+						pending: result.pending,
+						polled: result.polled,
+						queue: JOB_QUEUES.onrampPoll,
+						relayerConfigured: result.relayerConfigured,
+						requestedAt: job.data.requestedAt,
+						routerConfigured: result.routerConfigured,
+					},
+					"onramp poll job processed",
+				);
+			},
+		);
 	}
 
-	if (!onramp.config.onrampPollerEnabled) {
-		return;
+	if (treasury?.config.treasuryReconcilerEnabled) {
+		await boss.schedule(
+			JOB_QUEUES.treasuryReconcile,
+			treasury.config.treasuryReconcileCron,
+			{
+				requestedAt: new Date().toISOString(),
+			},
+			{
+				singletonKey: "treasury-reconcile",
+				singletonSeconds: 4,
+			},
+		);
+
+		await boss.work<TreasuryReconcileJobData>(
+			JOB_QUEUES.treasuryReconcile,
+			{ batchSize: 1, localConcurrency: 1 },
+			async ([job]) => {
+				if (!job) {
+					return;
+				}
+
+				const result = await handleTreasuryReconcileJob(db, treasury);
+				logger.info(
+					{
+						confirmed: result.confirmed,
+						failed: result.failed,
+						jobId: job.id,
+						pending: result.pending,
+						polled: result.polled,
+						queue: JOB_QUEUES.treasuryReconcile,
+						requestedAt: job.data.requestedAt,
+						skipped: result.skipped,
+					},
+					"treasury reconcile job processed",
+				);
+			},
+		);
 	}
-
-	await boss.schedule(
-		JOB_QUEUES.onrampPoll,
-		onramp.config.onrampPollCron,
-		{
-			requestedAt: new Date().toISOString(),
-		},
-		{
-			singletonKey: "onramp-poll",
-			singletonSeconds: 4,
-		},
-	);
-
-	await boss.work<OnrampPollJobData>(
-		JOB_QUEUES.onrampPoll,
-		{ batchSize: 1, localConcurrency: 1 },
-		async ([job]) => {
-			if (!job) {
-				return;
-			}
-
-			const result = await handleOnrampPollJob(db, onramp);
-			logger.info(
-				{
-					credited: result.credited,
-					failed: result.failed,
-					jobId: job.id,
-					parked: result.parked,
-					pending: result.pending,
-					polled: result.polled,
-					queue: JOB_QUEUES.onrampPoll,
-					relayerConfigured: result.relayerConfigured,
-					requestedAt: job.data.requestedAt,
-					routerConfigured: result.routerConfigured,
-				},
-				"onramp poll job processed",
-			);
-		},
-	);
 }
 
 export async function enqueueDemoAuditJob(

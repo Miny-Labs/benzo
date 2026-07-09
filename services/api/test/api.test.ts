@@ -144,6 +144,8 @@ describe("@benzo/api", () => {
 			sessionTtlDays: 7,
 			siweNonceTtlMinutes: 10,
 			treasuryFundingTokens: [],
+			treasuryReconcileCron: "*/30 * * * * *",
+			treasuryReconcilerEnabled: true,
 		};
 
 		await migrateTestDatabase(config);
@@ -539,6 +541,66 @@ describe("@benzo/api", () => {
 			expect.objectContaining({ queue: JOB_QUEUES.onrampPoll }),
 		);
 		expect(disabledBoss.works).not.toContain(JOB_QUEUES.onrampPoll);
+	});
+
+	it("registers the treasury reconciler with its own enable flag and cron", async () => {
+		const enabledBoss = new RecordingBoss();
+		await registerJobs(
+			enabledBoss as unknown as PgBoss,
+			{} as Database,
+			pino({ enabled: false }),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				config: {
+					...config,
+					indexerEnabled: false,
+					treasuryReconcileCron: "*/43 * * * * *",
+					treasuryReconcilerEnabled: true,
+				},
+				receiptClient: {
+					async getTransactionReceipt() {
+						return null;
+					},
+				},
+			},
+		);
+
+		expect(enabledBoss.schedules).toContainEqual({
+			cron: "*/43 * * * * *",
+			queue: JOB_QUEUES.treasuryReconcile,
+		});
+		expect(enabledBoss.works).toContain(JOB_QUEUES.treasuryReconcile);
+
+		const disabledBoss = new RecordingBoss();
+		await registerJobs(
+			disabledBoss as unknown as PgBoss,
+			{} as Database,
+			pino({ enabled: false }),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				config: {
+					...config,
+					indexerEnabled: false,
+					treasuryReconcilerEnabled: false,
+				},
+				receiptClient: {
+					async getTransactionReceipt() {
+						return null;
+					},
+				},
+			},
+		);
+
+		expect(disabledBoss.schedules).not.toContainEqual(
+			expect.objectContaining({ queue: JOB_QUEUES.treasuryReconcile }),
+		);
+		expect(disabledBoss.works).not.toContain(JOB_QUEUES.treasuryReconcile);
 	});
 
 	it("runs Fuji onboarding with allowlist no-op, plain gas transfer, and registration polling", async () => {

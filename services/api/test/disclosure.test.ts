@@ -109,6 +109,8 @@ describe("@benzo/api disclosure (W3)", () => {
 			sessionTtlDays: 7,
 			siweNonceTtlMinutes: 10,
 			treasuryFundingTokens: [],
+			treasuryReconcileCron: "*/30 * * * * *",
+			treasuryReconcilerEnabled: true,
 		};
 
 		await migrateTestDatabase(config);

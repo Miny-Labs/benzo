@@ -207,6 +207,8 @@ function baseConfig(
 		sessionTtlDays: 7,
 		siweNonceTtlMinutes: 10,
 		treasuryFundingTokens: [],
+		treasuryReconcileCron: "*/30 * * * * *",
+		treasuryReconcilerEnabled: true,
 	};
 }
 

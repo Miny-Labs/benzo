@@ -74,6 +74,8 @@ function testConfig(databaseUrl: string): ApiConfig {
 		siweNonceTtlMinutes: 10,
 		tier: "staging",
 		treasuryFundingTokens: [],
+		treasuryReconcileCron: "*/30 * * * * *",
+		treasuryReconcilerEnabled: true,
 	};
 }
 

@@ -151,6 +151,17 @@ describe("loadConfig", () => {
 		expect(config.onrampPollCron).toBe("*/30 * * * * *");
 	});
 
+	it("parses dedicated treasury reconciler controls", () => {
+		const config = loadConfig({
+			...baseEnv,
+			TREASURY_RECONCILE_CRON: "*/45 * * * * *",
+			TREASURY_RECONCILER_ENABLED: "false",
+		});
+
+		expect(config.treasuryReconcilerEnabled).toBe(false);
+		expect(config.treasuryReconcileCron).toBe("*/45 * * * * *");
+	});
+
 	it.each([
 		"0x0000000000000000000000000000000000000000000000000000000000000000",
 		`0x${"ff".repeat(32)}`,

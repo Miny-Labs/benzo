@@ -198,6 +198,11 @@ const envSchema = z
 		SESSION_COOKIE_NAME: z.string().min(1).default("benzo_session"),
 		SESSION_TTL_DAYS: z.coerce.number().int().positive().default(7),
 		SIWE_NONCE_TTL_MINUTES: z.coerce.number().int().positive().default(10),
+		TREASURY_RECONCILER_ENABLED: z
+			.enum(["true", "false"])
+			.default("true")
+			.transform((value) => value === "true"),
+		TREASURY_RECONCILE_CRON: z.string().trim().min(1).default("*/30 * * * * *"),
 	})
 	.superRefine((env, ctx) => {
 		const chainEnv = deriveChainEnv(env.CHAIN_ENV, env.BENZONET_CHAIN_ID);
@@ -379,6 +384,8 @@ const envSchema = z
 				chainEnv,
 				registry.tokens,
 			),
+			treasuryReconcileCron: env.TREASURY_RECONCILE_CRON,
+			treasuryReconcilerEnabled: env.TREASURY_RECONCILER_ENABLED,
 		};
 	});
 
