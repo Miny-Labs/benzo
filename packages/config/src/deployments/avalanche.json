@@ -26,11 +26,13 @@
         "symbol": "EURC"
       }
     },
+    "PrivateGiftEscrow": "0xb22c366e000165683A51C2630F6Ab818e5227C94",
     "cctp": {
       "domain": 1,
       "tokenMessenger": "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d",
       "messageTransmitter": "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64",
-      "autoDepositRouter": null
-    }
+      "autoDepositRouter": "0x83F26C562082e3c455938fd48162e990494a4caE"
+    },
+    "benzoCctpRouter": "0x83F26C562082e3c455938fd48162e990494a4caE"
   }
 }
