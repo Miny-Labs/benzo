@@ -122,7 +122,7 @@ describe("loadConfig", () => {
 		);
 		// fuji manifest now wires the deployed BenzoCCTPRouter (#119).
 		expect(config.autoDepositRouterAddress).toBe(
-			"0xbadef08fe085928c36cf1301cfaa4d8061da2469",
+			"0x4b4f0dc760115db356cdfa89b4950e3418a3d98d",
 		);
 	});
 
