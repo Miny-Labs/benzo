@@ -1,7 +1,7 @@
 import { Base8, type Point, mulPointEscalar } from "@zk-kit/baby-jubjub";
 import { and, eq } from "drizzle-orm";
 import { poseidonDecrypt } from "maci-crypto";
-import { getAddress, isAddress } from "viem";
+import { normalizeAddress } from "./address.js";
 import { decodeAuditorPct } from "../auditor/crypto.js";
 import { findKeyForEvent, loadAuditorKeys } from "../auditor/service.js";
 import type { Database } from "../db/client.js";
@@ -167,18 +167,18 @@ export async function verifyDisclosure(
 		return { verified: false, reason: "amount_mismatch" };
 	}
 
-	if (
-		input.reveal.from !== undefined &&
-		normalizeAddress(input.reveal.from) !== row.fromAddr
-	) {
-		return { verified: false, reason: "from_mismatch" };
+	if (input.reveal.from !== undefined) {
+		const normalizedFrom = normalizeAddress(input.reveal.from);
+		if (normalizedFrom === null || normalizedFrom !== row.fromAddr) {
+			return { verified: false, reason: "from_mismatch" };
+		}
 	}
 
-	if (
-		input.reveal.to !== undefined &&
-		normalizeAddress(input.reveal.to) !== row.toAddr
-	) {
-		return { verified: false, reason: "to_mismatch" };
+	if (input.reveal.to !== undefined) {
+		const normalizedTo = normalizeAddress(input.reveal.to);
+		if (normalizedTo === null || normalizedTo !== row.toAddr) {
+			return { verified: false, reason: "to_mismatch" };
+		}
 	}
 
 	return {
@@ -190,12 +190,4 @@ export async function verifyDisclosure(
 		to: row.toAddr,
 		txHash: row.txHash,
 	};
-}
-
-function normalizeAddress(address: string): string | null {
-	if (!isAddress(address, { strict: false })) {
-		return null;
-	}
-
-	return getAddress(address).toLowerCase();
 }

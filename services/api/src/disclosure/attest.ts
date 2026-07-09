@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { getAddress, type Hex, isAddress } from "viem";
+import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { decryptAuditorAmountPct } from "../auditor/crypto.js";
 import { findKeyForEvent, loadAuditorKeys } from "../auditor/service.js";
@@ -7,6 +7,7 @@ import type { ApiConfig } from "../config.js";
 import { unsealString } from "../crypto/seal.js";
 import type { Database } from "../db/client.js";
 import { auditLog, events } from "../db/schema.js";
+import { normalizeAddress } from "./address.js";
 
 // Tier B — server-side, auditor-signed proof-of-payment packet.
 //
@@ -25,11 +26,11 @@ export type ProofOfPaymentPacket = {
 	attestationAddress: string;
 	auditorKeyId: string;
 	chainId: number;
-	// The EncryptedERC contract that emitted the event. NOTE: a converter-mode
-	// transfer event does not reveal the underlying ERC-20, so this identifies
-	// the encrypted-token contract, not (e.g.) USDC vs EURC.
-	token: string;
+	// The EncryptedERC contract that emitted the event.
 	contract: string;
+	// The underlying ERC-20 (USDC vs EURC) is NOT recoverable from a converter
+	// PCT, so `token` is always null rather than a misleading copy of `contract`.
+	token: string | null;
 	from: string | null;
 	logIndex: number;
 	signature: Hex;
@@ -144,7 +145,7 @@ export async function buildProofOfPayment(
 		logIndex: row.logIndex,
 		signedAt: new Date().toISOString(),
 		to: row.toAddr,
-		token: row.contract,
+		token: null,
 		txHash: row.txHash,
 		version: PROOF_OF_PAYMENT_VERSION,
 	};
@@ -167,12 +168,4 @@ export async function buildProofOfPayment(
 	});
 
 	return { ok: true, packet: { ...unsigned, signature } };
-}
-
-function normalizeAddress(address: string): string | null {
-	if (!isAddress(address, { strict: false })) {
-		return null;
-	}
-
-	return getAddress(address).toLowerCase();
 }

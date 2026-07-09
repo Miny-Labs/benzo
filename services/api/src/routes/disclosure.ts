@@ -21,7 +21,7 @@ type DisclosureRoutesOptions = {
 	db: Database;
 };
 
-const bigintString = z.string().regex(/^(0|[1-9][0-9]*)$/);
+const bigintString = z.string().regex(/^(0|[1-9][0-9]{0,77})$/);
 const txHashSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 const logIndexSchema = z.coerce.number().int().nonnegative();
 
@@ -43,26 +43,34 @@ export const disclosureRoutes: FastifyPluginAsync<DisclosureRoutesOptions> = asy
 	fastify,
 	options,
 ) => {
-	fastify.post("/disclosure/verify", async (request, reply) => {
-		const body = verifyBodySchema.safeParse(request.body);
+	// Public + EC-heavy (BabyJubJub recovery): cap per-IP request rate so an
+	// unauthenticated flood of oversized calls can't become a cheap CPU sink.
+	const verifyLimit = fastify.rateLimit({ max: 30, timeWindow: "1 minute" });
 
-		if (!body.success) {
-			return reply.code(400).send({ error: "invalid_disclosure_payload" });
-		}
+	fastify.post(
+		"/disclosure/verify",
+		{ preHandler: verifyLimit },
+		async (request, reply) => {
+			const body = verifyBodySchema.safeParse(request.body);
 
-		const result = await verifyDisclosure(options.db, {
-			logIndex: body.data.logIndex,
-			reveal: {
-				claimedAmount: BigInt(body.data.claimedAmount),
-				encRandom: BigInt(body.data.encRandom),
-				from: body.data.from,
-				to: body.data.to,
-			},
-			txHash: body.data.txHash,
-		});
+			if (!body.success) {
+				return reply.code(400).send({ error: "invalid_disclosure_payload" });
+			}
 
-		return reply.send(result);
-	});
+			const result = await verifyDisclosure(options.db, {
+				logIndex: body.data.logIndex,
+				reveal: {
+					claimedAmount: BigInt(body.data.claimedAmount),
+					encRandom: BigInt(body.data.encRandom),
+					from: body.data.from,
+					to: body.data.to,
+				},
+				txHash: body.data.txHash,
+			});
+
+			return reply.send(result);
+		},
+	);
 
 	fastify.post(
 		"/disclosure/proof-of-payment",
@@ -93,6 +101,8 @@ export const disclosureRoutes: FastifyPluginAsync<DisclosureRoutesOptions> = asy
 					return reply.code(403).send({ error: "forbidden" });
 				case "event_not_found":
 					return reply.code(404).send({ error: "event_not_found" });
+				case "auditor_key_missing":
+					return reply.code(503).send({ error: "auditor_key_missing" });
 				default:
 					return reply.code(409).send({ error: result.reason });
 			}

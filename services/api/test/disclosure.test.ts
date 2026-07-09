@@ -219,6 +219,36 @@ describe("@benzo/api disclosure (W3)", () => {
 			});
 		});
 
+		it("rejects a malformed `from` on a mint event instead of silently passing", async () => {
+			// A mint has no sender (fromAddr null). A syntactically invalid `from`
+			// normalizes to null and once matched the null column, silently passing
+			// the counterparty check the caller intended to enforce.
+			const mint = processPoseidonPCT([amount], auditorPublicKey, "mint");
+			await insertTransferEvent(db, {
+				amountPct: encodePct(mint.pct),
+				blockNumber: 12n,
+				from: null,
+				logIndex: 0,
+				to: payee,
+				txHash: txHash(3),
+			});
+
+			const response = await verify({
+				claimedAmount: amount.toString(),
+				encRandom: mint.encRandom.toString(),
+				from: "0x1234",
+				logIndex: 0,
+				to: payee,
+				txHash: txHash(3),
+			});
+
+			expect(response.statusCode).toBe(200);
+			expect(response.json()).toEqual({
+				reason: "from_mismatch",
+				verified: false,
+			});
+		});
+
 		it("does not decrypt an unrelated event under the same reveal (privacy)", async () => {
 			const response = await verify({
 				claimedAmount: "999",
@@ -339,7 +369,7 @@ async function insertTransferEvent(
 	input: {
 		amountPct: Buffer;
 		blockNumber: bigint;
-		from: string;
+		from: string | null;
 		logIndex: number;
 		to: string;
 		txHash: string;
