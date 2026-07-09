@@ -4,15 +4,23 @@
   "tier": "staging",
   "contracts": {
     "verifiers": {
-      "registration": "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0",
-      "transfer": "0xa1d0f50D5f479a2aeC3C67A38a6fa5c735CcC313",
-      "mint": "0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f",
-      "withdraw": "0x46688f1704a69a6c276cCCB823E36C80787B0FA2",
-      "burn": "0x992014C9De921CC064Ea6BC03849aea638b86Fd1"
+      "registration": "0x4c9CF63e688D08c633bEB4CcB1cfAbc73DA0Ea88",
+      "transfer": "0x1F6C733F5d4B5fe828BA7bCDf1d7657cD9fcE8c4",
+      "mint": "0xE0A5d3d93D28551546c7D7584dfA6C63C6A01e85",
+      "withdraw": "0x052100fC561F699fC56e57C1FD4A7468FbB78267",
+      "burn": "0xfFB661949498C9A028dF80021eD57D3eF535B025"
     },
-    "Registrar": "0xdfB9b7d958539FC4A1e31C9b813833Fb972B30Ff",
-    "EncryptedERC": "0x790Dd53099E5009a9Cf572769a5A663cCb7EfAcE",
-    "tUSDC": "0x85546bE3564d503F6ED77a4DA44BEF32EcAEd034",
+    "Registrar": "0x0B1f4e78C54E7696663b62F9cD7956f5FDE5b71d",
+    "EncryptedERC": "0xEE46418e5EeFE6f74EFaa9beb370B59251BFFb02",
+    "tokens": {
+      "tUSDC": {
+        "address": "0x25B6a6bcF1aea52CE27A302E521aF9dBDD27D2E7",
+        "decimals": 6,
+        "tokenId": 1,
+        "symbol": "tUSDC"
+      }
+    },
+    "tUSDC": "0x25B6a6bcF1aea52CE27A302E521aF9dBDD27D2E7",
     "cctp": null
   }
 }

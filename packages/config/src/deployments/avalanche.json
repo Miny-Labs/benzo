@@ -2,14 +2,29 @@
   "network": "avalanche",
   "chainId": 43114,
   "tier": "production",
-  "placeholder": true,
   "contracts": {
     "verifiers": {
-      "registration": "0x0000000000000000000000000000000000000000",
-      "transfer": "0x0000000000000000000000000000000000000000",
-      "mint": "0x0000000000000000000000000000000000000000",
-      "withdraw": "0x0000000000000000000000000000000000000000",
-      "burn": "0x0000000000000000000000000000000000000000"
+      "registration": "0x35b4C4227082f67c01656A39aC47F6c5D6005CaA",
+      "transfer": "0x4A716026a0C1F7158165520B6DF2009fFeB79f01",
+      "mint": "0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972",
+      "withdraw": "0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7",
+      "burn": "0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d"
+    },
+    "Registrar": "0x902B8D5585A5124C9B9c001A95b7f520C07a79F2",
+    "EncryptedERC": "0x708d0b83461973F46041a36f588b8760dbC0Db0e",
+    "tokens": {
+      "USDC": {
+        "address": "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+        "decimals": 6,
+        "tokenId": 1,
+        "symbol": "USDC"
+      },
+      "EURC": {
+        "address": "0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD",
+        "decimals": 6,
+        "tokenId": 2,
+        "symbol": "EURC"
+      }
     },
     "cctp": {
       "domain": 1,
