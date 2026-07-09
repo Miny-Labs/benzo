@@ -116,13 +116,33 @@ describe("deploy:mainnet guardrails", () => {
 		);
 	});
 
-	it("refuses the committed DEV ceremony build (verifiers are contributions:0)", () => {
+	it("accepts the committed ceremony build (marker build:ceremony, hashes match)", () => {
 		const result = validateCeremonyMarker(
 			readCeremonyMarker(),
 			computeVerifierFingerprint(),
 		);
-		expect(result.ok).to.equal(false);
-		expect(() => assertCeremonyBuild()).to.throw(/mainnet_ceremony_required/);
+		expect(result.ok, JSON.stringify(result)).to.equal(true);
+		expect(() => assertCeremonyBuild()).to.not.throw();
+	});
+
+	it("still rejects a dev marker or a verifier that changed after the ceremony", () => {
+		const marker = readCeremonyMarker();
+		const hashes = computeVerifierFingerprint();
+
+		// A dev build (contributions:0) is refused even with matching hashes.
+		expect(
+			validateCeremonyMarker({ ...marker, build: "dev" }, hashes).ok,
+		).to.equal(false);
+
+		// Swapping any verifier .sol after the ceremony breaks the sha256 gate.
+		const tampered = validateCeremonyMarker(marker, {
+			...hashes,
+			transfer: `${hashes.transfer}00`,
+		});
+		expect(tampered.ok).to.equal(false);
+		if (!tampered.ok) {
+			expect(tampered.reason).to.match(/verifier sha256/);
+		}
 	});
 
 	it("the real deploy-mainnet entrypoint aborts and mines no block", async () => {

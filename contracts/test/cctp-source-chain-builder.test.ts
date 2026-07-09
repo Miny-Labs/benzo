@@ -131,17 +131,20 @@ describe("CCTP source-chain depositForBurnWithHook builder", () => {
 	});
 
 	it("rejects unconfigured tiers and invalid burn parameters", () => {
+		// Avalanche is Benzo's destination chain, not an onramp source, so it is
+		// the one CctpChain absent from the (now fully populated) production tier —
+		// requesting it must still be rejected as unconfigured.
 		expect(() =>
 			buildDepositForBurnWithHookArgs({
 				tier: "production",
-				sourceChain: "base",
+				sourceChain: "avalanche",
 				token: "USDC",
 				amount,
 				userAvalancheAddress: user,
 				userEercPubKey,
 				routerAddress: router,
 			}),
-		).to.throw("CCTP source chain base is not configured for production");
+		).to.throw("CCTP source chain avalanche is not configured for production");
 
 		expect(() =>
 			buildDepositForBurnWithHookArgs({
