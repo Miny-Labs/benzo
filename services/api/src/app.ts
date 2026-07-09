@@ -46,6 +46,7 @@ import { adminRoutes } from "./routes/admin.js";
 import { activityRoutes } from "./routes/activity.js";
 import { auditorRoutes } from "./routes/auditor.js";
 import { authRoutes } from "./routes/auth.js";
+import { disclosureRoutes } from "./routes/disclosure.js";
 import { healthRoutes } from "./routes/health.js";
 import { identityRoutes } from "./routes/identity.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
@@ -179,6 +180,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 		await fastify.register(identityRoutes, { db, identityChain, onboarding });
 		await fastify.register(activityRoutes, { db });
 		await fastify.register(auditorRoutes, { config, db });
+		await fastify.register(disclosureRoutes, { config, db });
 		await fastify.register(adminRoutes, { adminChain, chain, config, db });
 		await fastify.register(orgsRoutes, {
 			adminChain,

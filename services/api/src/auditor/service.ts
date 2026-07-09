@@ -431,7 +431,7 @@ async function decryptRows(
 	return decryptedRows;
 }
 
-function findKeyForEvent(
+export function findKeyForEvent(
 	keys: AuditorKeyRow[],
 	row: EventRow,
 ): AuditorKeyRow | undefined {
@@ -519,7 +519,7 @@ function serializeAuditorEvent(
 	};
 }
 
-async function loadAuditorKeys(db: Database): Promise<AuditorKeyRow[]> {
+export async function loadAuditorKeys(db: Database): Promise<AuditorKeyRow[]> {
 	return db
 		.select()
 		.from(auditorKeys)
