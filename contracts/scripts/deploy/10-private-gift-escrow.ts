@@ -10,6 +10,20 @@ const DEPLOYMENTS_PATH = path.join(
 	"deployments",
 	"fuji.json",
 );
+// Mirror 09-cctp-router.ts: propagate the deployed address into the shared
+// @benzo/config manifest as well, so app/service consumers resolve
+// PrivateGiftEscrow without waiting for a manual config sync.
+const CONFIG_MANIFEST_PATH = path.join(
+	__dirname,
+	"..",
+	"..",
+	"..",
+	"packages",
+	"config",
+	"src",
+	"deployments",
+	"fuji.json",
+);
 
 type DeploymentEntry = string | { address?: unknown };
 
@@ -17,6 +31,13 @@ type Deployments = {
 	chainId?: number;
 	contracts?: Record<string, unknown>;
 	network?: string;
+};
+
+type ConfigManifest = {
+	chainId?: number;
+	contracts?: Record<string, unknown>;
+	network?: string;
+	tier?: string;
 };
 
 const EERC_ENV_KEYS = [
@@ -50,6 +71,32 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => {
 		return undefined;
 	}
 	return value as Record<string, unknown>;
+};
+
+const asObject = (value: unknown, label: string): Record<string, unknown> => {
+	const record = asRecord(value);
+	if (record === undefined) {
+		throw new Error(`${label} must be an object`);
+	}
+	return record;
+};
+
+// Dual-write mirror of 09-cctp-router.ts: project the deployed address into the
+// shared @benzo/config manifest so config consumers stay in sync with the
+// contracts-local deployment record.
+const writeConfigManifest = async (address: string): Promise<void> => {
+	const contents = await fs.readFile(CONFIG_MANIFEST_PATH, "utf8");
+	const configManifest = JSON.parse(contents) as ConfigManifest;
+	const configContracts = asObject(
+		configManifest.contracts,
+		"config.contracts",
+	);
+	configContracts.PrivateGiftEscrow = address;
+	await fs.writeFile(
+		CONFIG_MANIFEST_PATH,
+		`${JSON.stringify(configManifest, null, 2)}\n`,
+	);
+	console.log(`Config manifest written: ${CONFIG_MANIFEST_PATH}`);
 };
 
 const deploymentAddress = (entry: DeploymentEntry | unknown): string | undefined => {
@@ -177,6 +224,8 @@ const main = async () => {
 
 	await writeDeployments(deployments);
 	console.log(`Deployment written to ${DEPLOYMENTS_PATH}`);
+
+	await writeConfigManifest(address);
 };
 
 main().catch((error) => {

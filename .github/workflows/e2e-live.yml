@@ -1,0 +1,38 @@
+name: e2e-live
+
+# TIER 2 — funded live-testnet suites. Nightly + manual only; NEVER on PRs and
+# NOT a required check. The concurrency group serializes runs so they never race
+# the relayer nonce. Keys/URLs come from GitHub Actions secrets (testnet-only).
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Funded live e2e (Fuji)
+        env:
+          RUN_LIVE_E2E: "1"
+          BENZO_E2E_TARGET: fuji
+          BENZO_ONRAMP_USER_KEY: ${{ secrets.BENZO_ONRAMP_USER_KEY }}
+          BENZO_RELAYER_KEY: ${{ secrets.BENZO_RELAYER_KEY }}
+          BENZO_DEPLOYER_KEY: ${{ secrets.BENZO_DEPLOYER_KEY }}
+          BENZO_API_BASE_URL: ${{ secrets.BENZO_API_BASE_URL }}
+        run: pnpm --filter @benzo/e2e test:live

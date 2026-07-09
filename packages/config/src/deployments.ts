@@ -42,6 +42,7 @@ export type DeploymentContracts = {
 	HandleRegistry?: Address;
 	InvoiceRegistry?: Address;
 	GiftEscrow?: Address;
+	PrivateGiftEscrow?: Address;
 	/**
 	 * CCTP V2 wiring for this network's source domain, or `null` for networks
 	 * that are not a CCTP domain (BenzoNet).

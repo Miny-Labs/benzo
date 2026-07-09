@@ -34,6 +34,17 @@ const accounts = [process.env.PRIVATE_KEY, process.env.PRIVATE_KEY_2].filter(
   (k): k is string => Boolean(k),
 );
 
+// TIER 1 — Fuji-fork integration tier (fundless, PR-safe). Only when FORK=fuji
+// does the in-memory `hardhat` network fork Fuji at a pinned block, so real
+// Circle USDC + the real CCTP contracts run with their deployed bytecode. Left
+// unset for the default `pnpm test`, which must stay a plain in-memory network
+// so the fork tier never runs (or hits an RPC) by accident. Pin a block ABOVE
+// the committed Fuji deploy so those addresses already exist on the fork.
+const FORK_FUJI = process.env.FORK === "fuji";
+const FUJI_FORK_BLOCK = process.env.FUJI_FORK_BLOCK
+  ? Number(process.env.FUJI_FORK_BLOCK)
+  : 56_900_000;
+
 const config: HardhatUserConfig = {
   // 0.8.27 matches ava-labs/EncryptedERC v0.0.4.
   solidity: {
@@ -43,6 +54,16 @@ const config: HardhatUserConfig = {
     },
   },
   networks: {
+    hardhat: {
+      // Fork Fuji ONLY under FORK=fuji (see FORK_FUJI above); otherwise a plain
+      // in-memory network so the default test run is unchanged and offline.
+      ...(FORK_FUJI
+        ? {
+            chainId: 43113,
+            forking: { url: FUJI_RPC, blockNumber: FUJI_FORK_BLOCK },
+          }
+        : {}),
+    },
     fuji: {
       url: FUJI_RPC,
       chainId: 43113,

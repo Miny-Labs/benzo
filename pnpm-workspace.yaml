@@ -3,6 +3,7 @@ packages:
   - infra
   - packages/*
   - services/*
+  - tests/*
 
 onlyBuiltDependencies:
   - esbuild

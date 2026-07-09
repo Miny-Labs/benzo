@@ -27,11 +27,13 @@
       }
     },
     "HandleRegistry": "0xC74EcCDE4D9A1F48D560de9A96521D28D58B474b",
+    "PrivateGiftEscrow": "0x0B1f4e78C54E7696663b62F9cD7956f5FDE5b71d",
     "cctp": {
       "domain": 1,
       "tokenMessenger": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
       "messageTransmitter": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
-      "autoDepositRouter": null
-    }
+      "autoDepositRouter": "0xbADeF08FE085928c36cF1301CfAa4d8061DA2469"
+    },
+    "benzoCctpRouter": "0xbADeF08FE085928c36cF1301CfAa4d8061DA2469"
   }
 }

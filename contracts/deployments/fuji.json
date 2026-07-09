@@ -6,7 +6,7 @@
       "domain": 1,
       "tokenMessenger": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
       "messageTransmitter": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
-      "autoDepositRouter": null
+      "autoDepositRouter": "0xbADeF08FE085928c36cF1301CfAa4d8061DA2469"
     },
     "eercConverter": {
       "verifiers": {
@@ -134,6 +134,32 @@
           "symbol": "EURC"
         }
       }
+    },
+    "PrivateGiftEscrow": {
+      "address": "0x0B1f4e78C54E7696663b62F9cD7956f5FDE5b71d",
+      "authorizeDepositorTxHash": "0x8d3a3b5c05d78bbc4643f0cac95780c39e86b69c67cd7c2190236ea067b5fca4",
+      "blockNumber": 56894868,
+      "constructorArguments": [
+        "0x9E16eD3B799541B4929f7E2014904C65E81035b1"
+      ],
+      "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+      "eercAddress": "0x9E16eD3B799541B4929f7E2014904C65E81035b1",
+      "snowtraceUrl": "https://testnet.snowtrace.io/address/0x0B1f4e78C54E7696663b62F9cD7956f5FDE5b71d",
+      "transactionHash": "0xf3aba20770bbf856553c759542b38528bd37024f8b70fe6c67cd92372b1e5e1d",
+      "verified": false
+    },
+    "benzoCctpRouter": {
+      "address": "0xbADeF08FE085928c36cF1301CfAa4d8061DA2469",
+      "deployer": "0x3cdff5fDfe43401BDE629faB735B4C9E29bB12Eb",
+      "transactionHash": "0x94847a37dc5a811b5f2961d0df769383bac4e39519744889b02dc8aa1ef9e963",
+      "blockNumber": 56894878,
+      "snowtraceUrl": "https://testnet.snowtrace.io/address/0xbADeF08FE085928c36cF1301CfAa4d8061DA2469",
+      "constructorArguments": [
+        "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
+        "0x9E16eD3B799541B4929f7E2014904C65E81035b1",
+        "0x9a63FEa9851097DBAf3757b636217fdde50ABaF0"
+      ],
+      "verified": false
     }
   },
   "network": "fuji"
