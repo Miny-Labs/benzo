@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CCTP_SOURCE_CHAINS } from "@benzo/config";
 import { ethers, network, run } from "hardhat";
 
 const FUJI_CHAIN_ID = 43113n;
@@ -57,6 +58,14 @@ type ConfigManifest = {
 const snowtraceAddressUrl = (address: string) =>
 	`https://testnet.snowtrace.io/address/${address}`;
 
+const SOURCE_USDC_CHAINS = [
+	"optimism",
+	"base",
+	"arbitrum",
+	"ethereum",
+] as const;
+const SOURCE_EURC_CHAINS = ["ethereum", "base"] as const;
+
 const readJson = async <T>(filePath: string): Promise<T> =>
 	JSON.parse(await fs.readFile(filePath, "utf8")) as T;
 
@@ -96,6 +105,18 @@ const tokenAddress = (
 		throw new Error(`eercConverter.tokens.${symbol}.address must be set`);
 	}
 	return ethers.getAddress(address);
+};
+
+const cctpSourceTokenAddress = (
+	chain: (typeof SOURCE_USDC_CHAINS)[number] | (typeof SOURCE_EURC_CHAINS)[number],
+	symbol: "USDC" | "EURC",
+): string => {
+	const token = CCTP_SOURCE_CHAINS.staging[chain]?.tokens[symbol];
+	if (token === undefined) {
+		throw new Error(`CCTP staging ${chain}.${symbol} source token is not set`);
+	}
+
+	return ethers.getAddress(token.address);
 };
 
 const verifyRouter = async (
@@ -184,6 +205,27 @@ const main = async () => {
 	await allowUsdcTx.wait();
 	const allowEurcTx = await router.setAllowedToken(eurc, true);
 	await allowEurcTx.wait();
+	const remoteTokenMappings = [
+		...SOURCE_USDC_CHAINS.map((chain) => ({
+			chain,
+			symbol: "USDC" as const,
+			remote: cctpSourceTokenAddress(chain, "USDC"),
+			local: usdc,
+		})),
+		...SOURCE_EURC_CHAINS.map((chain) => ({
+			chain,
+			symbol: "EURC" as const,
+			remote: cctpSourceTokenAddress(chain, "EURC"),
+			local: eurc,
+		})),
+	];
+	for (const remoteTokenMapping of remoteTokenMappings) {
+		const remoteTokenTx = await router.setRemoteToken(
+			remoteTokenMapping.remote,
+			remoteTokenMapping.local,
+		);
+		await remoteTokenTx.wait();
+	}
 	const relayerTx = await router.setRelayer(relayer, true);
 	await relayerTx.wait();
 
@@ -193,6 +235,11 @@ const main = async () => {
 
 	console.log(`Allowed USDC: ${usdc}`);
 	console.log(`Allowed EURC: ${eurc}`);
+	for (const remoteTokenMapping of remoteTokenMappings) {
+		console.log(
+			`Mapped ${remoteTokenMapping.chain} ${remoteTokenMapping.symbol}: ${remoteTokenMapping.remote} -> ${remoteTokenMapping.local}`,
+		);
+	}
 	console.log(`Authorized CCTP relayer: ${relayer}`);
 	console.log(`Authorized router as eERC depositor: ${authorizeTx.hash}`);
 

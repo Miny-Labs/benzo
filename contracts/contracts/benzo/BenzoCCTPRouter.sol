@@ -22,9 +22,11 @@ contract BenzoCCTPRouter is Ownable2Step, ReentrancyGuard {
     Registrar public immutable registrar;
 
     mapping(address token => bool allowed) public allowedTokens;
+    mapping(address remoteToken => address localToken) public remoteTokenToLocal;
     mapping(address relayer => bool allowed) public relayers;
 
     event AllowedTokenSet(address indexed token, bool allowed);
+    event RemoteTokenSet(address indexed remoteToken, address indexed localToken);
     event RelayerSet(address indexed relayer, bool allowed);
     event OnrampSettled(
         address indexed user,
@@ -74,6 +76,18 @@ contract BenzoCCTPRouter is Ownable2Step, ReentrancyGuard {
 
         allowedTokens[token] = allowed;
         emit AllowedTokenSet(token, allowed);
+    }
+
+    function setRemoteToken(
+        address remoteToken,
+        address localToken
+    ) external onlyOwner {
+        if (remoteToken == address(0)) {
+            revert ZeroAddress();
+        }
+
+        remoteTokenToLocal[remoteToken] = localToken;
+        emit RemoteTokenSet(remoteToken, localToken);
     }
 
     function setRelayer(address relayer, bool allowed) external onlyOwner {
@@ -155,7 +169,8 @@ contract BenzoCCTPRouter is Ownable2Step, ReentrancyGuard {
             revert MintRecipientMismatch(address(this), burnMessage.mintRecipient);
         }
 
-        if (!allowedTokens[burnMessage.burnToken]) {
+        address localToken = remoteTokenToLocal[burnMessage.burnToken];
+        if (localToken == address(0) || !allowedTokens[localToken]) {
             revert TokenNotAllowed(burnMessage.burnToken);
         }
 
@@ -164,7 +179,7 @@ contract BenzoCCTPRouter is Ownable2Step, ReentrancyGuard {
         return (
             header.nonce,
             hookUser,
-            burnMessage.burnToken,
+            localToken,
             burnMessage.mintedAmount
         );
     }

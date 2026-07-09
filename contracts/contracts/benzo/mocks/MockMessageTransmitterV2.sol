@@ -11,12 +11,17 @@ contract MockMessageTransmitterV2 {
     using CctpMessageV2 for bytes;
 
     mapping(bytes32 nonce => bool used) public usedNonces;
+    mapping(address remoteToken => address localToken) public remoteTokenToLocal;
     bool public receiveResult = true;
 
     error CctpNonceAlreadyUsed(bytes32 nonce);
 
     function setReceiveResult(bool receiveResult_) external {
         receiveResult = receiveResult_;
+    }
+
+    function setRemoteToken(address remoteToken, address localToken) external {
+        remoteTokenToLocal[remoteToken] = localToken;
     }
 
     function receiveMessage(
@@ -32,7 +37,12 @@ contract MockMessageTransmitterV2 {
         CctpMessageV2.BurnMessage memory burnMessage = message
             .messageBody()
             .decodeBurnMessage();
-        IMockCctpMintable(burnMessage.burnToken).mint(
+        address mintToken = remoteTokenToLocal[burnMessage.burnToken];
+        if (mintToken == address(0)) {
+            mintToken = burnMessage.burnToken;
+        }
+
+        IMockCctpMintable(mintToken).mint(
             burnMessage.mintRecipient,
             burnMessage.mintedAmount
         );
