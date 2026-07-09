@@ -1,21 +1,32 @@
 # syntax=docker/dockerfile:1
-# Build with context = services/api (self-contained — no workspace deps):
-#   gcloud run deploy benzo-api --source services/api ...
-# Uses npm (not pnpm) so the build doesn't trip pnpm's ignored-build-scripts gate.
+# Build from the monorepo root so pnpm can resolve workspace dependencies:
+#   docker build -f services/api/Dockerfile -t benzo-api:test .
+# For source deploys, use a root-context build path that includes packages/config.
 # The container runs `node dist/index.js` and listens on $PORT (Cloud Run injects it).
-# Migrations run out-of-band (`npm run db:migrate`) against the same DATABASE_URL.
+# Migrations run out-of-band against the same DATABASE_URL.
 
 FROM node:22-slim AS build
-WORKDIR /app
+WORKDIR /repo
+ARG PNPM_VERSION=10.28.0
+ENV PNPM_HOME=/pnpm
+ENV PATH="$PNPM_HOME:$PATH"
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
-# Install all deps (dev included) to compile TypeScript.
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+COPY .npmrc package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/config/package.json packages/config/tsconfig.json ./packages/config/
+COPY services/api/package.json services/api/tsconfig.json ./services/api/
 
-COPY . .
-RUN npm run build
-# Drop dev dependencies for the runtime image.
-RUN npm prune --omit=dev
+# Dependency lifecycle scripts are skipped; package builds run explicitly below.
+RUN pnpm install --frozen-lockfile --filter @benzo/api... --ignore-scripts
+
+COPY packages/config ./packages/config
+COPY services/api ./services/api
+
+RUN pnpm --filter @benzo/config build
+RUN pnpm --filter @benzo/api build
+# This workspace does not use injected dependencies, so deploy uses pnpm's legacy mode.
+RUN pnpm --filter @benzo/api deploy --prod --legacy /out
 
 FROM node:22-slim AS runtime
 ENV NODE_ENV=production
@@ -23,9 +34,7 @@ ENV NODE_ENV=production
 ENV PORT=8080
 WORKDIR /app
 
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/package.json ./package.json
+COPY --from=build /out ./
 
 # Drop root: the node:22-slim image ships an unprivileged `node` user (uid 1000).
 USER node
