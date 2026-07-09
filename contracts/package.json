@@ -14,6 +14,8 @@
     "compile": "hardhat compile",
     "pretest": "pnpm --filter @benzo/config build",
     "test": "hardhat test",
+    "pretest:integration": "pnpm --filter @benzo/config build",
+    "test:integration": "hardhat test test/integration/BenzoCCTPRouter.test.ts test/integration/CctpHookDecode.test.ts",
     "artifacts:stage": "ts-node scripts/stage-circuit-artifacts.ts",
     "artifacts:export": "ts-node scripts/export-circuit-artifacts.ts",
     "artifacts:verify": "STRICT_CIRCUIT_MANIFEST=1 ts-node scripts/verify-circuit-manifest.ts",

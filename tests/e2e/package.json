@@ -1,0 +1,29 @@
+{
+  "name": "@benzo/e2e",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Benzo TIER 2 funded live-testnet end-to-end suites (nightly, gated by RUN_LIVE_E2E)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "prebuild": "pnpm --filter @benzo/config build",
+    "build": "tsc -p tsconfig.json",
+    "pretest": "pnpm --filter @benzo/config build",
+    "test": "vitest run",
+    "test:live": "RUN_LIVE_E2E=1 vitest run"
+  },
+  "dependencies": {
+    "@benzo/config": "workspace:*",
+    "@zk-kit/baby-jubjub": "^1.0.3",
+    "maci-crypto": "^2.0.0",
+    "viem": "^2.54.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}

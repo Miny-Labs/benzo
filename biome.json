@@ -7,7 +7,11 @@
 			"infra/scripts/**/*.ts",
 			"services/**/src/**/*.ts",
 			"services/**/test/**/*.ts",
-			"services/**/*.config.ts"
+			"services/**/*.config.ts",
+			"tests/**/src/**/*.ts",
+			"tests/**/fixtures/**/*.ts",
+			"tests/**/suites/**/*.ts",
+			"tests/**/*.config.ts"
 		]
 	},
 	"formatter": { "enabled": false },

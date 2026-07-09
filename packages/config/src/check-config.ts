@@ -313,6 +313,9 @@ function compactDeployment(
 		"InvoiceRegistry",
 	]);
 	copyOptionalAddress(compactContracts, "GiftEscrow", contracts, ["GiftEscrow"]);
+	copyOptionalAddress(compactContracts, "PrivateGiftEscrow", contracts, [
+		"PrivateGiftEscrow",
+	]);
 	// Project the CCTP block last so it always trails the eERC/registry keys in
 	// the compact json. An explicit `null` (BenzoNet) is preserved; an absent
 	// block also collapses to null so the per-network cctp check catches it.
@@ -345,6 +348,7 @@ function deploymentAddressEntries(
 		"HandleRegistry",
 		"InvoiceRegistry",
 		"GiftEscrow",
+		"PrivateGiftEscrow",
 		"benzoCctpRouter",
 	] as const) {
 		const address = contracts[key];

@@ -1,0 +1,32 @@
+name: fuji-fork
+
+# TIER 1 — fundless Fuji-fork integration tier (PR + push). Forks Fuji at a
+# pinned block so the CCTP router runs against real Circle USDC + TokenMessenger
+# bytecode. No secrets, no funds. Also asserts the funded TIER 2 suites stay
+# green with no funds (they self-skip unless RUN_LIVE_E2E=1).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fork-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Fuji-fork integration tests (real USDC + CCTP bytecode)
+        env:
+          FORK: fuji
+        run: pnpm --filter @benzo/contracts test:integration
+      - name: Funded e2e self-skips with no funds
+        run: pnpm --filter @benzo/e2e test

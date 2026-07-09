@@ -261,6 +261,31 @@ that touch Fuji or BenzoNet require operator-held keys and are documented in
 [`contracts/README.md`](contracts/README.md) and
 [`infra/README.md`](infra/README.md).
 
+## Testing
+
+Three tiers, all config-driven off `@benzo/config` so mainnet is a manifest swap:
+
+- **Unit / default** — `pnpm test`. Fundless, no network; the Fuji-fork and funded
+  tiers self-skip here so this stays fast and green.
+- **TIER 1 — Fuji-fork integration** (`.github/workflows/fuji-fork.yml`, runs on
+  every PR + push). `FORK=fuji pnpm --filter @benzo/contracts test` forks Fuji at
+  a pinned block and exercises `BenzoCCTPRouter` against **real** Circle USDC +
+  the real CCTP `TokenMessenger` bytecode (happy path, fee-shortfall, duplicate
+  message, unregistered recipient). Fundless — no secrets, no keys.
+- **TIER 2 — funded live-testnet e2e** (`tests/e2e`, `@benzo/e2e`;
+  `.github/workflows/e2e-live.yml`, nightly + manual, **not** a required check).
+  Real testnet funds. Every suite self-skips unless `RUN_LIVE_E2E=1` and its
+  funded accounts (`BENZO_ONRAMP_USER_KEY` / `BENZO_RELAYER_KEY` / …) are present
+  and funded — a missing/underfunded account turns into a precise `Fund 0x… on
+  fuji …` skip, never a failure. Suites: `eerc-core`, `cctp-onramp`, `disclosure`,
+  `payroll-batch`, `auditor-rotate`, `benzonet-gating`. A concurrency group
+  serializes runs so they never race the relayer nonce. Run locally with
+  `RUN_LIVE_E2E=1 pnpm --filter @benzo/e2e test`.
+
+No address is ever hard-coded in a test body — everything resolves from the
+`@benzo/config` deployment manifest, so pointing a tier at mainnet is a config
+change, not a code change. See `.env.example` for the testnet-only variables.
+
 ## License
 
 Benzo is Apache-2.0. The vendored

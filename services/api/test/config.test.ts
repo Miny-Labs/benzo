@@ -107,8 +107,10 @@ describe("loadConfig", () => {
 		expect(config.cctpAttestationApiBase).toBe(
 			"https://iris-api-sandbox.circle.com",
 		);
-		// fuji manifest has no auto-deposit router yet.
-		expect(config.autoDepositRouterAddress).toBeNull();
+		// fuji manifest now wires the deployed BenzoCCTPRouter (#119).
+		expect(config.autoDepositRouterAddress).toBe(
+			"0xbadef08fe085928c36cf1301cfaa4d8061da2469",
+		);
 	});
 
 	it("prefers CCTP env overrides over resolved defaults", () => {
