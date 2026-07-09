@@ -22,6 +22,11 @@ dotenv.config({ path: path.join(__dirname, "..", ".env") });
 
 const FUJI_RPC =
   process.env.RPC_URL ?? "https://api.avax-test.network/ext/bc/C/rpc";
+// Avalanche mainnet C-Chain (chain id 43114). Reads only — deploy:mainnet is
+// guard-railed and broadcasts nothing until every check in
+// scripts/deploy/mainnet-guardrails.ts passes.
+const AVAX_MAINNET_RPC =
+  process.env.AVAX_MAINNET_RPC_URL ?? "https://api.avax.network/ext/bc/C/rpc";
 // BenzoNet is Benzo's sovereign Avalanche L1 (chain id 68420, gas token BGAS).
 // Unlike Fuji's C-Chain there is no public RPC — you reach the L1 through a
 // node you run (or an SSH tunnel to one), so BENZONET_RPC_URL must point at a
@@ -70,6 +75,11 @@ const config: HardhatUserConfig = {
       chainId: 43113,
       accounts,
     },
+    avalanche: {
+      url: AVAX_MAINNET_RPC,
+      chainId: 43114,
+      accounts,
+    },
     benzonet: {
       url: BENZONET_RPC,
       chainId: 68420,
@@ -79,7 +89,11 @@ const config: HardhatUserConfig = {
   etherscan: {
     // Routescan verifies Fuji contracts without a real API key; our self-hosted
     // BenzoNet Blockscout accepts any key string on its Etherscan-compatible API.
-    apiKey: { fuji: "verifyContract", benzonet: "verifyContract" },
+    apiKey: {
+      fuji: "verifyContract",
+      avalanche: "verifyContract",
+      benzonet: "verifyContract",
+    },
     customChains: [
       {
         network: "fuji",
@@ -88,6 +102,15 @@ const config: HardhatUserConfig = {
           apiURL:
             "https://api.routescan.io/v2/network/testnet/evm/43113/etherscan",
           browserURL: "https://testnet.snowtrace.io",
+        },
+      },
+      {
+        network: "avalanche",
+        chainId: 43114,
+        urls: {
+          apiURL:
+            "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan",
+          browserURL: "https://snowtrace.io",
         },
       },
       {

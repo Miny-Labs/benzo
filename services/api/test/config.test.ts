@@ -18,6 +18,19 @@ const deploymentsDir = path.resolve(
 	"../../../contracts/deployments",
 );
 const benzonetManifestPath = path.join(deploymentsDir, "benzonet.json");
+const fujiManifestPath = path.join(deploymentsDir, "fuji.json");
+
+// A fully-valid Avalanche mainnet (production-tier) environment: hardened
+// NODE_ENV, non-local DB, mainnet RPC + chain id. Individual tests point the
+// deployment manifest at the wrong (Fuji) addresses to prove config rejects it.
+const avalancheEnv = {
+	API_DOMAIN: "api.benzo.space",
+	BENZONET_CHAIN_ID: "43114",
+	BENZONET_RPC_URL: "https://api.avax.network/ext/bc/C/rpc",
+	CHAIN_ENV: "avalanche",
+	DATABASE_URL: "postgres://benzo:secret@db.prod.example:5432/benzo",
+	NODE_ENV: "production",
+} satisfies NodeJS.ProcessEnv;
 
 describe("loadConfig", () => {
 	it("uses the default CORS origins when CORS_ORIGINS is unset", () => {
@@ -258,5 +271,18 @@ describe("loadConfig", () => {
 				CHAIN_ENV: "avalanche",
 			}),
 		).toThrow("BENZONET_CHAIN_ID must be 43114 when CHAIN_ENV=avalanche");
+	});
+
+	it("rejects CHAIN_ENV=avalanche pointed at the Fuji deployment manifest (Fuji addresses)", () => {
+		// A production-tier mainnet env that resolves its on-chain addresses from
+		// the Fuji manifest must fail fast rather than run mainnet against testnet
+		// contracts.
+		expect(() =>
+			loadConfig({
+				...baseEnv,
+				...avalancheEnv,
+				EERC_DEPLOYMENT_MANIFEST: fujiManifestPath,
+			}),
+		).toThrow("eerc_manifest_network_mismatch");
 	});
 });
