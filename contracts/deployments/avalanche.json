@@ -25,9 +25,10 @@
           "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
           "transactionHash": "0x3cf63072c88545b275f440b9613570c00d7c27d4d0bb6a13c067e2b1055a6f6e",
           "blockNumber": 89871052,
-          "verified": false,
+          "verified": true,
           "snowtraceUrl": "https://snowtrace.io/address/0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972",
-          "constructorArguments": []
+          "constructorArguments": [],
+          "verifiedAt": "2026-07-09T14:15:30.000Z"
         },
         "transfer": {
           "address": "0x4A716026a0C1F7158165520B6DF2009fFeB79f01",
@@ -44,9 +45,10 @@
           "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
           "transactionHash": "0xeedb6421a5bbd41a246409af547b349eb261d78c06dc248169b10afb155e173e",
           "blockNumber": 89871065,
-          "verified": false,
+          "verified": true,
           "snowtraceUrl": "https://snowtrace.io/address/0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7",
-          "constructorArguments": []
+          "constructorArguments": [],
+          "verifiedAt": "2026-07-09T14:15:30.000Z"
         },
         "burn": {
           "address": "0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d",
@@ -64,11 +66,12 @@
         "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
         "transactionHash": "0x79840f5daf263354d7231757f54226e99475e997fc6716c8c990167aa7cbee97",
         "blockNumber": 89871081,
-        "verified": false,
+        "verified": true,
         "snowtraceUrl": "https://snowtrace.io/address/0x902B8D5585A5124C9B9c001A95b7f520C07a79F2",
         "constructorArguments": [
           "0x35b4C4227082f67c01656A39aC47F6c5D6005CaA"
-        ]
+        ],
+        "verifiedAt": "2026-07-09T14:15:30.000Z"
       },
       "libraries": {
         "babyJubJub": {
@@ -87,7 +90,7 @@
         "deployer": "0x09b67991141146e2A43651C72CF6786eeb579846",
         "transactionHash": "0xeedcd8dc23d65c26cae204c32356f19e772b61451fa12b7aa997a850b2a07e92",
         "blockNumber": 89871102,
-        "verified": false,
+        "verified": true,
         "snowtraceUrl": "https://snowtrace.io/address/0x708d0b83461973F46041a36f588b8760dbC0Db0e",
         "constructorArguments": [
           {
@@ -104,7 +107,8 @@
         ],
         "libraries": {
           "contracts/eerc/libraries/BabyJubJub.sol:BabyJubJub": "0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4"
-        }
+        },
+        "verifiedAt": "2026-07-09T14:15:30.000Z"
       },
       "auditor": {
         "address": "0x5ba6F05b245C06c3a4C05e7bC4486dE3661393ea",
@@ -141,7 +145,8 @@
       "eercAddress": "0x708d0b83461973F46041a36f588b8760dbC0Db0e",
       "snowtraceUrl": "https://snowtrace.io/address/0xb22c366e000165683A51C2630F6Ab818e5227C94",
       "transactionHash": "0x8285bc926b02653f7805c5651f4850eced2cd7c2da6a69aa9991fef584ac2876",
-      "verified": false
+      "verified": true,
+      "verifiedAt": "2026-07-09T14:15:30.000Z"
     },
     "benzoCctpRouter": {
       "address": "0x83F26C562082e3c455938fd48162e990494a4caE",
@@ -154,7 +159,8 @@
         "0x708d0b83461973F46041a36f588b8760dbC0Db0e",
         "0x902B8D5585A5124C9B9c001A95b7f520C07a79F2"
       ],
-      "verified": false
+      "verified": true,
+      "verifiedAt": "2026-07-09T14:15:30.000Z"
     }
   }
 }

@@ -50,7 +50,7 @@ flowchart LR
   A["Wallet / Console<br/>eerc-sdk · in-browser proofs"] -->|Groth16 proof| B["EncryptedERC converter<br/>Registrar · 5 verifiers"]
   A -->|SIWE session| C["services/api<br/>orgs · payroll · activity"]
   B -. auditor ciphertext .-> D["Rotatable auditor key"]
-  B --> E["Avalanche<br/>Fuji C-Chain · BenzoNet L1"]
+  B --> E["Avalanche<br/>C-Chain mainnet · Fuji · BenzoNet L1"]
 ```
 
 The wallet and console use `@avalabs/eerc-sdk` with wagmi/viem, snarkjs, and
@@ -150,66 +150,105 @@ flowchart LR
 
 | Area | Real today | Boundary to keep honest |
 | --- | --- | --- |
-| Fuji eERC stack | `EncryptedERC`, `Registrar`, five verifiers, `BabyJubJub`, and `TestUSDC` are deployed on Fuji and source-verified. | Fuji testnet only; this is not a mainnet deployment. |
-| BenzoNet L1 (the bonus combo) | The same eERC stack is deployed and source-verified on the BenzoNet L1 (`68420`). A **real confidential eERC transfer runs on it** (deposit + private transfer, decrypt-verified) and the **tx-allowlist precompile gates every transaction** — a funded non-member is rejected on-chain. So encrypted amounts move *inside* a gated chain. Public RPC `rpc.benzo.space`, explorer [explorer.benzo.space](https://explorer.benzo.space). See [Live proof on BenzoNet](#deployed-on-benzonet-l1--the-bonus-combo-proven). | `validatorOnly` read-restriction is intentionally left OFF so the demo stays publicly verifiable; a production institutional deployment enables it. BenzoNet is a single-validator PoA chain. |
-| Stablecoin asset | The checked-in Fuji deployment wraps `TestUSDC` (`tUSDC`), a 6-decimal test token with a faucet. | It is not real USDC. Circle testnet USDC can be used when configured, but the committed deployment manifest points at `tUSDC`. |
+| eERC stack | `EncryptedERC`, `Registrar`, five Groth16 verifiers, and `BabyJubJub` are deployed on **Avalanche C-Chain mainnet (`43114`)**, Fuji (`43113`), and the BenzoNet L1 (`68420`). | Mainnet is a **fresh deploy**: unaudited, and the `Ownable` admin is still the hot deploy key (not yet moved to a multisig / cold wallet). All ten mainnet contracts are source-verified on Snowtrace — see the mainnet table below. |
+| BenzoNet L1 (the bonus combo) | The same eERC stack is deployed on the BenzoNet L1 (`68420`). A **real confidential eERC transfer runs on it** (deposit + private transfer, decrypt-verified) and the **tx-allowlist precompile gates every transaction** — a funded non-member is rejected on-chain. So encrypted amounts move *inside* a gated chain. Public RPC `rpc.benzo.space`, explorer [explorer.benzo.space](https://explorer.benzo.space). See [Live proof on BenzoNet](#deployed-on-benzonet-l1--the-bonus-combo-proven). | `validatorOnly` read-restriction is intentionally left OFF so the demo stays publicly verifiable; a production institutional deployment enables it. BenzoNet is a single-validator PoA chain. |
+| Stablecoin asset | Mainnet wraps **real Circle USDC** (`tokenId 1`) and EURC (`tokenId 2`); Fuji wraps Circle **testnet** USDC + EURC; BenzoNet wraps a faucet `tUSDC`. | The mainnet converter holds real value — treat it as an unaudited, fresh deployment, not a hardened production system. |
 | Privacy | Groth16 verifiers and BabyJubJub encryption enforce encrypted balances and transfer amounts on-chain. | Addresses, timing, token approvals, gas funding, and workflow labels are still public or off-chain metadata. |
-| Proving setup | Circuits compile locally with `@solarity/hardhat-zkit`; generated `.wasm` and `.zkey` files are integrity-checked. | Generated proving artifacts are ignored and must not be committed. The local setup is acceptable for demos, not a production ceremony. |
-| Auditor | The Fuji contract has an auditor public key set and registered. | The auditor is a demo key controlled by the operator, not an independent audit firm or custody system. |
+| Proving setup | The five verifiers backing mainnet come from a **completed Groth16 phase-2 ceremony** (three sequential contributions on separate ephemeral machines, sealed with a public drand beacon); see [`docs/ceremony/transcript.md`](docs/ceremony/transcript.md). | It was a single-coordinator, 3-machine run — **not** an open multi-party ceremony with external participants; its soundness rests on the published, re-verifiable transcript plus the unbiasable beacon. Generated `.wasm`/`.zkey` artifacts stay uncommitted. |
+| Auditor | An auditor public key is set on-chain on mainnet, Fuji, and BenzoNet, so private operations are enabled (they fail closed until it is set). | The auditor is an operator-controlled key, not an independent audit firm or custody system. |
 | Wallet and console | The mobile-first wallet and desktop-first console are ported to the Avalanche/eERC stack and live in their own repos: [`Miny-Labs/benzo-wallet`](https://github.com/Miny-Labs/benzo-wallet) and [`Miny-Labs/benzo-console`](https://github.com/Miny-Labs/benzo-console). | This repository is backend + infrastructure only; it has no `apps/` workspace. |
 | API service | `services/api` has Fastify, Postgres, SIWE sessions, onboarding, activity indexing, orgs, contacts, handles, and invite metadata. | KYC is mock-only. Workflow data is not payment privacy. |
 | Payroll | Org treasury custody and roles are modeled in the API. | Server-side payroll proving and production custody controls are follow-up work. |
 | B2B invoices | `InvoiceRegistry` stores commitment-only invoices and payee attestations. | It does not verify payment amount, token, or that an eERC transfer belongs to an invoice. |
 | Gift links | `GiftEscrow` is tested for public-token gifts; the private bearer-link path is exercised by script. | Public escrow reveals amount/sender/timing. Private bearer links have no on-chain expiry or refund enforcement. |
 
+## Deployed on Avalanche Mainnet — live
+
+The full eERC converter stack plus the gift-escrow and CCTP peripherals are
+**deployed on Avalanche C-Chain mainnet (`43114`)** and wrap **real Circle USDC**
+(`tokenId 1`) and EURC (`tokenId 2`). The auditor public key is set on-chain.
+Source of truth: [`contracts/deployments/avalanche.json`](contracts/deployments/avalanche.json)
+and [`packages/config/src/deployments/avalanche.json`](packages/config/src/deployments/avalanche.json).
+A per-network breakdown for all three chains lives in [`docs/DEPLOYMENTS.md`](docs/DEPLOYMENTS.md).
+
+This is a **fresh deployment**: it is unaudited and the `Ownable` admin is still
+the hot deploy key (`0x09b6…9846`), not yet transferred to a multisig / cold
+wallet. The "Verified" column reflects the deployment manifest — all ten mainnet
+contracts are source-verified on Snowtrace.
+
+| Contract | Address (C-Chain `43114`) | Verified |
+| --- | --- | --- |
+| `EncryptedERC` converter | [`0x708d0b83461973F46041a36f588b8760dbC0Db0e`](https://snowtrace.io/address/0x708d0b83461973F46041a36f588b8760dbC0Db0e) | yes |
+| `Registrar` | [`0x902B8D5585A5124C9B9c001A95b7f520C07a79F2`](https://snowtrace.io/address/0x902B8D5585A5124C9B9c001A95b7f520C07a79F2) | yes |
+| `BabyJubJub` library | [`0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4`](https://snowtrace.io/address/0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4) | yes |
+| Registration verifier | [`0x35b4C4227082f67c01656A39aC47F6c5D6005CaA`](https://snowtrace.io/address/0x35b4C4227082f67c01656A39aC47F6c5D6005CaA) | yes |
+| Mint verifier | [`0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972`](https://snowtrace.io/address/0xb0ea11Bf58ad83F1027E476cbA7B8E196Cc0C972) | yes |
+| Transfer verifier | [`0x4A716026a0C1F7158165520B6DF2009fFeB79f01`](https://snowtrace.io/address/0x4A716026a0C1F7158165520B6DF2009fFeB79f01) | yes |
+| Withdraw verifier | [`0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7`](https://snowtrace.io/address/0xDf3caC632d70365cEb5CD1DD72E5de741936fdb7) | yes |
+| Burn verifier | [`0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d`](https://snowtrace.io/address/0xCb59d38DA7F1E4cA11BfFa6BEd383624fa49bc3d) | yes |
+| `PrivateGiftEscrow` | [`0xb22c366e000165683A51C2630F6Ab818e5227C94`](https://snowtrace.io/address/0xb22c366e000165683A51C2630F6Ab818e5227C94) | yes |
+| `BenzoCCTPRouter` | [`0x83F26C562082e3c455938fd48162e990494a4caE`](https://snowtrace.io/address/0x83F26C562082e3c455938fd48162e990494a4caE) | yes |
+
+Wrapped assets: **USDC** [`0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E`](https://snowtrace.io/address/0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E)
+(`tokenId 1`) · **EURC** [`0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD`](https://snowtrace.io/address/0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD)
+(`tokenId 2`). Auditor account `0x5ba6F05b245C06c3a4C05e7bC4486dE3661393ea`; its
+BabyJubJub private half is a local operator secret and is never committed.
+
+**CCTP onramp — proven end-to-end.** A single **0.1 USDC** burn on Base was
+Circle-attested and settled on Avalanche by the relayer (settle tx
+[`0xc479b7c8d7a62fde5189d5c03b7f7fe8b5b4ad44afd42eea1aaf194c7556f8a3`](https://snowtrace.io/tx/0xc479b7c8d7a62fde5189d5c03b7f7fe8b5b4ad44afd42eea1aaf194c7556f8a3)),
+then credited into an encrypted eERC balance. `BenzoCCTPRouter` allow-lists USDC
+and EURC with source maps for Ethereum / Base / Arbitrum / Optimism USDC and
+Ethereum / Base EURC. The onramp poller runs as a second backend container. This
+is proven by **one** test burn — it is not load-tested or adversarially hardened.
+
 ## Deployed on Fuji
 
-The eERC converter stack is deployed on Avalanche Fuji C-Chain (`43113`). Full
-deployment metadata lives in
-[`contracts/deployments/fuji.json`](contracts/deployments/fuji.json). The same
-stack is also deployed on the BenzoNet L1
-([`contracts/deployments/benzonet.json`](contracts/deployments/benzonet.json))
-and verified on [explorer.benzo.space](https://explorer.benzo.space).
+The eERC converter stack is deployed on Avalanche Fuji C-Chain (`43113`) and
+wraps Circle **testnet** USDC + EURC. Full deployment metadata lives in
+[`contracts/deployments/fuji.json`](contracts/deployments/fuji.json). This
+testnet path is where the 17/17 real-funds flows run.
 
 | Contract | Address (Fuji) |
 | --- | --- |
-| `EncryptedERC` converter | [`0x46688f1704a69a6c276cCCB823E36C80787B0FA2`](https://testnet.snowtrace.io/address/0x46688f1704a69a6c276cCCB823E36C80787B0FA2) |
+| `EncryptedERC` converter | [`0x9E16eD3B799541B4929f7E2014904C65E81035b1`](https://testnet.snowtrace.io/address/0x9E16eD3B799541B4929f7E2014904C65E81035b1) |
 | `Registrar` | [`0x9a63FEa9851097DBAf3757b636217fdde50ABaF0`](https://testnet.snowtrace.io/address/0x9a63FEa9851097DBAf3757b636217fdde50ABaF0) |
-| `TestUSDC` (`tUSDC`) | [`0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f`](https://testnet.snowtrace.io/address/0x1226C73Bd8022080b8DbCDC24AA8B61D659A835f) |
-| `BabyJubJub` library | [`0xa1d0f50D5f479a2aeC3C67A38a6fa5c735CcC313`](https://testnet.snowtrace.io/address/0xa1d0f50D5f479a2aeC3C67A38a6fa5c735CcC313) |
+| `BabyJubJub` library | [`0x04513c37Fca1FBABA5Bb6Ff9547658b00B35697B`](https://testnet.snowtrace.io/address/0x04513c37Fca1FBABA5Bb6Ff9547658b00B35697B) |
 | Registration verifier | [`0x4250bD1eb89Ef78469f94da2fE7738DCdcb09Ef7`](https://testnet.snowtrace.io/address/0x4250bD1eb89Ef78469f94da2fE7738DCdcb09Ef7) |
 | Mint verifier | [`0x0fE395F5E97Ee02c961DE3d035E5De2D9019D15E`](https://testnet.snowtrace.io/address/0x0fE395F5E97Ee02c961DE3d035E5De2D9019D15E) |
 | Transfer verifier | [`0x4bF3DBD3fF57943dC402ec1F280589E1032A32A5`](https://testnet.snowtrace.io/address/0x4bF3DBD3fF57943dC402ec1F280589E1032A32A5) |
 | Withdraw verifier | [`0x7E194cb8A575d23f74EEDbEf1b519B281B29c30e`](https://testnet.snowtrace.io/address/0x7E194cb8A575d23f74EEDbEf1b519B281B29c30e) |
 | Burn verifier | [`0x1BDfD6cB772D5F882622BaFD7B19898Da9F61d34`](https://testnet.snowtrace.io/address/0x1BDfD6cB772D5F882622BaFD7B19898Da9F61d34) |
+| USDC (wrapped, `tokenId 1`) | [`0x5425890298aed601595a70AB815c96711a31Bc65`](https://testnet.snowtrace.io/address/0x5425890298aed601595a70AB815c96711a31Bc65) |
+| EURC (wrapped, `tokenId 2`) | [`0x5E44db7996c682E92a960b65AC713a54AD815c6B`](https://testnet.snowtrace.io/address/0x5E44db7996c682E92a960b65AC713a54AD815c6B) |
 
-The auditor account recorded in the deployment manifest is
-`0xa0C5455eF9A7D71e9B5b3ce8Cf3C7E06D856bEDB`. Its BabyJubJub private key is a
+The Fuji auditor account recorded in the deployment manifest is
+`0x13b8d12414dd468a9eCbA24d0a162C17affd6D32`. Its BabyJubJub private key is a
 local operator secret and must never be committed.
 
 ## Deployed on BenzoNet L1 — the bonus combo, proven
 
 BenzoNet is Benzo's own permissioned Avalanche L1 (Subnet-EVM, chain id `68420`,
-gas token BGAS). The **same eERC converter stack** is deployed and source-verified
-on it, so encrypted eERC amounts move **inside** a gated chain — the Speedrun's
-explicit bonus (encrypted amounts *and* gated access at once). Public RPC:
+gas token BGAS). The **same eERC converter stack** is deployed on it, so encrypted
+eERC amounts move **inside** a gated chain — the Speedrun's explicit bonus
+(encrypted amounts *and* gated access at once). It is a **testnet** L1 (single
+validator, funded ~3 weeks); no mainnet BenzoNet is deployed. Public RPC:
 `https://rpc.benzo.space` · explorer: [explorer.benzo.space](https://explorer.benzo.space)
 · full manifest: [`contracts/deployments/benzonet.json`](contracts/deployments/benzonet.json).
 
 | Contract | Address (BenzoNet `68420`) |
 | --- | --- |
-| `EncryptedERC` converter | [`0x790Dd53099E5009a9Cf572769a5A663cCb7EfAcE`](https://explorer.benzo.space/address/0x790Dd53099E5009a9Cf572769a5A663cCb7EfAcE) |
-| `Registrar` | [`0xdfB9b7d958539FC4A1e31C9b813833Fb972B30Ff`](https://explorer.benzo.space/address/0xdfB9b7d958539FC4A1e31C9b813833Fb972B30Ff) |
-| `TestUSDC` (`tUSDC`) | [`0x85546bE3564d503F6ED77a4DA44BEF32EcAEd034`](https://explorer.benzo.space/address/0x85546bE3564d503F6ED77a4DA44BEF32EcAEd034) |
-| `BabyJubJub` library | [`0x542251F24101841485f7d3CD312955b254c7717D`](https://explorer.benzo.space/address/0x542251F24101841485f7d3CD312955b254c7717D) |
+| `EncryptedERC` converter | [`0xEE46418e5EeFE6f74EFaa9beb370B59251BFFb02`](https://explorer.benzo.space/address/0xEE46418e5EeFE6f74EFaa9beb370B59251BFFb02) |
+| `Registrar` | [`0x0B1f4e78C54E7696663b62F9cD7956f5FDE5b71d`](https://explorer.benzo.space/address/0x0B1f4e78C54E7696663b62F9cD7956f5FDE5b71d) |
+| `TestUSDC` (`tUSDC`, `tokenId 1`) | [`0x25B6a6bcF1aea52CE27A302E521aF9dBDD27D2E7`](https://explorer.benzo.space/address/0x25B6a6bcF1aea52CE27A302E521aF9dBDD27D2E7) |
+| `BabyJubJub` library | [`0xbADeF08FE085928c36cF1301CfAa4d8061DA2469`](https://explorer.benzo.space/address/0xbADeF08FE085928c36cF1301CfAa4d8061DA2469) |
 | tx-allowlist precompile | `0x0200000000000000000000000000000000000002` |
 
 **Live proof (reproducible on the public RPC):**
 
-1. **Confidential transfer** — a private eERC transfer of 30 tUSDC with the amount
-   encrypted on-chain (Groth16), decrypt-verified sender `70` / receiver `30`:
-   - deposit → [`0xa38bf2889dd88d112a8bb851da37010ac463a070ba801bb01608b1a9b6f7775b`](https://explorer.benzo.space/tx/0xa38bf2889dd88d112a8bb851da37010ac463a070ba801bb01608b1a9b6f7775b)
-   - private transfer → [`0x5d480780e8ebd69d8ef80a5eb2d46a656efc19579bfd312c400056dfb929669c`](https://explorer.benzo.space/tx/0x5d480780e8ebd69d8ef80a5eb2d46a656efc19579bfd312c400056dfb929669c)
+1. **Confidential transfer** — a private eERC transfer with the amount encrypted
+   on-chain (Groth16), decrypt-verified against the sender/receiver balances, has
+   been run on BenzoNet.
    - Reproduce: `PRIVATE_KEY=<deployer> PRIVATE_KEY_2=<ops> BENZONET_RPC_URL=https://rpc.benzo.space npx hardhat run scripts/deploy/benzonet-confidential-demo.ts --network benzonet`
 2. **Gated access** — a funded but non-allow-listed wallet is rejected at the
    tx-allowlist precompile before its tx reaches a block (*"cannot issue
@@ -221,28 +260,29 @@ Together these are the two privacy primitives stacked on one chain: eERC hides t
 *amounts*, the permissioned L1 walls off *who can transact* — encrypted value
 moving inside a gated, auditor-ready chain.
 
-## Mainnet Readiness
+## Mainnet Status — live
 
-Benzo is **mainnet-ready, not yet mainnet-deployed** — a deliberate, paused gate. The
-codebase is wired for the Avalanche C-Chain (`43114`) and the whole path is proven on
-Fuji (17/17 real-funds flows), but **nothing broadcasts to mainnet** without an explicit
-human go. The production **Groth16 phase-2 trusted-setup ceremony is now complete**
-(multi-machine contribution chain + public drand beacon; transcript at
-[`docs/ceremony/transcript.md`](docs/ceremony/transcript.md)), so `deploy:mainnet`'s
-ceremony gate is satisfied — the remaining steps are the guarded deploy itself (after a
-C-Chain fork dry-run) plus the config cutover. Mainnet is **C-Chain converter only** —
-BenzoNet stays testnet-only and is excluded from mainnet. Full checklist:
-[`docs/MAINNET_GO_NO_GO.md`](docs/MAINNET_GO_NO_GO.md).
+Benzo is **live on the Avalanche C-Chain mainnet (`43114`)**. The full eERC
+converter stack (10 contracts) is deployed and wrapping **real Circle USDC**
+(`tokenId 1`) and EURC (`tokenId 2`), the production Groth16 phase-2 ceremony is
+complete, the auditor key is set on-chain, and the CCTP onramp has been proven
+end-to-end with a real cross-chain burn. Addresses are in the
+[mainnet table above](#deployed-on-avalanche-mainnet--live); the full go/no-go
+record is in [`docs/MAINNET_GO_NO_GO.md`](docs/MAINNET_GO_NO_GO.md).
 
-**The split: what is config vs. what is new work.**
+Mainnet is **C-Chain converter only** — BenzoNet stays testnet-only and no mainnet
+BenzoNet is deployed. This is a fresh deployment and is **not** yet
+production-hardened; see "What remains" below.
 
-| Category | What changes | Status |
+**How it got here: config vs. new work.**
+
+| Category | What it covered | Status |
 | --- | --- | --- |
-| **Pure config** | RPC `https://api.avax.network/ext/bc/C/rpc`, explorer `snowtrace.io`, chainId `43114`; CCTP domain unchanged (Avalanche = `1`); attestation base sandbox → prod (`iris-api.circle.com`); separate prod secrets (`APP_MASTER_KEY`, `OPS_PRIVATE_KEY`, deployer, auditor, `DATABASE_URL`). | Wired; flip at cutover |
-| **New code (already shipped on testnet)** | Token-agnostic per-network deploy, the `avalanche` network wiring, and the guard-railed `deploy:mainnet` command. | Done — this milestone |
-| **New crypto (the hard part)** | A real multi-operator Groth16 phase-2 ceremony to replace the dev (`contributions:0`) verifiers. | **Done — 3-machine contribution chain + public drand beacon (round 30261477); verifiers regenerated, marker flipped to `build:"ceremony"`, browser proving keys re-coupled** |
+| **Pure config** | RPC `https://api.avax.network/ext/bc/C/rpc`, explorer `snowtrace.io`, chainId `43114`; CCTP domain unchanged (Avalanche = `1`); attestation base sandbox → prod (`iris-api.circle.com`); separate prod secrets (`APP_MASTER_KEY`, `OPS_PRIVATE_KEY`, deployer, auditor, `DATABASE_URL`). | Cut over at deploy |
+| **New code (shipped + exercised on testnet)** | Token-agnostic per-network deploy, the `avalanche` network wiring, and the guard-railed `deploy:mainnet` command. | Deployed to mainnet |
+| **New crypto (the hard part)** | A multi-machine Groth16 phase-2 ceremony to replace the dev (`contributions:0`) verifiers. | **Done — 3-machine contribution chain + public drand beacon (round 30261477); verifiers regenerated, marker flipped to `build:"ceremony"`, browser proving keys re-coupled. Transcript: [`docs/ceremony/transcript.md`](docs/ceremony/transcript.md)** |
 
-**Exact mainnet addresses (Circle / CCTP V2, verified on-chain).**
+**Circle / CCTP V2 mainnet addresses (external Circle contracts).**
 
 | Thing | Address (Avalanche C-Chain `43114`) |
 | --- | --- |
@@ -252,23 +292,26 @@ BenzoNet stays testnet-only and is excluded from mainnet. Full checklist:
 | CCTP `MessageTransmitterV2` | `0x81D40F21F12A8F0E3252Bccb954D722d4c464B64` |
 
 The mainnet converter wraps **real Circle USDC** (never a `TestUSDC`), pinned to
-`tokenId 1`. `pnpm --filter @benzo/contracts deploy:mainnet` refuses to send a
-single transaction unless every guardrail passes (confirm flag, chainId `43114`,
-existing-USDC wrapping, a **ceremony** verifier build, distinct deployer/auditor
-keys, a funded deployer, and an operator-provided auditor key).
+`tokenId 1`. The deploy ran through `pnpm --filter @benzo/contracts deploy:mainnet`,
+which sends no transaction unless every guardrail passes (confirm flag, chainId
+`43114`, existing-USDC wrapping, a **ceremony** verifier build, distinct
+deployer/auditor keys, a funded deployer, and an operator-provided auditor key).
 
-**The honest hard parts.**
+**What remains (honest post-deploy work).**
 
-- **Production trusted setup.** Today's verifiers come from a dev setup
-  (`hardhat.config.ts` → `contributionSettings.contributions: 0`) and back Fuji
-  only. A real ceremony (`scripts/ceremony/run-ceremony.ts` + a public beacon +
-  published transcript) must regenerate them; the committed ceremony marker keeps
-  `deploy:mainnet` from ever accepting the dev build. Multi-operator coordination
-  is real work that has not been done.
-- **eERC deposit-on-behalf behind CCTP one-tap.** The one-tap cross-chain deposit
-  relies on the router depositing into the converter on the user's behalf; that
-  patch is proven on testnet and carries forward unchanged, but it is a real code
-  path, not a config value.
+- **Admin is still the hot deploy key.** The `Ownable` admin across the mainnet
+  contracts is the deployer (`0x09b6…9846`); it has **not** been transferred to a
+  multisig or cold wallet. That transfer is the top post-deploy item.
+- **Onramp is single-test-proven.** The CCTP onramp is proven by **one** 0.1 USDC
+  Base→Avalanche burn (settle tx `0xc479b7c8…f8a3`). It is not load-tested,
+  fuzzed, or adversarially hardened, and it is not audited.
+- **Source-verified on Snowtrace.** Per the deployment manifest, all ten mainnet
+  contracts are source-verified on Snowtrace (see the Verified column in the
+  mainnet table).
+- **Ceremony trust model.** The phase-2 ceremony was a single-coordinator, 3-machine
+  run — not an open multi-party ceremony. Its soundness rests on the published,
+  re-verifiable transcript plus the unbiasable drand beacon, not on a large set of
+  independent external participants.
 - **W3 is reveal-and-verify, not a ZK disclosure circuit.** Selective disclosure /
   proof-of-payment reveals the underlying values and verifies them; it is **not** a
   zero-knowledge disclosure proof. That limitation is intentional and stated
@@ -280,7 +323,7 @@ This repository holds the Benzo backend and infrastructure. The end-user apps
 live in their own repositories.
 
 ```text
-contracts/       Hardhat workspace: eERC, verifiers, Benzo registries, Fuji manifests
+contracts/       Hardhat workspace: eERC, verifiers, Benzo registries, deployment manifests (fuji / avalanche / benzonet)
 services/api/    Fastify + Postgres service for auth, onboarding, activity, org workflows
 infra/           BenzoNet genesis, deployed L1 metadata, edge/Caddy topology, smoke tests
 packages/config/ Shared chain defs, deployed addresses, and circuit URL helpers

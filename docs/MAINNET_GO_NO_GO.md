@@ -1,16 +1,40 @@
 # Mainnet Go / No-Go
 
-Benzo's mainnet cutover is a **paused gate**. This document is the single checklist
-that must be green before any Avalanche C-Chain (`43114`) deploy, and the honest
-account of what is a config flip versus genuinely new work.
+Benzo's mainnet go/no-go was **executed on 2026-07-09**: every gate below passed and
+the Avalanche C-Chain (`43114`) deploy went live. This document is the record of that
+decision — the checklist annotated with outcomes, the honest account of what was a
+config flip versus genuinely new work, and the post-deploy items that remain.
 
-**Standing rule: nothing broadcasts to Avalanche mainnet until every box below is
-checked.** Everything shipped in Milestone M5 is *built + fork-dry-run only*. The
-`deploy:mainnet` command is designed to refuse — it sends no transaction unless all
-guardrails pass, and today they cannot (the verifiers are a dev trusted setup).
+**Outcome: GO (2026-07-09).** The Groth16 ceremony completed, the `deploy:mainnet`
+guardrails passed on a C-Chain fork dry-run, the deploy broadcast, and the CCTP onramp
+was proven end-to-end with a real cross-chain burn. The `deploy:mainnet` command still
+refuses to send a transaction unless every guardrail passes — on 2026-07-09 they all
+did (the verifiers are now a real **ceremony** build, not the dev setup).
 
 Mainnet is **C-Chain converter only**. BenzoNet (the permissioned L1, chain id
 `68420`) is **excluded from mainnet** and stays testnet-only.
+
+### Deployed mainnet addresses (source of truth)
+
+Full manifests: [`contracts/deployments/avalanche.json`](../contracts/deployments/avalanche.json)
+and [`packages/config/src/deployments/avalanche.json`](../packages/config/src/deployments/avalanche.json);
+human-readable cross-network table in [`DEPLOYMENTS.md`](DEPLOYMENTS.md).
+
+| Contract | Address (`43114`) |
+| --- | --- |
+| `EncryptedERC` converter | `0x708d0b83461973F46041a36f588b8760dbC0Db0e` |
+| `Registrar` | `0x902B8D5585A5124C9B9c001A95b7f520C07a79F2` |
+| `BabyJubJub` | `0x91eb19da5A7486b4AAb4a0e452299B7E6F3821F4` |
+| registration / mint / transfer / withdraw / burn verifiers | `0x35b4C4…5CaA` / `0xb0ea11…C972` / `0x4A7160…9f01` / `0xDf3caC…fdb7` / `0xCb59d3…9bc3d` |
+| `PrivateGiftEscrow` | `0xb22c366e000165683A51C2630F6Ab818e5227C94` |
+| `BenzoCCTPRouter` | `0x83F26C562082e3c455938fd48162e990494a4caE` |
+| USDC (`tokenId 1`) / EURC (`tokenId 2`) | `0xB97EF9Ef…48a6E` / `0xC891EB4c…c2ACD` |
+| Auditor account | `0x5ba6F05b245C06c3a4C05e7bC4486dE3661393ea` |
+| Deployer / current `Ownable` admin | `0x09b67991141146e2A43651C72CF6786eeb579846` |
+
+Ceremony: Groth16 phase-2, drand quicknet **round 30261477**, transcript
+[`ceremony/transcript.md`](ceremony/transcript.md). CCTP onramp settle tx:
+`0xc479b7c8d7a62fde5189d5c03b7f7fe8b5b4ad44afd42eea1aaf194c7556f8a3`.
 
 ---
 
@@ -51,13 +75,16 @@ throws at startup.
 - **Guard-railed `deploy:mainnet`** — a single command that refuses to proceed
   unless every guardrail passes (see below).
 
-### New crypto — the one hard, unstarted part
+### New crypto — the hard part (now done)
 
-- **Production Groth16 ceremony.** The verifiers on Fuji come from a dev trusted
-  setup (`contributionSettings.contributions: 0`) and MUST NOT back mainnet. A real
-  multi-operator phase-2 ceremony + public random beacon + published transcript has
-  to regenerate all five verifiers. This is genuine coordination work that has not
-  been done.
+- **Production Groth16 ceremony — complete (2026-07-09).** The dev verifiers
+  (`contributionSettings.contributions: 0`) were replaced by a real phase-2 ceremony:
+  three sequential contributions on separate ephemeral machines, sealed with the
+  public drand quicknet beacon (round 30261477); all five verifiers regenerated and
+  the browser proving keys re-coupled. Transcript: [`ceremony/transcript.md`](ceremony/transcript.md).
+  It was a single-coordinator, 3-machine run rather than an open multi-party ceremony
+  — its soundness rests on the published, re-verifiable transcript plus the unbiasable
+  beacon, not on a large set of independent external participants.
 
 ---
 
@@ -78,58 +105,78 @@ transaction**, on any of:
    the deploy never auto-generates it.
 
 Proven by `contracts/test/benzo/MainnetGuardrails.test.ts` (each guardrail → abort,
-no block mined). The happy path is reachable only on a C-Chain fork with a real
-ceremony build in place.
+no block mined). On 2026-07-09 all seven passed on a C-Chain fork dry-run with the
+real ceremony build in place, and the guarded deploy then ran against mainnet.
 
 ### The ceremony marker (#121)
 
 `contracts/scripts/ceremony/ceremony-marker.json` records, per circuit, the sha256 of the
 verifier `.sol` that a given trusted setup produced, plus `build` (`dev` vs
-`ceremony`), the contribution count, and the beacon. Today it is `build: "dev"`, so
-guardrail #4 fails. `scripts/ceremony/run-ceremony.ts` is the operator tooling that
-runs the real ceremony and rewrites the marker to `build: "ceremony"`.
-**Deliberately not run here:** the multi-hour, multi-operator ceremony would desync
-the committed Fuji verifiers and needs real independent operators — it is the final
-pre-mainnet operational step.
+`ceremony`), the contribution count, and the beacon. It is now `build: "ceremony"`
+(drand round 30261477), so guardrail #4 passes. `scripts/ceremony/run-ceremony.ts`
+is the operator tooling that ran the real ceremony and rewrote the marker; the
+regenerated verifiers were deployed to both Fuji and mainnet, and the transcript is
+published at [`ceremony/transcript.md`](ceremony/transcript.md).
 
 ---
 
-## Go / No-Go checklist
+## Go / No-Go checklist — executed 2026-07-09
 
 Each box maps to an M5 issue (#120 wiring + guardrails, #121 ceremony, #122 docs).
+Outcomes are annotated inline; unchecked boxes are the remaining post-deploy work.
 
-- [ ] **Production ceremony done** — all five verifiers regenerated from a ceremony
-      with `contributions > 0` and a documented public beacon; transcript published;
-      ceremony marker flipped to `build: "ceremony"`. *(#121)*
-- [ ] **Deploy code proven on Fuji wrapping REAL Circle USDC** — the token-agnostic
-      converter deploy runs against real Circle USDC (not `TestUSDC`), `isConverter()`
-      is true, and deposit → transfer → withdraw round-trips. *(#120)*
-- [ ] **CCTP router + deposit-on-behalf proven on testnet** — one-tap cross-chain
-      deposit lands into the converter on the user's behalf. *(#120, prior milestones)*
-- [ ] **`avalanche.json` manifest populated + config parity test green** — real
-      deployed addresses written to `contracts/deployments/avalanche.json` and
-      `packages/config/src/deployments/avalanche.json`; the `placeholder` flag removed;
-      `@benzo/config` check passes. *(#120)*
-- [ ] **Separate prod secrets + DB provisioned** — distinct prod `APP_MASTER_KEY`,
-      `OPS_PRIVATE_KEY`, deployer, auditor, and a non-local `DATABASE_URL`. *(#120)*
-- [ ] **Deployer funded with mainnet AVAX** — above the `deploy:mainnet` balance
-      floor. *(#120)*
-- [ ] **Auditor key custodied + sealed** — the mainnet auditor BabyJubJub key is
-      operator-provided, its private half sealed in the prod store (never in
-      `contracts/.auditor-key.local.json`), and a rotation rehearsed on Fuji. *(#120)*
-- [ ] **All `deploy:mainnet` guardrails pass in a fork dry-run** — on a C-Chain fork,
-      every guardrail is green and the deploy completes without touching mainnet. *(#120)*
-- [ ] **Contracts source-verified on `snowtrace.io` post-deploy** — via the Routescan
-      mainnet path. *(#120)*
+- [x] **Production ceremony done** — all five verifiers regenerated from a phase-2
+      ceremony (three ephemeral-machine contributions + drand quicknet **round
+      30261477**); transcript published at `ceremony/transcript.md`; ceremony marker
+      flipped to `build: "ceremony"`. *(#121)*
+- [x] **Deploy code proven on Fuji wrapping REAL Circle USDC** — the token-agnostic
+      converter wraps Circle testnet USDC (`0x5425…Bc65`) on Fuji, `isConverter()` is
+      true, deposit → transfer → withdraw round-trips (17/17 real-funds flows). *(#120)*
+- [x] **CCTP router + deposit-on-behalf proven on testnet** — one-tap cross-chain
+      deposit lands into the converter on the user's behalf; re-proven on mainnet by a
+      0.1 USDC Base→Avalanche burn (settle tx `0xc479b7c8…f8a3`). *(#120, prior milestones)*
+- [x] **`avalanche.json` manifest populated + config parity** — real deployed
+      addresses written to `contracts/deployments/avalanche.json` and
+      `packages/config/src/deployments/avalanche.json` (tier `production`); no
+      `placeholder` flag. *(#120)*
+- [x] **Separate prod secrets + DB provisioned** — distinct prod `APP_MASTER_KEY`,
+      `OPS_PRIVATE_KEY`, deployer (`0x09b6…9846`), auditor (`0x5ba6…93ea`, distinct
+      from the deployer), and a non-local `DATABASE_URL`. *(#120)*
+- [x] **Deployer funded with mainnet AVAX** — above the `deploy:mainnet` balance floor
+      (the deploy broadcast successfully). *(#120)*
+- [x] **Auditor key custodied + sealed** — the mainnet auditor BabyJubJub key is
+      operator-provided and set on-chain (account `0x5ba6…93ea`); its private half is a
+      local operator secret, never committed. *(#120)*
+- [x] **All `deploy:mainnet` guardrails pass in a fork dry-run** — on a C-Chain fork,
+      all seven guardrails were green; the deploy then ran against mainnet. *(#120)*
+- [x] **Contracts source-verified on `snowtrace.io` post-deploy** — **complete.** All
+      ten mainnet contracts (the converter, `Registrar`, all five verifiers, `BabyJubJub`,
+      `PrivateGiftEscrow`, and `BenzoCCTPRouter`) are source-verified on Snowtrace and
+      carry a `verifiedAt` in the manifest. *(#120)*
+
+### Remaining post-deploy items
+
+- [ ] **Transfer `Ownable` admin off the hot deploy key.** Admin is still the deployer
+      (`0x09b67991141146e2A43651C72CF6786eeb579846`); move it to a multisig / cold
+      wallet. **Top priority.**
+- [x] **Finish Routescan source-verification** — all ten mainnet contracts are now
+      source-verified on Snowtrace and the manifest `verified` flags are updated.
+- [ ] **Harden the CCTP onramp beyond the single test burn** — load, failure-injection,
+      and adversarial testing before treating the onramp as production-grade.
 
 ---
 
 ## Honest limitations to keep stating
 
-- **The production trusted setup is a hard prerequisite**, not a formality. Until the
-  ceremony is done and the verifiers rotated, mainnet is a no-go.
-- **The eERC deposit-on-behalf patch behind CCTP one-tap** is a real code path
-  (proven on testnet), not a config value.
+- **This is a fresh, unaudited deployment.** The `Ownable` admin is still the hot
+  deploy key; until it is moved to a multisig / cold wallet, a single compromised key
+  controls the mainnet contracts. That transfer is the top post-deploy item.
+- **The ceremony was single-coordinator, not open multi-party.** Its trust rests on
+  the published, re-verifiable transcript plus the unbiasable drand beacon — not on a
+  large set of independent external participants.
+- **The CCTP onramp is proven by one 0.1 USDC test burn**, not load-tested or
+  adversarially hardened. The eERC deposit-on-behalf patch behind CCTP one-tap is a
+  real code path, not a config value.
 - **W3 (selective disclosure / proof-of-payment) is reveal-and-verify**, not a
   zero-knowledge disclosure circuit: it reveals the underlying values and verifies
   them on-chain. This is intentional and is stated plainly rather than overclaimed.

@@ -66,10 +66,11 @@ AGENTS.md
 .neon
 
 # --- internal planning / marketing / demo docs (kept locally for context) ---
-# The mainnet go/no-go checklist is a committed deliverable (#122); everything
-# else under docs/ stays local.
+# The mainnet go/no-go checklist and the live deployment record are committed
+# deliverables; everything else under docs/ stays local.
 docs/*
 !docs/MAINNET_GO_NO_GO.md
+!docs/DEPLOYMENTS.md
 
 # --- heavy binary doc artifacts (regenerable) ---
 *.pptx

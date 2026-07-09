@@ -35,7 +35,7 @@ number from `BENZONET_RPC_URL`.
 | `EERC_REGISTRAR_ADDRESS` | No | Registrar contract address, used both for onboarding registration polling and by the indexer. Defaults to Fuji `0x9a63FEa9851097DBAf3757b636217fdde50ABaF0`. |
 | `EERC_DEPLOYMENT_MANIFEST` | No | Deployment manifest path. A fallback source for the Registrar address, only consulted if `EERC_REGISTRAR_ADDRESS` resolves empty (it always has a default under the current schema, so this is effectively inert). Defaults to `contracts/deployments/{CHAIN_ENV}.json`. |
 | `ONBOARDING_REGISTRATION_POLL_SECONDS` | No | Registration polling interval. Defaults to `15`. |
-| `EERC_ENCRYPTED_ERC_ADDRESS` | No | EncryptedERC contract address to index. Defaults to Fuji `0x46688f1704a69a6c276cCCB823E36C80787B0FA2`. |
+| `EERC_ENCRYPTED_ERC_ADDRESS` | No | EncryptedERC contract address to index. Resolves from the `@benzo/config` deployment manifest for the active `CHAIN_ENV` (Fuji `0x9E16eD3B799541B4929f7E2014904C65E81035b1`). |
 | `INDEXER_CONFIRMATIONS` | No | Confirmation depth before logs are indexed. Defaults to `6`. |
 | `INDEXER_ENABLED` | No | Set to `false` to disable the pg-boss scheduled poller. Defaults to `true`. |
 | `INDEXER_MAX_WINDOW_BLOCKS` | No | Maximum log scan window. Defaults to `2000`. |
