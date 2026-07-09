@@ -23,6 +23,32 @@ import {
 // path is reachable only on a C-Chain fork with a real ceremony build in place —
 // which is the whole point: prove the guardrails, not broadcast to mainnet.
 
+// Parse the operator-provided mainnet auditor public key ("x,y" decimal) into a
+// BabyJubJub point, or undefined when unset/malformed — the guardrail then aborts
+// (auditor_key_not_provided), and configureAuditor asserts the on-chain key
+// matches this so a stale local key file can never be registered.
+const parseAuditorPublicKey = (
+	raw: string | undefined,
+): readonly [bigint, bigint] | undefined => {
+	if (raw === undefined) {
+		return undefined;
+	}
+	const parts = raw.split(",").map((part) => part.trim());
+	if (parts.length !== 2) {
+		return undefined;
+	}
+	try {
+		const x = BigInt(parts[0]);
+		const y = BigInt(parts[1]);
+		if (x <= 0n || y <= 0n) {
+			return undefined;
+		}
+		return [x, y];
+	} catch {
+		return undefined;
+	}
+};
+
 export const runMainnetDeploy = async (): Promise<void> => {
 	// Confirm gate FIRST, before touching the RPC, so an accidental invocation
 	// aborts without opening a mainnet connection.
@@ -49,9 +75,12 @@ export const runMainnetDeploy = async (): Promise<void> => {
 	);
 
 	// The mainnet auditor is operator-provided: the operator seals the private
-	// half into the prod store and passes ONLY the public key here. Absence ⇒
-	// abort (deploy never auto-generates a mainnet auditor key).
-	const auditorProvided = Boolean(process.env.MAINNET_AUDITOR_PUBKEY);
+	// half into the prod store and passes ONLY the public key here. Absent or
+	// malformed ⇒ abort (deploy never auto-generates a mainnet auditor key).
+	const expectedAuditorPublicKey = parseAuditorPublicKey(
+		process.env.MAINNET_AUDITOR_PUBKEY,
+	);
+	const auditorProvided = expectedAuditorPublicKey !== undefined;
 
 	assertMainnetGuardrails({
 		confirm,
@@ -71,7 +100,10 @@ export const runMainnetDeploy = async (): Promise<void> => {
 	console.log(
 		`All mainnet guardrails passed on ${network.name} (${context.chainId}). Deploying converter stack.`,
 	);
-	await deployEercConverterStack({ autoGenerateAuditor: false });
+	await deployEercConverterStack({
+		autoGenerateAuditor: false,
+		expectedAuditorPublicKey,
+	});
 	console.log("Mainnet converter stack deployed (fork dry-run unless on 43114).");
 };
 

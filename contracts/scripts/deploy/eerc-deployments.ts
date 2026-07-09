@@ -696,9 +696,29 @@ const getOrCreateAuditorAccount = async (
 	return account;
 };
 
+// The operator-provided mainnet auditor public key MUST be the one actually
+// registered on-chain; a stale contracts/.auditor-key.local.json entry that
+// doesn't match would leave audit data undecryptable by the sealed prod key.
+const assertExpectedAuditorKey = (
+	expected: readonly [bigint, bigint] | undefined,
+	actual: readonly [bigint, bigint],
+) => {
+	if (expected === undefined) {
+		return;
+	}
+	if (expected[0] !== actual[0] || expected[1] !== actual[1]) {
+		throw new Error(
+			`Loaded auditor key (${actual[0]},${actual[1]}) does not match the operator-provided MAINNET_AUDITOR_PUBKEY (${expected[0]},${expected[1]}); refusing to register a mismatched auditor.`,
+		);
+	}
+};
+
 export const configureAuditor = async (
 	context: DeployContext,
-	options: { autoGenerateAuditor?: boolean } = {},
+	options: {
+		autoGenerateAuditor?: boolean;
+		expectedAuditorPublicKey?: readonly [bigint, bigint];
+	} = {},
 ) => {
 	const eercDeployment = getEercDeployment(context.deployments);
 	const encryptedERCRecord = getPath(eercDeployment, ["encryptedERC"]);
@@ -718,6 +738,10 @@ export const configureAuditor = async (
 	if (auditorIsSet) {
 		const auditorAddress = await encryptedERC.auditor();
 		const auditorPublicKey = await encryptedERC.auditorPublicKey();
+		assertExpectedAuditorKey(options.expectedAuditorPublicKey, [
+			BigInt(auditorPublicKey.x),
+			BigInt(auditorPublicKey.y),
+		]);
 		setPath(eercDeployment, ["auditor"], {
 			address: auditorAddress,
 			publicKey: [auditorPublicKey.x.toString(), auditorPublicKey.y.toString()],
@@ -736,6 +760,10 @@ export const configureAuditor = async (
 		auditorSigner.address,
 		options.autoGenerateAuditor !== false,
 	);
+	assertExpectedAuditorKey(options.expectedAuditorPublicKey, [
+		BigInt(auditorAccount.publicKey[0]),
+		BigInt(auditorAccount.publicKey[1]),
+	]);
 
 	const registration = await registerEercAccount(
 		registrar,
@@ -934,6 +962,7 @@ export const deployEercConverterStack = async (
 		configureAuditor?: boolean;
 		registerTokens?: boolean;
 		autoGenerateAuditor?: boolean;
+		expectedAuditorPublicKey?: readonly [bigint, bigint];
 	} = {},
 ) => {
 	const context = await getDeploymentContext();
@@ -952,6 +981,7 @@ export const deployEercConverterStack = async (
 	if (options.configureAuditor !== false) {
 		await configureAuditor(context, {
 			autoGenerateAuditor: options.autoGenerateAuditor,
+			expectedAuditorPublicKey: options.expectedAuditorPublicKey,
 		});
 	}
 
