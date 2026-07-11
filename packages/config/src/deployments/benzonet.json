@@ -13,11 +13,11 @@
     "Registrar": "0x0B1f4e78C54E7696663b62F9cD7956f5FDE5b71d",
     "EncryptedERC": "0xEE46418e5EeFE6f74EFaa9beb370B59251BFFb02",
     "tokens": {
-      "tUSDC": {
+      "USDC": {
         "address": "0x25B6a6bcF1aea52CE27A302E521aF9dBDD27D2E7",
         "decimals": 6,
         "tokenId": 1,
-        "symbol": "tUSDC"
+        "symbol": "USDC"
       }
     },
     "tUSDC": "0x25B6a6bcF1aea52CE27A302E521aF9dBDD27D2E7",
