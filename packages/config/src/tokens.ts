@@ -29,9 +29,16 @@ export const STABLECOINS: Record<
 			symbol: "EURC",
 		},
 	},
-	// benzonet wraps a deployed TestUSDC (see the manifest tUSDC alias), not a
-	// Circle token — so there is no canonical Circle stablecoin to register here.
-	benzonet: {},
+	// benzonet wraps a locally deployed TestUSDC (not a Circle token), registered
+	// here under the USDC symbol — matching the deployment manifest — so the
+	// permissioned L1's managed-treasury deposit path resolves a funding token.
+	benzonet: {
+		USDC: {
+			address: "0x25B6a6bcF1aea52CE27A302E521aF9dBDD27D2E7",
+			decimals: 6,
+			symbol: "USDC",
+		},
+	},
 	avalanche: {
 		USDC: {
 			address: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",

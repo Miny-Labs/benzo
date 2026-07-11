@@ -314,6 +314,12 @@ export function getDecryptedBalance(
 
 	const c1 = Array.from(balance.eGCT.c1);
 	const c2 = Array.from(balance.eGCT.c2);
+	// A freshly-registered account has an all-zero eGCT (no ElGamal ciphertext
+	// yet); decryptPoint of (0,0) is the zero point, which never equals Base8*0
+	// (the curve identity), so treat an empty eGCT as a zero balance.
+	if (c1.every((value) => value === 0n) && c2.every((value) => value === 0n)) {
+		return totalBalance;
+	}
 	const decryptedBalance = decryptPoint(privateKey, c1, c2);
 
 	const expectedPoint = mulPointEscalar(Base8, totalBalance).map((value) =>
