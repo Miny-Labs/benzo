@@ -111,11 +111,11 @@
         "custodyNote": "Operator must custody the BabyJubJub privateKey in contracts/.auditor-key.local.json until M3 sealed storage imports it."
       },
       "tokens": {
-        "tUSDC": {
+        "USDC": {
           "address": "0x25B6a6bcF1aea52CE27A302E521aF9dBDD27D2E7",
           "decimals": 6,
           "tokenId": 1,
-          "symbol": "tUSDC"
+          "symbol": "USDC"
         }
       }
     }
