@@ -131,6 +131,7 @@ describe("@benzo/api", () => {
 			logLevel: "silent",
 			nodeEnv: "test",
 			onboardingRegistrationPollSeconds: 1,
+			onboardingRequireOperatorRegistration: true,
 			onrampPollCron: "*/15 * * * * *",
 			onrampPollerEnabled: true,
 			opsPrivateKey: testOpsPrivateKey,
@@ -601,6 +602,61 @@ describe("@benzo/api", () => {
 			expect.objectContaining({ queue: JOB_QUEUES.treasuryReconcile }),
 		);
 		expect(disabledBoss.works).not.toContain(JOB_QUEUES.treasuryReconcile);
+	});
+
+	it("completes managed onboarding after gas drip without polling operator registration", async () => {
+		const managedConfig = {
+			...config,
+			onboardingRequireOperatorRegistration: false,
+		};
+		const pool = createPool(managedConfig);
+		const db = createDb(pool);
+		const boss = createBoss(managedConfig);
+		// Operator is never registered on eERC — managed onboarding must not wait
+		// for it (nothing registers the operator EOA in the managed model).
+		const chain = createOnboardingChainStub({
+			chainEnv: "fuji",
+			registered: false,
+		});
+		const app = await buildApp({
+			boss,
+			config: managedConfig,
+			db,
+			logger: false,
+			onboardingChain: chain,
+			pool,
+		});
+		const account = privateKeyToAccount(generatePrivateKey());
+
+		try {
+			const { cookie } = await createAuthenticatedSession(
+				db,
+				managedConfig,
+				account.address,
+			);
+
+			const startResponse = await app.inject({
+				headers: { cookie },
+				method: "POST",
+				payload: { mockKyc: { country: "US", name: "Ava Example" } },
+				url: "/onboarding/start",
+			});
+			expect(startResponse.statusCode).toBe(202);
+
+			await waitFor(async () => {
+				const onboarding = await fetchOnboardingStatus(app, cookie);
+				expect(onboarding.status).toBe("complete");
+			});
+
+			// Completed on KYC + allowlist + gas alone; the operator was never
+			// polled for registration.
+			expect(chain.calls.registrationPolls).toBe(0);
+			expect(chain.calls.drips).toBe(1);
+		} finally {
+			await app.close();
+			await boss.stop();
+			await pool.end();
+		}
 	});
 
 	it("runs Fuji onboarding with allowlist no-op, plain gas transfer, and registration polling", async () => {

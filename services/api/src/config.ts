@@ -179,6 +179,17 @@ const envSchema = z
 			.int()
 			.positive()
 			.default(15),
+		// Managed custody (the default): the operator EOA is an admin identity that
+		// never holds an encrypted balance — the managed treasury does, and it is
+		// eERC-registered separately during treasury provisioning. So onboarding
+		// completes after KYC + allowlist + gas and does NOT poll for the operator's
+		// own eERC registration (nothing registers it, so the poll would hang
+		// forever). Set true only for a self-custody deployment where operators
+		// register their own eERC identity.
+		ONBOARDING_REQUIRE_OPERATOR_REGISTRATION: z
+			.enum(["true", "false"])
+			.default("false")
+			.transform((value) => value === "true"),
 		ONRAMP_POLLER_ENABLED: z
 			.enum(["true", "false"])
 			.default("true")
@@ -367,6 +378,8 @@ const envSchema = z
 			nodeEnv: env.NODE_ENV,
 			onboardingRegistrationPollSeconds:
 				env.ONBOARDING_REGISTRATION_POLL_SECONDS,
+			onboardingRequireOperatorRegistration:
+				env.ONBOARDING_REQUIRE_OPERATOR_REGISTRATION,
 			onrampPollCron: env.ONRAMP_POLL_CRON,
 			onrampPollerEnabled: env.ONRAMP_POLLER_ENABLED,
 			opsPrivateKey: env.OPS_PRIVATE_KEY,
