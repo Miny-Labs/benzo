@@ -348,6 +348,17 @@ async function advanceOnboarding(
 		}
 
 		if (row.status === "gas_dripped") {
+			// Managed custody (the default): the operator EOA is an admin identity
+			// that never holds an encrypted balance — the managed treasury does, and
+			// it is eERC-registered separately during treasury provisioning. Nothing
+			// registers the operator's own EOA (the backend has no operator key and
+			// the console has no client-side prover), so polling for it would hang
+			// forever. Complete onboarding once KYC + allowlist + gas have landed.
+			// Only a self-custody deployment waits for operator registration.
+			if (!options.config.onboardingRequireOperatorRegistration) {
+				await markOnboardingRegistered(db, row.userId);
+				return;
+			}
 			await updateOnboarding(db, row.userId, {
 				status: "awaiting_registration",
 			});
@@ -356,6 +367,13 @@ async function advanceOnboarding(
 		}
 
 		if (row.status === "awaiting_registration") {
+			// A row can be parked here from before managed onboarding stopped
+			// requiring operator registration; complete it immediately rather than
+			// polling for a registration that will never arrive.
+			if (!options.config.onboardingRequireOperatorRegistration) {
+				await markOnboardingRegistered(db, row.userId);
+				return;
+			}
 			await pollRegistration(db, boss, options, row);
 			return;
 		}
@@ -495,6 +513,19 @@ async function completeGasStep(
 				updatedAt: now,
 			})
 			.where(eq(onboardings.userId, row.userId));
+	});
+}
+
+async function markOnboardingRegistered(
+	db: Database,
+	userId: string,
+): Promise<void> {
+	const now = new Date();
+	await updateOnboarding(db, userId, {
+		error: null,
+		registrationCompletedAt: now,
+		registrationLastCheckedAt: now,
+		status: "complete",
 	});
 }
 

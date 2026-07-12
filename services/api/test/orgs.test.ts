@@ -104,6 +104,7 @@ function baseConfig(databaseUrl: string): ApiConfig {
 		logLevel: "silent",
 		nodeEnv: "test",
 		onboardingRegistrationPollSeconds: 1,
+		onboardingRequireOperatorRegistration: true,
 		onrampPollCron: "*/15 * * * * *",
 		onrampPollerEnabled: true,
 		opsPrivateKey:
